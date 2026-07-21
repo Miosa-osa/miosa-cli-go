@@ -26,6 +26,9 @@ jobs:
       - name: Test
         run: go test -race ./...
 
+      - name: Test installer
+        run: sh tests/install_test.sh
+
       - name: Release native archives
         uses: goreleaser/goreleaser-action@v7
         with:
