@@ -9,7 +9,10 @@ import (
 	"github.com/Miosa-osa/miosa-cli-go/internal/output"
 )
 
-const releasesURL = "https://github.com/Miosa-osa/miosa-cli-go/releases/latest"
+const (
+	releasesURL      = "https://github.com/Miosa-osa/miosa-cli-go/releases/latest"
+	installScriptURL = "https://raw.githubusercontent.com/Miosa-osa/miosa-cli-go/main/install.sh"
+)
 
 func newUpgradeCmd() *cobra.Command {
 	return &cobra.Command{
@@ -61,7 +64,7 @@ func runUpgrade(cmd *cobra.Command, _ []string) error {
 		p.Line("  %s", releasesURL)
 		p.Line("")
 		p.Line("Or install with the install script:")
-		p.Line("  curl -fsSL https://install.miosa.ai | sh")
+		p.Line("  curl -fsSL %s | sh", installScriptURL)
 	}
 
 	if current == "dev" {

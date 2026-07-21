@@ -4,9 +4,9 @@ set -eu
 # Install the native MIOSA CLI from GitHub Releases.
 #
 # Usage:
-#   curl -fsSL https://install.miosa.ai | sh
-#   INSTALL_DIR=/usr/local/bin curl -fsSL https://install.miosa.ai | sh
-#   MIOSA_CLI_VERSION=1.2.0 curl -fsSL https://install.miosa.ai | sh
+#   curl -fsSL https://raw.githubusercontent.com/Miosa-osa/miosa-cli-go/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Miosa-osa/miosa-cli-go/main/install.sh | INSTALL_DIR=/usr/local/bin sh
+#   curl -fsSL https://raw.githubusercontent.com/Miosa-osa/miosa-cli-go/main/install.sh | MIOSA_CLI_VERSION=1.2.1 sh
 
 REPO="${MIOSA_CLI_REPO:-Miosa-osa/miosa-cli-go}"
 INSTALL_DIR="${INSTALL_DIR:-}"

@@ -13,13 +13,13 @@ brew install Miosa-osa/homebrew-tap/miosa
 
 **Linux / macOS (install script)**
 ```sh
-curl -fsSL https://install.miosa.ai | sh
+curl -fsSL https://raw.githubusercontent.com/Miosa-osa/miosa-cli-go/main/install.sh | sh
 ```
 
 By default this installs to `~/.local/bin/miosa` for non-root users and `/usr/local/bin/miosa` for root. Override with:
 
 ```sh
-curl -fsSL https://install.miosa.ai | INSTALL_DIR=/usr/local/bin sh
+curl -fsSL https://raw.githubusercontent.com/Miosa-osa/miosa-cli-go/main/install.sh | INSTALL_DIR=/usr/local/bin sh
 ```
 
 **Manual** — download from [GitHub Releases](https://github.com/Miosa-osa/miosa-cli-go/releases/latest)
