@@ -6,7 +6,7 @@ set -eu
 # Usage:
 #   curl -fsSL https://install.miosa.ai | sh
 #   INSTALL_DIR=/usr/local/bin curl -fsSL https://install.miosa.ai | sh
-#   MIOSA_CLI_VERSION=0.1.0 curl -fsSL https://install.miosa.ai | sh
+#   MIOSA_CLI_VERSION=1.2.0 curl -fsSL https://install.miosa.ai | sh
 
 REPO="${MIOSA_CLI_REPO:-Miosa-osa/miosa-cli-go}"
 INSTALL_DIR="${INSTALL_DIR:-}"
@@ -60,6 +60,30 @@ download() {
   fi
 }
 
+verify_checksum() {
+  archive="$1"
+  checksum_file="$2"
+  expected="$(awk -v name="$(basename "$archive")" '$2 == name { print $1; exit }' "$checksum_file")"
+  if [ -z "$expected" ]; then
+    err "release checksum does not list $(basename "$archive")"
+    exit 1
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$archive" | awk '{ print $1 }')"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$archive" | awk '{ print $1 }')"
+  else
+    err "missing required command: sha256sum or shasum"
+    exit 1
+  fi
+
+  if [ "$actual" != "$expected" ]; then
+    err "checksum verification failed for $(basename "$archive")"
+    exit 1
+  fi
+}
+
 latest_version() {
   need sed
   tmp="$1"
@@ -106,6 +130,8 @@ main() {
   printf 'Installing miosa %s for %s/%s\n' "$tag" "$os" "$arch"
   printf 'Downloading %s\n' "$url"
   download "$url" "$workdir/$asset"
+  download "https://github.com/$REPO/releases/download/$tag/checksums.txt" "$workdir/checksums.txt"
+  verify_checksum "$workdir/$asset" "$workdir/checksums.txt"
 
   tar -xzf "$workdir/$asset" -C "$workdir"
   if [ ! -f "$workdir/miosa" ]; then
@@ -121,7 +147,7 @@ main() {
   if ! command -v miosa >/dev/null 2>&1; then
     printf 'Add %s to PATH, then run: miosa version\n' "$install_dir"
   else
-    miosa version || true
+    "$install_dir/miosa" version || true
   fi
 }
 
