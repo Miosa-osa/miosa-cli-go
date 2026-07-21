@@ -163,6 +163,47 @@ func TestCreateCommand_Success(t *testing.T) {
 	}
 }
 
+func TestCreateCommand_CanonicalSizes(t *testing.T) {
+	tests := []struct {
+		input string
+		want  miosa.ComputerSize
+	}{
+		{input: "xs", want: miosa.SizeXS},
+		{input: "small", want: miosa.SizeSmall},
+		{input: "medium", want: miosa.SizeMedium},
+		{input: "large", want: miosa.SizeLarge},
+		{input: "xl", want: miosa.SizeXL},
+		{input: "xlarge", want: miosa.SizeXL},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body miosa.CreateSandboxInput
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				if body.Size != tt.want {
+					t.Fatalf("size = %q, want %q", body.Size, tt.want)
+				}
+				if body.CPUCount != 0 || body.MemoryMB != 0 || body.DiskMB != 0 {
+					t.Fatalf("CLI must not duplicate profile resources: %#v", body)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusCreated)
+				w.Write(fakeSandbox("abc123", "my-box"))
+			}))
+			defer srv.Close()
+			cleanup := setupEnv(t, srv)
+			defer cleanup()
+
+			if _, err := run(t, "create", "my-box", "--size", tt.input); err != nil {
+				t.Fatalf("create failed: %v", err)
+			}
+		})
+	}
+}
+
 func TestCreateCommand_InvalidSize(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("server should not be called for invalid size")
@@ -171,7 +212,7 @@ func TestCreateCommand_InvalidSize(t *testing.T) {
 	cleanup := setupEnv(t, srv)
 	defer cleanup()
 
-	_, err := run(t, "create", "my-box", "--size", "xlarge")
+	_, err := run(t, "create", "my-box", "--size", "huge")
 	if err == nil {
 		t.Fatal("expected error for invalid size")
 	}

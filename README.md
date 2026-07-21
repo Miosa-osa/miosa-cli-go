@@ -2,7 +2,7 @@
 
 The official public command-line tool for [MIOSA](https://miosa.ai).
 
-`miosa` is the user-facing CLI for auth, sandboxes, computers, deployments, and OpenComputers hosts. Internal OSA tooling such as `osagent` stays behind MIOSA and is not the public installation path.
+`miosa` is the user-facing CLI for auth, sandboxes, files, previews, deployments, computers, and OpenComputers hosts. Internal OSA tooling such as `osagent` stays behind MIOSA and is not the public installation path.
 
 ## Install
 
@@ -54,7 +54,7 @@ Credentials resolve in this order:
 
 `~/.miosa/config.toml`:
 ```toml
-api_url           = "https://sandboxes.miosa.ai/api/v1"
+api_url           = "https://api.miosa.ai/api/v1"
 api_key           = "msk_u_..."
 default_workspace = "default"
 current_sandbox   = "my-box"
@@ -72,17 +72,48 @@ current_sandbox   = "my-box"
 | `miosa destroy [name]` | Destroy a sandbox |
 | `miosa exec [name] -- <cmd>` | Run a command |
 | `miosa console [name]` | Interactive shell |
-| `miosa proxy [name] <local>:<remote>` | Port forwarding (Phase 4) |
+| `miosa proxy [name] <local>:<remote>` | Port forwarding |
 | `miosa url [name]` | Print sandbox URL |
 | `miosa files cp/ls/cat/rm/mkdir` | File operations |
-| `miosa workspace create/list/delete` | Workspace management (Phase 3) |
-| `miosa checkpoint create/list/info/delete` | Checkpoints (Phase 2) |
-| `miosa restore [name] <checkpoint-id>` | Restore from checkpoint (Phase 2) |
-| `miosa services list/create/start/stop/...` | Services (Phase 5) |
-| `miosa policy show/set` | Network policy (Phase 6) |
+| `miosa workspace create/list/delete` | Workspace management |
+| `miosa checkpoint create/list/info/delete` | Checkpoints |
+| `miosa restore [name] <checkpoint-id>` | Restore from checkpoint |
+| `miosa services list/create/start/stop/...` | Services |
+| `miosa policy show/set` | Network policy |
+| `miosa catalog` | Product/template/size readiness |
 | `miosa api <path>` | Raw authenticated API request |
 | `miosa upgrade` | Upgrade the CLI |
 | `miosa version` | Print version |
+
+## Product lanes
+
+Use the CLI for the sandbox-first developer loop:
+
+```sh
+miosa create web-build
+miosa files mkdir web-build:/workspace/app
+miosa exec web-build -- npm create vite@latest /workspace/app -- --template react
+miosa exec web-build -- npm --prefix /workspace/app run dev -- --host 0.0.0.0
+miosa url web-build
+```
+
+Before choosing a template or size, ask the canonical catalog:
+
+```sh
+miosa catalog --product sandbox --template nextjs
+miosa catalog --state fast_ready
+miosa catalog --output json | jq '.data[] | select(.state == "fast_ready")'
+```
+
+For capabilities that are broader than the current high-level CLI commands,
+use `miosa api` with the same authenticated config:
+
+| Need | Use |
+|---|---|
+| Code/build/test/runtime workspace | `miosa create`, `miosa exec`, `miosa files`, `miosa services`, `miosa url` |
+| Full GUI/browser computer | `miosa api /computers ...` or an SDK (`miosa.computers`) |
+| Docker Deploy appliance | SDK/API Docker Deploy endpoints; publish from a sandbox to Docker Deploy |
+| Product/template readiness | `miosa catalog` |
 
 ## Global flags
 

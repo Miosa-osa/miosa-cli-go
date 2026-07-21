@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
 	miosa "github.com/Miosa-osa/miosa-go"
+	"github.com/gorilla/websocket"
 
 	"github.com/Miosa-osa/miosa-cli-go/internal/client"
 )

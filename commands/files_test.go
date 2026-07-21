@@ -53,3 +53,51 @@ func TestFilesLsCommand_UsesSandboxFilesAPI(t *testing.T) {
 		t.Errorf("expected file name in output, got: %s", out)
 	}
 }
+
+func TestFilesMkdirCommand_UsesSandboxFilesAPI(t *testing.T) {
+	var sawSandboxGet bool
+	var sawSandboxMkdir bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/sandboxes/abc123":
+			sawSandboxGet = true
+			w.Write(fakeSandbox("abc123", "my-box"))
+		case r.Method == http.MethodPost && r.URL.Path == "/sandboxes/abc123/files/mkdir":
+			sawSandboxMkdir = true
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode mkdir body: %v", err)
+			}
+			if got := body["path"]; got != "/workspace/output" {
+				t.Fatalf("expected path=/workspace/output, got %#v", got)
+			}
+			if got := body["recursive"]; got != true {
+				t.Fatalf("expected recursive=true, got %#v", got)
+			}
+			if got := body["mode"]; got != "0755" {
+				t.Fatalf("expected mode=0755, got %#v", got)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case strings.HasPrefix(r.URL.Path, "/computers/"):
+			t.Fatalf("sandbox files command must not call computer API: %s", r.URL.Path)
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	cleanup := setupEnv(t, srv)
+	defer cleanup()
+
+	out, err := run(t, "files", "mkdir", "abc123:/workspace/output")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sawSandboxGet || !sawSandboxMkdir {
+		t.Fatalf("expected sandbox get and mkdir calls, got get=%v mkdir=%v", sawSandboxGet, sawSandboxMkdir)
+	}
+	if !strings.Contains(out, "Created") {
+		t.Errorf("expected success output, got: %s", out)
+	}
+}

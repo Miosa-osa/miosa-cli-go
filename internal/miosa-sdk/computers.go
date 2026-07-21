@@ -112,17 +112,24 @@ func (c *Computer) slug() string {
 // path defaults to "/". Anyone with the URL can reach it — no auth required.
 //
 //	url := computer.PreviewURL(3000, "/")
-//	// => https://3000-<slug>.sandbox.miosa.ai/
+//	// => https://3000-<slug>.sandbox.<tenant-domain>/
 func (c *Computer) PreviewURL(port int, pathSegment string) string {
 	if pathSegment == "" || !startsWith(pathSegment, "/") {
 		pathSegment = "/" + pathSegment
 	}
-	return fmt.Sprintf("https://%d-%s.sandbox.miosa.ai%s", port, c.slug(), pathSegment)
+	return fmt.Sprintf("https://%d-%s.sandbox.%s%s", port, c.slug(), c.previewDomain(), pathSegment)
 }
 
 // PublicURL returns the root preview URL for the computer's default app port.
 func (c *Computer) PublicURL() string {
-	return fmt.Sprintf("https://%s.sandbox.miosa.ai", c.slug())
+	return fmt.Sprintf("https://%s.sandbox.%s", c.slug(), c.previewDomain())
+}
+
+func (c *Computer) previewDomain() string {
+	if c.PreviewDomain != "" {
+		return c.PreviewDomain
+	}
+	return "miosa.app"
 }
 
 func startsWith(s, prefix string) bool {

@@ -298,18 +298,48 @@ func runFilesRm(cmd *cobra.Command, args []string) error {
 func newFilesMkdirCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "mkdir <name|id>:<path>",
-		Short: "Create a directory in a sandbox (Phase 7)",
+		Short: "Create a directory in a sandbox",
 		Long: `Create a directory at the given path in a sandbox.
 
-Note: Requires Phase 7 (mkdir endpoint). Until then the command returns
-a clear error explaining what is needed.`,
+If no sandbox prefix is provided, the current sandbox selected by 'miosa use'
+is used.`,
 		Args: cobra.ExactArgs(1),
 		RunE: runFilesMkdir,
 	}
 }
 
-func runFilesMkdir(_ *cobra.Command, _ []string) error {
-	return die(fmt.Errorf("files mkdir requires control-plane server v0.7.0 — upgrade with: miosa upgrade"))
+func runFilesMkdir(cmd *cobra.Command, args []string) error {
+	p := printerFor(cmd)
+
+	c, cfg, err := buildClient()
+	if err != nil {
+		return die(err)
+	}
+
+	nameOrID, remotePath, isRemote := parseRemotePath(args[0])
+	if !isRemote {
+		nameOrID = cfg.CurrentSandbox
+		remotePath = args[0]
+	}
+	nameOrID, err = requireSandbox(nameOrID, cfg.CurrentSandbox)
+	if err != nil {
+		return die(err)
+	}
+
+	sandbox, err := c.SDK.Sandboxes.Get(cmd.Context(), lookupComputerID(nameOrID))
+	if err != nil {
+		return die(err)
+	}
+
+	if err := sandbox.Files.Mkdir(cmd.Context(), remotePath); err != nil {
+		return die(err)
+	}
+
+	if isJSON() {
+		return p.JSON(map[string]string{"status": "created", "path": remotePath})
+	}
+	p.Success("Created %s:%s", nameOrID, remotePath)
+	return nil
 }
 
 func formatBytes(b int64) string {

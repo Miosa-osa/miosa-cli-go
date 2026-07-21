@@ -56,6 +56,7 @@ type CreateSandboxInput struct {
 	Name           string            `json:"name,omitempty"`
 	TemplateID     string            `json:"template_id,omitempty"`
 	Image          string            `json:"image,omitempty"`
+	Size           ComputerSize      `json:"size,omitempty"`
 	CPUCount       int               `json:"cpu_count,omitempty"`
 	MemoryMB       int               `json:"memory_mb,omitempty"`
 	DiskMB         int               `json:"disk_mb,omitempty"`
