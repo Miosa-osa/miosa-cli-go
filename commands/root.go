@@ -28,9 +28,10 @@ var globalFlags struct {
 
 var rootCmd = &cobra.Command{
 	Use:   "miosa",
-	Short: "miosa — the official CLI for MIOSA sandboxes",
+	Short: "miosa — the official CLI for MIOSA",
 	Long: `miosa is the command-line tool for creating, managing, and interacting with
-MIOSA sandboxes. Authenticate with 'miosa login' to get started.
+MIOSA sandboxes, computers, files, previews, and deployments. Authenticate with
+'miosa login' to get started.
 
   miosa create my-box
   miosa exec my-box -- echo hello
@@ -111,6 +112,7 @@ func init() {
 		newRestoreCmd(),
 		newServicesCmd(),
 		newPolicyCmd(),
+		newCatalogCmd(),
 		newAPICmd(),
 		newUpgradeCmd(),
 		newVersionCmd(),

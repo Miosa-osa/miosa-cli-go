@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	DefaultBaseURL = "https://sandboxes.miosa.ai/api/v1"
+	DefaultBaseURL = "https://api.miosa.ai/api/v1"
 	configDir      = ".miosa"
 	configFile     = "config.toml"
 )

@@ -18,9 +18,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/Miosa-osa/miosa-cli-go/internal/config"
 	miosa "github.com/Miosa-osa/miosa-go"
+	"github.com/gorilla/websocket"
 )
 
 // ─── ErrPhaseNotReady ─────────────────────────────────────────────────────────
@@ -116,6 +116,55 @@ type CreateServiceInput struct {
 	Restart string `json:"restart"`
 }
 
+// ComputeCatalog is the canonical product/template/size catalog exposed by
+// GET /compute/catalog.
+type ComputeCatalog struct {
+	Products    []ComputeCatalogProduct  `json:"products"`
+	Sizes       []map[string]interface{} `json:"sizes,omitempty"`
+	GeneratedAt string                   `json:"generated_at,omitempty"`
+}
+
+type ComputeCatalogProduct struct {
+	ID                string                   `json:"id"`
+	ProductID         string                   `json:"product_id,omitempty"`
+	Name              string                   `json:"name,omitempty"`
+	Description       string                   `json:"description,omitempty"`
+	DefaultTemplate   string                   `json:"default_template,omitempty"`
+	DefaultTemplateID string                   `json:"default_template_id,omitempty"`
+	DefaultSize       string                   `json:"default_size,omitempty"`
+	SizeIDs           []string                 `json:"size_ids,omitempty"`
+	Templates         []ComputeCatalogTemplate `json:"templates"`
+}
+
+type ComputeCatalogTemplate struct {
+	ID                string                     `json:"id"`
+	TemplateID        string                     `json:"template_id,omitempty"`
+	Name              string                     `json:"name,omitempty"`
+	Description       string                     `json:"description,omitempty"`
+	DefaultSize       string                     `json:"default_size,omitempty"`
+	SizeIDs           []string                   `json:"size_ids,omitempty"`
+	SupportedSizes    []string                   `json:"supported_sizes,omitempty"`
+	ArtifactReadiness []ComputeArtifactReadiness `json:"artifact_readiness"`
+}
+
+type ComputeArtifactReadiness struct {
+	Size          string   `json:"size"`
+	State         string   `json:"state"`
+	CheckedNodes  int      `json:"checked_nodes"`
+	ReadyNodes    int      `json:"ready_nodes"`
+	ColdBootNodes int      `json:"cold_boot_nodes"`
+	MissingNodes  int      `json:"missing_nodes"`
+	CheckedHosts  int      `json:"checked_hosts"`
+	ReadyHosts    int      `json:"ready_hosts"`
+	ColdBootHosts int      `json:"cold_boot_hosts"`
+	MissingHosts  int      `json:"missing_hosts"`
+	Notes         []string `json:"notes,omitempty"`
+}
+
+type computeCatalogResponse struct {
+	Data ComputeCatalog `json:"data"`
+}
+
 // ─── httpClient helper ────────────────────────────────────────────────────────
 
 // restClient is a minimal HTTP helper used by transport implementations.
@@ -171,6 +220,17 @@ func (c *restClient) getJSON(ctx context.Context, path string, out interface{}) 
 	}
 	defer resp.Body.Close()
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// ComputeCatalog returns canonical products, templates, sizes, and artifact
+// readiness. It uses the raw REST client so the CLI can expose newly deployed
+// catalog fields without waiting on its vendored SDK copy.
+func (c *Client) ComputeCatalog(ctx context.Context) (*ComputeCatalog, error) {
+	var out computeCatalogResponse
+	if err := c.RC.getJSON(ctx, "/compute/catalog", &out); err != nil {
+		return nil, err
+	}
+	return &out.Data, nil
 }
 
 func (c *restClient) postJSON(ctx context.Context, path string, body, out interface{}) error {

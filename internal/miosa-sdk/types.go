@@ -6,9 +6,13 @@ package miosa
 type ComputerSize string
 
 const (
+	SizeXS     ComputerSize = "xs"
 	SizeSmall  ComputerSize = "small"
 	SizeMedium ComputerSize = "medium"
 	SizeLarge  ComputerSize = "large"
+	SizeXL     ComputerSize = "xl"
+	// SizeXLarge is retained as a source-compatible alias for SizeXL.
+	SizeXLarge ComputerSize = SizeXL
 )
 
 // ComputerStatus is the lifecycle state of a computer.
@@ -26,19 +30,20 @@ const (
 
 // ComputerData is the API representation of a computer resource.
 type ComputerData struct {
-	ID           string             `json:"id"`
-	Name         string             `json:"name"`
-	Slug         string             `json:"slug"`
-	Status       ComputerStatus     `json:"status"`
-	Visibility   ComputerVisibility `json:"visibility"`
-	TemplateType string             `json:"template_type"`
-	Size         ComputerSize       `json:"size"`
-	TenantID     string             `json:"tenant_id"`
-	WorkspaceID  *string            `json:"workspace_id"`
-	IPAddress    *string            `json:"ip_address"`
-	Metadata     map[string]string  `json:"metadata"`
-	CreatedAt    string             `json:"created_at"`
-	UpdatedAt    string             `json:"updated_at"`
+	ID            string             `json:"id"`
+	Name          string             `json:"name"`
+	Slug          string             `json:"slug"`
+	Status        ComputerStatus     `json:"status"`
+	Visibility    ComputerVisibility `json:"visibility"`
+	TemplateType  string             `json:"template_type"`
+	Size          ComputerSize       `json:"size"`
+	TenantID      string             `json:"tenant_id"`
+	WorkspaceID   *string            `json:"workspace_id"`
+	IPAddress     *string            `json:"ip_address"`
+	Metadata      map[string]string  `json:"metadata"`
+	PreviewDomain string             `json:"preview_domain"`
+	CreatedAt     string             `json:"created_at"`
+	UpdatedAt     string             `json:"updated_at"`
 }
 
 // CreateComputerInput is the request body for POST /computers.
