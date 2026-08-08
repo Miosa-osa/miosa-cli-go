@@ -17,6 +17,10 @@ type SandboxesService struct {
 }
 
 // SandboxData is the API representation of a sandbox resource.
+//
+// Tags and Metadata values are typed as interface{} because the API may return
+// nested objects, numbers, or arrays alongside plain strings. Consumers must
+// type-assert (for example to string) instead of assuming a flat string map.
 type SandboxData struct {
 	ID             string                 `json:"id"`
 	TenantID       string                 `json:"tenant_id"`
@@ -37,7 +41,7 @@ type SandboxData struct {
 	Ready          bool                   `json:"ready"`
 	ReadyAt        string                 `json:"ready_at"`
 	ExitCode       *int                   `json:"exit_code"`
-	Tags           map[string]string      `json:"tags"`
+	Tags           map[string]interface{} `json:"tags"`
 	Metadata       map[string]interface{} `json:"metadata"`
 	CreatedAt      string                 `json:"created_at"`
 	StartedAt      string                 `json:"started_at"`
@@ -175,7 +179,7 @@ func normalizeSandboxData(data SandboxData) SandboxData {
 		data.Metadata = map[string]interface{}{}
 	}
 	if data.Tags == nil {
-		data.Tags = map[string]string{}
+		data.Tags = map[string]interface{}{}
 	}
 	return data
 }

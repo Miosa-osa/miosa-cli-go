@@ -35,6 +35,24 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+brews:
+  - name: miosa
+    ids:
+      - miosa
+    repository:
+      owner: Miosa-osa
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/Miosa-osa/miosa-cli-go"
+    description: "MIOSA command line interface"
+    license: "MIT"
+    skip_upload: auto
+    install: |
+      bin.install "miosa"
+    test: |
+      system "#{bin}/miosa", "version"
+
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
 
