@@ -17,6 +17,10 @@ type SandboxesService struct {
 }
 
 // SandboxData is the API representation of a sandbox resource.
+//
+// Tags and Metadata values are typed as interface{} because the API may return
+// nested objects, numbers, or arrays alongside plain strings. Consumers must
+// type-assert (for example to string) instead of assuming a flat string map.
 type SandboxData struct {
 	ID             string                 `json:"id"`
 	TenantID       string                 `json:"tenant_id"`
