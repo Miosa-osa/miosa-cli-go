@@ -37,7 +37,7 @@ type SandboxData struct {
 	Ready          bool                   `json:"ready"`
 	ReadyAt        string                 `json:"ready_at"`
 	ExitCode       *int                   `json:"exit_code"`
-	Tags           map[string]string      `json:"tags"`
+	Tags           map[string]interface{} `json:"tags"`
 	Metadata       map[string]interface{} `json:"metadata"`
 	CreatedAt      string                 `json:"created_at"`
 	StartedAt      string                 `json:"started_at"`
@@ -175,7 +175,7 @@ func normalizeSandboxData(data SandboxData) SandboxData {
 		data.Metadata = map[string]interface{}{}
 	}
 	if data.Tags == nil {
-		data.Tags = map[string]string{}
+		data.Tags = map[string]interface{}{}
 	}
 	return data
 }

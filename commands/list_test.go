@@ -78,6 +78,13 @@ func TestListCommand_AcceptsObjectMetadataValues(t *testing.T) {
 					"workspace": "default",
 					"data": {"source": "api", "version": 2}
 				},
+				"tags": {"team": "core", "labels": ["a", "b"]},
+				"created_at": "2026-04-18T00:00:00Z"
+			}, {
+				"id": "def",
+				"name": "box-object-workspace",
+				"state": "running",
+				"metadata": {"workspace": {"id": "default"}},
 				"created_at": "2026-04-18T00:00:00Z"
 			}],
 			"meta": {"total": 1, "page": 1, "per_page": 20}
@@ -93,6 +100,17 @@ func TestListCommand_AcceptsObjectMetadataValues(t *testing.T) {
 	}
 	if !strings.Contains(out, "box-object-metadata") {
 		t.Errorf("expected sandbox in output, got: %s", out)
+	}
+
+	filtered, err := run(t, "list", "--workspace", "default")
+	if err != nil {
+		t.Fatalf("object-shaped metadata must not break workspace filtering: %v", err)
+	}
+	if !strings.Contains(filtered, "box-object-metadata") {
+		t.Errorf("expected string workspace metadata to match filter, got: %s", filtered)
+	}
+	if strings.Contains(filtered, "box-object-workspace") {
+		t.Errorf("non-string workspace metadata must not match filter, got: %s", filtered)
 	}
 }
 
