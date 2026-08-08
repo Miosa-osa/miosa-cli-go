@@ -46,7 +46,7 @@ func runList(cmd *cobra.Command, workspace string) error {
 	if workspace != "" {
 		filtered := sandboxes[:0]
 		for _, sandbox := range sandboxes {
-			if ws, ok := sandbox.Metadata["workspace"]; ok && ws == workspace {
+			if ws, ok := sandbox.Metadata["workspace"].(string); ok && ws == workspace {
 				filtered = append(filtered, sandbox)
 			}
 		}
