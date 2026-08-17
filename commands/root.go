@@ -113,6 +113,7 @@ func init() {
 		newServicesCmd(),
 		newPolicyCmd(),
 		newCatalogCmd(),
+		newForgeCmd(),
 		newAPICmd(),
 		newUpgradeCmd(),
 		newVersionCmd(),

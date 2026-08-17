@@ -1,5 +1,3 @@
-version: 2
-
 project_name: miosa
 
 before:
@@ -24,11 +22,13 @@ builds:
 
 archives:
   - id: miosa
-    ids:
+    builds:
       - miosa
     name_template: "miosa_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    formats:
-      - tar.gz
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
     files:
       - README.md
 
@@ -36,7 +36,7 @@ checksum:
   name_template: "checksums.txt"
 
 snapshot:
-  version_template: "{{ incpatch .Version }}-next"
+  name_template: "{{ .Tag }}-next"
 
 changelog:
   sort: asc
@@ -47,3 +47,20 @@ changelog:
       - "^ci:"
       - "Merge pull request"
       - "Merge branch"
+
+brews:
+  - name: miosa
+    repository:
+      owner: Miosa-osa
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    commit_author:
+      name: miosa-releasebot
+      email: releases@miosa.ai
+    homepage: "https://miosa.ai"
+    description: "Official CLI for MIOSA sandboxes"
+    license: "MIT"
+    install: |
+      bin.install "miosa"
+    test: |
+      system "#{bin}/miosa", "version"

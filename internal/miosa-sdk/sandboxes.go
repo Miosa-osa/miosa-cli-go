@@ -18,32 +18,32 @@ type SandboxesService struct {
 
 // SandboxData is the API representation of a sandbox resource.
 type SandboxData struct {
-	ID             string                 `json:"id"`
-	TenantID       string                 `json:"tenant_id"`
-	OwnerID        string                 `json:"owner_id"`
-	Name           string                 `json:"name"`
-	State          ComputerStatus         `json:"state"`
-	TemplateID     string                 `json:"template_id"`
-	ImageID        string                 `json:"image_id"`
-	CPUCount       int                    `json:"cpu_count"`
-	MemoryMB       int                    `json:"memory_mb"`
-	DiskSizeMB     int                    `json:"disk_size_mb"`
-	BootPath       string                 `json:"boot_path"`
-	BootMS         *int                   `json:"boot_ms"`
-	EnvdReadyMS    *int                   `json:"envd_ready_ms"`
-	TimeoutSec     int                    `json:"timeout_sec"`
-	IdleTimeoutSec int                    `json:"idle_timeout_sec"`
-	PreviewURL     string                 `json:"preview_url"`
-	Ready          bool                   `json:"ready"`
-	ReadyAt        string                 `json:"ready_at"`
-	ExitCode       *int                   `json:"exit_code"`
-	Tags           map[string]string      `json:"tags"`
-	Metadata       map[string]interface{} `json:"metadata"`
-	CreatedAt      string                 `json:"created_at"`
-	StartedAt      string                 `json:"started_at"`
-	DestroyedAt    string                 `json:"destroyed_at"`
-	LastActivityAt string                 `json:"last_activity_at"`
-	AgentSessionID string                 `json:"agent_session_id"`
+	ID             string            `json:"id"`
+	TenantID       string            `json:"tenant_id"`
+	OwnerID        string            `json:"owner_id"`
+	Name           string            `json:"name"`
+	State          ComputerStatus    `json:"state"`
+	TemplateID     string            `json:"template_id"`
+	ImageID        string            `json:"image_id"`
+	CPUCount       int               `json:"cpu_count"`
+	MemoryMB       int               `json:"memory_mb"`
+	DiskSizeMB     int               `json:"disk_size_mb"`
+	BootPath       string            `json:"boot_path"`
+	BootMS         *int              `json:"boot_ms"`
+	EnvdReadyMS    *int              `json:"envd_ready_ms"`
+	TimeoutSec     int               `json:"timeout_sec"`
+	IdleTimeoutSec int               `json:"idle_timeout_sec"`
+	PreviewURL     string            `json:"preview_url"`
+	Ready          bool              `json:"ready"`
+	ReadyAt        string            `json:"ready_at"`
+	ExitCode       *int              `json:"exit_code"`
+	Tags           map[string]string `json:"tags"`
+	Metadata       map[string]string `json:"metadata"`
+	CreatedAt      string            `json:"created_at"`
+	StartedAt      string            `json:"started_at"`
+	DestroyedAt    string            `json:"destroyed_at"`
+	LastActivityAt string            `json:"last_activity_at"`
+	AgentSessionID string            `json:"agent_session_id"`
 
 	// Compatibility fields used by older CLI table rendering.
 	Size         ComputerSize   `json:"size,omitempty"`
@@ -62,6 +62,12 @@ type CreateSandboxInput struct {
 	DiskMB         int               `json:"disk_mb,omitempty"`
 	TimeoutSec     int               `json:"timeout_sec,omitempty"`
 	IdleTimeoutSec int               `json:"idle_timeout_sec,omitempty"`
+	WorkspaceID    string            `json:"workspace_id,omitempty"`
+	WorkspaceSlug  string            `json:"workspace_slug,omitempty"`
+	WorkspaceName  string            `json:"workspace_name,omitempty"`
+	ProjectID      string            `json:"project_id,omitempty"`
+	ProjectSlug    string            `json:"project_slug,omitempty"`
+	ProjectName    string            `json:"project_name,omitempty"`
 	Metadata       map[string]string `json:"metadata,omitempty"`
 }
 
@@ -172,7 +178,7 @@ func normalizeSandboxData(data SandboxData) SandboxData {
 		data.Size = sandboxSize(data.CPUCount, data.MemoryMB)
 	}
 	if data.Metadata == nil {
-		data.Metadata = map[string]interface{}{}
+		data.Metadata = map[string]string{}
 	}
 	if data.Tags == nil {
 		data.Tags = map[string]string{}

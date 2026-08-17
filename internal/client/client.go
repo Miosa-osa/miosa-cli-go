@@ -437,20 +437,10 @@ func (r *realCheckpoints) Restore(ctx context.Context, computerID, checkpointID 
 		Status:       out.Data.State,
 		TemplateType: out.Data.TemplateID,
 		Size:         out.Data.Size,
-		Metadata:     stringMetadata(out.Data.Metadata),
+		Metadata:     out.Data.Metadata,
 		CreatedAt:    out.Data.CreatedAt,
 		UpdatedAt:    out.Data.CreatedAt,
 	}, nil
-}
-
-func stringMetadata(metadata map[string]interface{}) map[string]string {
-	result := make(map[string]string, len(metadata))
-	for key, value := range metadata {
-		if text, ok := value.(string); ok {
-			result[key] = text
-		}
-	}
-	return result
 }
 
 // ─── Workspaces (real implementation) ────────────────────────────────────────

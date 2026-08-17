@@ -18,7 +18,7 @@ const (
 	defaultBaseURL    = "https://api.miosa.ai/api/v1"
 	defaultTimeout    = 60 * time.Second
 	defaultMaxRetries = 3
-	sdkVersion        = "0.2.0"
+	sdkVersion        = "2.0.3"
 )
 
 // ClientOption is a functional option for configuring a Client.
@@ -60,6 +60,7 @@ type Client struct {
 	Files     *FilesService
 	Credits   *CreditsService
 	Admin     *AdminService
+	Forge     *ForgeService
 }
 
 // NewClient creates a new Client authenticated with the given API key.
@@ -82,6 +83,7 @@ func NewClient(apiKey string, opts ...ClientOption) *Client {
 	c.Files = &FilesService{client: c}
 	c.Credits = &CreditsService{client: c}
 	c.Admin = &AdminService{client: c}
+	c.Forge = &ForgeService{client: c}
 	return c
 }
 
@@ -90,6 +92,10 @@ func NewClient(apiKey string, opts ...ClientOption) *Client {
 // do executes an HTTP request with retry logic for retryable errors.
 // The response body is the caller's responsibility to close.
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	return c.doWithHeaders(ctx, method, path, body, nil)
+}
+
+func (c *Client) doWithHeaders(ctx context.Context, method, path string, body io.Reader, headers http.Header) (*http.Response, error) {
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		if attempt > 0 {
@@ -124,6 +130,11 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 			req.Header.Set("Content-Type", "application/json")
 		}
 		req.Header.Set("Accept", "application/json")
+		for key, values := range headers {
+			for _, value := range values {
+				req.Header.Add(key, value)
+			}
+		}
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {

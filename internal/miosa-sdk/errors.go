@@ -20,6 +20,8 @@ type MiosaError struct {
 	RequestID string
 	// Body is the raw response body for further inspection.
 	Body []byte
+	// Code is the stable API error code, when supplied by the server.
+	Code string
 }
 
 func (e *MiosaError) Error() string {
@@ -54,6 +56,15 @@ type RateLimitError struct {
 // ServerError is returned for 5xx responses.
 type ServerError struct{ MiosaError }
 
+// ForgeUnavailableError is returned when Forge is disabled for the organization.
+type ForgeUnavailableError struct{ MiosaError }
+
+// ForgeStorageError is returned when repository storage cannot complete an operation.
+type ForgeStorageError struct{ MiosaError }
+
+// ForgePolicyViolationError is returned when organization policy rejects an operation.
+type ForgePolicyViolationError struct{ MiosaError }
+
 // ConnectionError is returned when the SDK cannot reach the API.
 type ConnectionError struct {
 	Cause error
@@ -81,6 +92,14 @@ func errorFromResponse(resp *http.Response) error {
 		Message:    message,
 		RequestID:  requestID,
 		Body:       body,
+		Code:       extractCode(body),
+	}
+
+	switch base.Code {
+	case "FORGE_DISABLED":
+		return &ForgeUnavailableError{base}
+	case "GIT_INIT_FAILED":
+		return &ForgeStorageError{base}
 	}
 
 	switch resp.StatusCode {
@@ -103,6 +122,22 @@ func errorFromResponse(resp *http.Response) error {
 		}
 		return &base
 	}
+}
+
+func extractCode(body []byte) string {
+	var payload struct {
+		Code  string `json:"code"`
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return ""
+	}
+	if payload.Error.Code != "" {
+		return payload.Error.Code
+	}
+	return payload.Code
 }
 
 // extractMessage tries to pull a human-readable message from a JSON body.
