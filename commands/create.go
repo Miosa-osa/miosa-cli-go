@@ -75,7 +75,7 @@ func runCreate(cmd *cobra.Command, args []string, size, template, workspace stri
 		Size:       sz,
 	}
 	if workspace != "" {
-		input.Metadata = map[string]string{"workspace": workspace}
+		input.WorkspaceSlug = workspace
 	}
 
 	if !isJSON() {

@@ -6,7 +6,7 @@ set -eu
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Miosa-osa/miosa-cli-go/main/install.sh | sh
 #   curl -fsSL https://raw.githubusercontent.com/Miosa-osa/miosa-cli-go/main/install.sh | INSTALL_DIR=/usr/local/bin sh
-#   curl -fsSL https://raw.githubusercontent.com/Miosa-osa/miosa-cli-go/main/install.sh | MIOSA_CLI_VERSION=1.2.2 sh
+#   curl -fsSL https://raw.githubusercontent.com/Miosa-osa/miosa-cli-go/main/install.sh | MIOSA_CLI_VERSION=1.2.0 sh
 
 REPO="${MIOSA_CLI_REPO:-Miosa-osa/miosa-cli-go}"
 INSTALL_DIR="${INSTALL_DIR:-}"
@@ -127,10 +127,11 @@ main() {
   if [ "$VERSION" = "latest" ]; then
     tag="$(latest_version "$workdir/latest.json")"
   else
-    tag="$(release_tag "$VERSION")"
+    tag="$VERSION"
   fi
 
   version_for_asset="$(asset_version "$tag")"
+  tag="$(release_tag "$tag")"
   asset="miosa_${version_for_asset}_${os}_${arch}.tar.gz"
   url="https://github.com/$REPO/releases/download/$tag/$asset"
 

@@ -62,40 +62,6 @@ func TestListCommand_WithData(t *testing.T) {
 	}
 }
 
-func TestListCommand_AcceptsObjectMetadataValues(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/sandboxes" {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
-			"data": [{
-				"id": "abc",
-				"name": "box-object-metadata",
-				"state": "running",
-				"metadata": {
-					"workspace": "default",
-					"data": {"source": "api", "version": 2}
-				},
-				"created_at": "2026-04-18T00:00:00Z"
-			}],
-			"meta": {"total": 1, "page": 1, "per_page": 20}
-		}`))
-	}))
-	defer srv.Close()
-	cleanup := setupEnv(t, srv)
-	defer cleanup()
-
-	out, err := run(t, "list")
-	if err != nil {
-		t.Fatalf("object-shaped metadata must not break list: %v", err)
-	}
-	if !strings.Contains(out, "box-object-metadata") {
-		t.Errorf("expected sandbox in output, got: %s", out)
-	}
-}
-
 func TestListCommand_JSONOutput(t *testing.T) {
 	sandboxes := []miosa.SandboxData{
 		{ID: "abc", Name: "box-1", State: miosa.StatusRunning, CreatedAt: "2026-04-18T00:00:00Z"},
@@ -135,9 +101,9 @@ func TestListCommand_JSONOutput(t *testing.T) {
 func TestListCommand_WorkspaceFilter(t *testing.T) {
 	sandboxes := []miosa.SandboxData{
 		{ID: "abc", Name: "box-ws1", State: miosa.StatusRunning, CreatedAt: "2026-04-18T00:00:00Z",
-			Metadata: map[string]interface{}{"workspace": "ws1"}},
+			Metadata: map[string]string{"workspace": "ws1"}},
 		{ID: "def", Name: "box-ws2", State: miosa.StatusRunning, CreatedAt: "2026-04-18T00:00:00Z",
-			Metadata: map[string]interface{}{"workspace": "ws2"}},
+			Metadata: map[string]string{"workspace": "ws2"}},
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

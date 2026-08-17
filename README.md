@@ -81,6 +81,7 @@ current_sandbox   = "my-box"
 | `miosa services list/create/start/stop/...` | Services |
 | `miosa policy show/set` | Network policy |
 | `miosa catalog` | Product/template/size readiness |
+| `miosa forge repo list/create/show/delete` | Manage Forge repositories in the current organization |
 | `miosa api <path>` | Raw authenticated API request |
 | `miosa upgrade` | Upgrade the CLI |
 | `miosa version` | Print version |
@@ -133,6 +134,10 @@ Every command supports `--output json` for machine-readable output:
 miosa list --output json | jq '.data[].name'
 miosa create my-box --output json | jq '.id'
 ```
+
+Forge repository commands also accept `--json` and always return a `{ "data": ... }` success envelope.
+Repository mutations accept `--idempotency-key`, and delete requires an interactive confirmation or `--yes`.
+Forge clone is not exposed until MIOSA provides a credential-helper flow that does not place credentials in URLs, process arguments, shell history, logs, or persistent Git configuration.
 
 ## Building
 

@@ -204,6 +204,31 @@ func TestCreateCommand_CanonicalSizes(t *testing.T) {
 	}
 }
 
+func TestCreateCommand_WorkspaceUsesCanonicalSlug(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body miosa.CreateSandboxInput
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if body.WorkspaceSlug != "clinic-iq" {
+			t.Fatalf("workspace_slug = %q, want clinic-iq", body.WorkspaceSlug)
+		}
+		if body.Metadata != nil {
+			t.Fatalf("workspace must not be hidden in metadata: %#v", body.Metadata)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		w.Write(fakeSandbox("abc123", "my-box"))
+	}))
+	defer srv.Close()
+	cleanup := setupEnv(t, srv)
+	defer cleanup()
+
+	if _, err := run(t, "create", "my-box", "--workspace", "clinic-iq"); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+}
+
 func TestCreateCommand_InvalidSize(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("server should not be called for invalid size")
