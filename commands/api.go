@@ -1,104 +1,154 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/Miosa-osa/miosa-cli-go/internal/config"
-	"github.com/Miosa-osa/miosa-cli-go/internal/output"
+	"github.com/Miosa-osa/miosa-cli-go/internal/api"
 )
 
 func newAPICmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "api <path> [-- curl-style options]",
+	var (
+		method  string
+		data    string
+		headers []string
+		include bool
+	)
+	cmd := &cobra.Command{
+		Use:   "api [METHOD] <path>",
 		Short: "Make an authenticated API request",
-		Long: `Issue a raw authenticated HTTP request to the MIOSA API.
+		Long: `Send a request to the MIOSA API with your stored credentials and print the
+response body. The path is relative to the API base URL (/api/v1). Use it for
+anything the CLI has no command for yet.
 
-The path is relative to the API base URL. The Authorization header is set
-automatically from your stored credentials.
+The method defaults to GET, or POST when --data is given. --data takes a JSON
+string, @file to read a file, or - to read standard input. A failing status
+exits non-zero (see 'miosa --help' for exit codes) and still prints the body.
 
-Examples:
-  miosa api /computers
-  miosa api /computers/abc123
-  miosa api /credits/balance`,
-		Args:               cobra.MinimumNArgs(1),
-		DisableFlagParsing: true,
-		RunE:               runAPI,
+  miosa api /credits/balance
+  miosa api GET /sandboxes/my-box/ports
+  miosa api POST /webhooks -d '{"url":"https://example.com/hook","events":["sandbox.ready"]}'
+  miosa api PATCH /sandboxes/my-box/tags -d @tags.json
+  echo '{"name":"x"}' | miosa api POST /workspaces -d -`,
+		Args: cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAPI(cmd, args, method, data, headers, include)
+		},
 	}
+	cmd.Flags().StringVarP(&method, "method", "X", "", "HTTP method (default GET, or POST with --data)")
+	cmd.Flags().StringVarP(&data, "data", "d", "", "Request body: JSON, @file, or - for stdin")
+	cmd.Flags().StringArrayVarP(&headers, "header", "H", nil, "Extra header, 'Name: value' (repeatable)")
+	cmd.Flags().BoolVarP(&include, "include", "i", false, "Print the status line and response headers first")
+	return cmd
 }
 
-func runAPI(_ *cobra.Command, args []string) error {
-	if len(args) == 0 {
-		return die(fmt.Errorf("path argument required"))
+var httpMethods = map[string]bool{"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true, "HEAD": true}
+
+func runAPI(cmd *cobra.Command, args []string, method, data string, headers []string, include bool) error {
+	path := args[len(args)-1]
+	if len(args) == 2 {
+		if !httpMethods[strings.ToUpper(args[0])] {
+			return usagef("unknown method %q (use GET, POST, PUT, PATCH or DELETE)", args[0])
+		}
+		method = strings.ToUpper(args[0])
+	}
+	var body io.Reader
+	switch {
+	case data == "-":
+		b, err := io.ReadAll(cmd.InOrStdin())
+		if err != nil {
+			return die(fmt.Errorf("reading standard input: %w", err))
+		}
+		body = strings.NewReader(string(b))
+	case strings.HasPrefix(data, "@"):
+		b, err := os.ReadFile(data[1:])
+		if err != nil {
+			return die(err)
+		}
+		body = strings.NewReader(string(b))
+	case data != "":
+		body = strings.NewReader(data)
+	}
+	if method == "" {
+		method = http.MethodGet
+		if body != nil {
+			method = http.MethodPost
+		}
+	}
+	method = strings.ToUpper(method)
+	if !httpMethods[method] {
+		return usagef("unknown method %q", method)
 	}
 
-	// With DisableFlagParsing=true all args come through raw.
-	// First arg is the path; we ignore any curl-style options for now
-	// (full curl passthrough would require exec'ing curl, which we avoid).
-	path := args[0]
-	if len(args) > 1 {
-		output.Warn("additional arguments after the path are not yet supported — only the path is used")
-	}
-
-	cfg, err := config.Load()
+	c, _, err := buildClient()
 	if err != nil {
-		return die(fmt.Errorf("loading config: %w", err))
+		return die(err)
+	}
+	hdr := map[string]string{}
+	for _, h := range headers {
+		k, v, ok := strings.Cut(h, ":")
+		if !ok || strings.TrimSpace(k) == "" {
+			return usagef("header %q must look like 'Name: value'", h)
+		}
+		hdr[strings.TrimSpace(k)] = strings.TrimSpace(v)
 	}
 
-	apiKey := strings.TrimSpace(os.Getenv("MIOSA_API_KEY"))
-	if apiKey == "" {
-		apiKey = cfg.APIKey
+	// Split a query string off the path so it is encoded once.
+	q := url.Values{}
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		parsed, perr := url.ParseQuery(path[i+1:])
+		if perr != nil {
+			return usagef("bad query string in %q: %v", path, perr)
+		}
+		q, path = parsed, path[:i]
 	}
-	if apiKey == "" {
-		return die(fmt.Errorf("not authenticated (run 'miosa login')"))
-	}
+	path = "/" + strings.TrimLeft(path, "/")
 
-	baseURL := os.Getenv("MIOSA_BASE_URL")
-	if baseURL == "" {
-		baseURL = cfg.APIURL
+	req := api.Request{Method: method, Path: path, Query: q, Headers: hdr}
+	if body != nil {
+		req.Body = body
+		req.ContentType = "application/json"
+		if hdr["Content-Type"] != "" {
+			req.ContentType = hdr["Content-Type"]
+		}
 	}
-	if baseURL == "" {
-		baseURL = config.DefaultBaseURL
-	}
-
-	url := strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(path, "/")
-
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	resp, err := c.API.Do(cmd.Context(), req)
+	out := cmd.OutOrStdout()
 	if err != nil {
-		return die(fmt.Errorf("building request: %w", err))
-	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "miosa-cli/"+cliVersion)
-
-	httpClient := &http.Client{Timeout: 30 * time.Second}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return die(fmt.Errorf("request failed: %w", err))
+		var ae *api.Error
+		if errors.As(err, &ae) && len(ae.Body) > 0 {
+			if include {
+				fmt.Fprintf(out, "HTTP %d\n\n", ae.Status)
+			}
+			out.Write(ae.Body)
+			if ae.Body[len(ae.Body)-1] != '\n' {
+				fmt.Fprintln(out)
+			}
+		}
+		return die(err)
 	}
 	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
+	if include {
+		fmt.Fprintf(out, "%s %s\n", resp.Proto, resp.Status)
+		for k, v := range resp.Header {
+			fmt.Fprintf(out, "%s: %s\n", k, strings.Join(v, ", "))
+		}
+		fmt.Fprintln(out)
+	}
+	b, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return die(fmt.Errorf("reading response: %w", err))
+		return die(err)
 	}
-
-	if resp.StatusCode >= 400 {
-		fmt.Fprintf(os.Stderr, "miosa: API returned %d\n", resp.StatusCode)
-	}
-	os.Stdout.Write(body)
-	if len(body) > 0 && body[len(body)-1] != '\n' {
-		fmt.Fprintln(os.Stdout)
-	}
-
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("API error %d", resp.StatusCode)
+	out.Write(b)
+	if len(b) > 0 && b[len(b)-1] != '\n' {
+		fmt.Fprintln(out)
 	}
 	return nil
 }

@@ -8,6 +8,8 @@ import (
 
 func main() {
 	if err := commands.Execute(); err != nil {
-		os.Exit(1)
+		// Exit codes: see commands.ExitCode. A command that ran remotely and
+		// failed exits with the remote status.
+		os.Exit(commands.ExitCode(err))
 	}
 }

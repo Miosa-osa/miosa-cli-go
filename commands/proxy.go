@@ -2,51 +2,86 @@ package commands
 
 import (
 	"fmt"
+	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
+
+	"github.com/Miosa-osa/miosa-cli-go/internal/client"
 )
 
 func newProxyCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "proxy [name|id] <local>:<remote> [<local>:<remote> ...]",
-		Short: "Forward local ports to sandbox ports",
-		Long: `Forward one or more local TCP ports to ports inside a sandbox.
+	var bind string
+	cmd := &cobra.Command{
+		Use:     "proxy [name|id] <local>:<remote> [<local>:<remote> ...]",
+		Aliases: []string{"forward"},
+		Short:   "Forward local ports to sandbox ports",
+		Long: `Forward one or more local TCP ports to ports inside a sandbox, over the control
+plane's WebSocket tunnel. Any TCP service works (a database, a dev server, a
+debugger), not only HTTP; use 'miosa preview' to publish an HTTP port at a URL
+instead.
 
-Each mapping is specified as <local-port>:<remote-port>.
-The command blocks until interrupted with Ctrl-C.
+Each mapping is <local-port>:<remote-port>. The command blocks until
+interrupted with Ctrl-C. It listens on 127.0.0.1 unless --bind says otherwise.
 
-Examples:
+A key needs the sandboxes:exec scope, because a tunnel reaches every service in
+the sandbox. The sandbox must be running; a paused one is not woken.
+
   miosa proxy my-box 8080:80
   miosa proxy my-box 5432:5432 6379:6379
-  miosa proxy 8080:80          # uses current sandbox`,
+  miosa proxy 8080:80          # the current sandbox`,
 		Args: cobra.MinimumNArgs(1),
-		RunE: runProxy,
+		RunE: func(cmd *cobra.Command, args []string) error { return runProxy(cmd, args, bind) },
 	}
+	cmd.Flags().StringVar(&bind, "bind", "127.0.0.1", "Local address to listen on")
+	return cmd
 }
 
-func runProxy(cmd *cobra.Command, args []string) error {
-	_, cfg, err := buildClient()
+func runProxy(cmd *cobra.Command, args []string, bind string) error {
+	c, cfg, err := buildClient()
+	if err != nil {
+		return die(err)
+	}
+	ref, pairs, err := parseProxyArgs(args)
+	if err != nil {
+		return usagef("%v", err)
+	}
+	ref, err = requireSandbox(ref, cfg.CurrentSandbox)
+	if err != nil {
+		return usagef("%v", err)
+	}
+	id, err := c.API.ResolveSandbox(cmd.Context(), ref)
 	if err != nil {
 		return die(err)
 	}
 
-	// Args: optional [name|id] followed by one or more local:remote pairs.
-	nameOrID, pairs, err := parseProxyArgs(args)
-	if err != nil {
-		return die(err)
+	p := printerFor(cmd)
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	errs := make(chan error, len(pairs))
+	for _, pair := range pairs {
+		local, remote := pair[0], pair[1]
+		p.Line("Forwarding %s:%d to %s port %d", bind, local, ref, remote)
+		go func() {
+			errs <- c.Proxy.Forward(ctx, id, local, remote, client.ForwardOptions{
+				Bind: bind,
+				Logf: func(format string, a ...any) { p.Line(format, a...) },
+			})
+		}()
 	}
-	_ = pairs
-	nameOrID, err = requireSandbox(nameOrID, cfg.CurrentSandbox)
-	if err != nil {
-		return die(err)
+	p.Line("Press Ctrl-C to stop.")
+	select {
+	case err := <-errs:
+		stop()
+		if err != nil {
+			return die(err)
+		}
+	case <-ctx.Done():
 	}
-
-	return die(sandboxNativeFeatureUnavailable(
-		"sandbox TCP proxy",
-		"use POST /api/v1/sandboxes/{id}/expose for HTTP previews until a native sandbox tunnel endpoint is deployed",
-	))
+	return nil
 }
 
 func parseProxyArgs(args []string) (nameOrID string, pairs [][2]int, err error) {

@@ -45,6 +45,22 @@ func WithMaxRetries(n int) ClientOption {
 	return func(c *Client) { c.maxRetries = n }
 }
 
+// PathResolver rewrites a request path before it is sent. The CLI uses it to
+// turn a sandbox name into its id.
+type PathResolver func(ctx context.Context, path string) (string, error)
+
+// WithPathResolver installs a PathResolver.
+func WithPathResolver(fn PathResolver) ClientOption {
+	return func(c *Client) { c.pathResolver = fn }
+}
+
+func (c *Client) resolvePath(ctx context.Context, path string) (string, error) {
+	if c.pathResolver == nil {
+		return path, nil
+	}
+	return c.pathResolver(ctx, path)
+}
+
 // Client is the root MIOSA API client.
 // Use NewClient to construct one.
 type Client struct {
@@ -52,6 +68,8 @@ type Client struct {
 	baseURL    string
 	httpClient *http.Client
 	maxRetries int
+
+	pathResolver PathResolver
 
 	// Services — populated by NewClient.
 	Computers *ComputersService
@@ -61,6 +79,9 @@ type Client struct {
 	Credits   *CreditsService
 	Admin     *AdminService
 	Forge     *ForgeService
+
+	Environments *EnvironmentsService
+	Commands     *CommandsService
 }
 
 // NewClient creates a new Client authenticated with the given API key.
@@ -84,6 +105,8 @@ func NewClient(apiKey string, opts ...ClientOption) *Client {
 	c.Credits = &CreditsService{client: c}
 	c.Admin = &AdminService{client: c}
 	c.Forge = &ForgeService{client: c}
+	c.Environments = &EnvironmentsService{client: c}
+	c.Commands = &CommandsService{client: c}
 	return c
 }
 
@@ -96,6 +119,10 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 }
 
 func (c *Client) doWithHeaders(ctx context.Context, method, path string, body io.Reader, headers http.Header) (*http.Response, error) {
+	path, err := c.resolvePath(ctx, path)
+	if err != nil {
+		return nil, err
+	}
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		if attempt > 0 {
@@ -226,6 +253,10 @@ func (c *Client) getRaw(ctx context.Context, path string) ([]byte, string, error
 
 // postMultipart issues a POST with a prebuilt multipart body.
 func (c *Client) postMultipart(ctx context.Context, path string, body io.ReadSeeker, contentType string, out interface{}) error {
+	path, err := c.resolvePath(ctx, path)
+	if err != nil {
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, body)
 	if err != nil {
 		return fmt.Errorf("failed to build request: %w", err)

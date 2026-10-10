@@ -1,8 +1,6 @@
 package commands
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 )
 
@@ -86,28 +84,13 @@ func runURL(cmd *cobra.Command, args []string) error {
 }
 
 func runURLUpdate(cmd *cobra.Command, args []string, auth string) error {
-	_, cfg, err := buildClient()
-	if err != nil {
-		return die(err)
-	}
-
-	nameOrID := ""
-	if len(args) > 0 {
-		nameOrID = args[0]
-	}
-	nameOrID, err = requireSandbox(nameOrID, cfg.CurrentSandbox)
-	if err != nil {
-		return die(err)
-	}
-
 	switch auth {
 	case "public", "tenant", "key":
 	default:
-		return die(fmt.Errorf("invalid auth policy %q: must be public, tenant, or key", auth))
+		return usagef("invalid auth policy %q: must be public, tenant, or key", auth)
 	}
-
 	return die(sandboxNativeFeatureUnavailable(
 		"sandbox URL visibility updates",
-		"use sandbox.preview.expose() for preview URLs; deployment/custom-domain visibility belongs to the Deployments API",
+		"use 'miosa preview share <sandbox> <id>' to make a preview reachable by link and 'miosa preview unshare' to revoke it",
 	))
 }

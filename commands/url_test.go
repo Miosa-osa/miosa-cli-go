@@ -14,7 +14,7 @@ func TestURLCommand_ShowsURL(t *testing.T) {
 		if strings.HasPrefix(r.URL.Path, "/computers/") {
 			t.Fatalf("url command must not call computer API: %s", r.URL.Path)
 		}
-		if r.Method == http.MethodGet && r.URL.Path == "/sandboxes/abc123" {
+		if r.Method == http.MethodGet && (r.URL.Path == "/sandboxes/abc123" || r.URL.Path == "/sandboxes/by-name/abc123") {
 			w.Write(fakeSandboxWithPreview("abc123", "my-box", "https://abc123.sandbox.miosa.app"))
 			return
 		}
@@ -42,7 +42,7 @@ func TestURLCommand_JSONOutput(t *testing.T) {
 		if strings.HasPrefix(r.URL.Path, "/computers/") {
 			t.Fatalf("url command must not call computer API: %s", r.URL.Path)
 		}
-		if r.Method == http.MethodGet && r.URL.Path == "/sandboxes/abc123" {
+		if r.Method == http.MethodGet && (r.URL.Path == "/sandboxes/abc123" || r.URL.Path == "/sandboxes/by-name/abc123") {
 			w.Write(fakeSandboxWithPreview("abc123", "my-box", "https://abc123.sandbox.miosa.app"))
 			return
 		}

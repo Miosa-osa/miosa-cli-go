@@ -96,11 +96,11 @@ func TestForgeTypedErrorDoesNotLeakAuthorization(t *testing.T) {
 	}
 }
 
-func TestForgeScopesGenericPolicyErrorToRepositoryService(t *testing.T) {
+func TestForgeScopesProjectAttachmentErrorToPolicyViolation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)
-		w.Write([]byte(`{"error":{"code":"POLICY_VIOLATION","message":"private only"}}`))
+		w.Write([]byte(`{"error":{"code":"INVALID_PROJECT_ATTACHMENT","message":"private only"}}`))
 	}))
 	defer server.Close()
 
@@ -109,6 +109,22 @@ func TestForgeScopesGenericPolicyErrorToRepositoryService(t *testing.T) {
 	var policy *ForgePolicyViolationError
 	if !errors.As(err, &policy) {
 		t.Fatalf("got %T, want ForgePolicyViolationError", err)
+	}
+}
+
+func TestForgeLeavesUnknownPolicyCodesGeneric(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		w.Write([]byte(`{"error":{"code":"POLICY_VIOLATION","message":"not a Forge code"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("msk_test", WithBaseURL(server.URL), WithMaxRetries(0))
+	_, err := client.Forge.Create(context.Background(), CreateForgeRepositoryInput{Name: "Platform"})
+	var policy *ForgePolicyViolationError
+	if errors.As(err, &policy) {
+		t.Fatalf("unknown code %q must not map to ForgePolicyViolationError", "POLICY_VIOLATION")
 	}
 }
 

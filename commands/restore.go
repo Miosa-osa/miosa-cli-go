@@ -10,7 +10,7 @@ func newRestoreCmd() *cobra.Command {
 		Short: "Restore a sandbox from a checkpoint",
 		Long: `Create a new sandbox from a checkpoint snapshot.
 
-The original sandbox is not modified — a new computer is provisioned
+The original sandbox is not modified; a new computer is provisioned
 branched from the checkpoint state.
 
 Example:

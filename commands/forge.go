@@ -39,6 +39,7 @@ func newForgeCmd() *cobra.Command {
 		newForgeRepoDeleteCmd(outputOptions),
 	)
 	cmd.AddCommand(repo)
+	cmd.AddCommand(forgeCollabCmds()...)
 	return cmd
 }
 

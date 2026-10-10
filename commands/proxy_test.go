@@ -15,16 +15,18 @@ import (
 	miosa "github.com/Miosa-osa/miosa-go"
 	"github.com/gorilla/websocket"
 
+	"github.com/Miosa-osa/miosa-cli-go/commands"
 	"github.com/Miosa-osa/miosa-cli-go/internal/client"
 )
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// fakeTunnelServer returns an httptest.Server that:
-//   - serves GET /computers/:id as a valid computer JSON
-//   - serves GET /computers/:id/tunnel/:port as a WebSocket echo server
-//
-// It also records how many tunnel connections were made.
+var lastTunnelPath, lastTunnelAuth string
+
+// fakeTunnelServer returns an httptest.Server that serves
+// GET /sandboxes/:id/tunnel/:port as a WebSocket echo server. It records how
+// many tunnel connections were made and the path and Authorization header of
+// the last one.
 func fakeTunnelServer(t *testing.T, computerID, name string) (*httptest.Server, *int) {
 	t.Helper()
 	connections := new(int)
@@ -55,6 +57,7 @@ func fakeTunnelServer(t *testing.T, computerID, name string) (*httptest.Server, 
 		// Tunnel WebSocket.
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/tunnel/") {
 			*connections++
+			lastTunnelPath, lastTunnelAuth = r.URL.Path, r.Header.Get("Authorization")
 			hdr := http.Header{"Sec-WebSocket-Protocol": []string{"miosa-tunnel-v1"}}
 			conn, err := upgrader.Upgrade(w, r, hdr)
 			if err != nil {
@@ -128,23 +131,6 @@ func TestProxyCommand_InvalidRemotePort(t *testing.T) {
 	}
 }
 
-func TestProxyCommand_NotAvailableDoesNotCallComputers(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/computers/") {
-			t.Fatalf("proxy command must not call computer API: %s", r.URL.Path)
-		}
-		http.Error(w, "not found", http.StatusNotFound)
-	}))
-	defer srv.Close()
-	cleanup := setupEnv(t, srv)
-	defer cleanup()
-
-	_, err := run(t, "proxy", "abc123", "8080:80")
-	if err == nil {
-		t.Fatal("expected unsupported native sandbox proxy error")
-	}
-}
-
 // ─── Tunnel roundtrip test (real TCP + fake WS control plane) ────────────────
 
 // TestProxyCommand_TunnelRoundtrip verifies the full TCP↔WebSocket bridge:
@@ -210,6 +196,9 @@ func TestProxyCommand_TunnelRoundtrip(t *testing.T) {
 	}
 	if string(buf) != string(payload) {
 		t.Errorf("echo mismatch: got %q want %q", buf, payload)
+	}
+	if lastTunnelPath != "/api/v1/sandboxes/abc123/tunnel/3000" || lastTunnelAuth != "Bearer msk_u_test" {
+		t.Errorf("tunnel request = %s auth=%q", lastTunnelPath, lastTunnelAuth)
 	}
 
 	// Graceful shutdown.
@@ -290,4 +279,55 @@ func testParseProxyArgs(args []string) (nameOrID string, pairs [][2]int, err err
 		return "", nil, fmt.Errorf("no port mappings")
 	}
 	return nameOrID, pairs, nil
+}
+
+// A server that closes the tunnel with a close code (here 4005, nothing is
+// listening) must be reported in words, and must not stop the listener.
+func TestProxyForwardReportsATunnelCloseCode(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }, Subprotocols: []string{"miosa-tunnel-v1"}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, http.Header{"Sec-WebSocket-Protocol": []string{"miosa-tunnel-v1"}})
+		if err != nil {
+			return
+		}
+		conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(4005, "refused"), time.Now().Add(time.Second)) //nolint:errcheck
+		time.Sleep(50 * time.Millisecond)
+		conn.Close()
+	}))
+	defer srv.Close()
+	rc := newTestRealProxy(t, "ws"+strings.TrimPrefix(srv.URL, "http")+"/api/v1", "msk_u_test")
+
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	logs := make(chan string, 8)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go rc.Forward(ctx, "abc123", port, 9, client.ForwardOptions{Logf: func(f string, a ...any) { logs <- fmt.Sprintf(f, a...) }}) //nolint:errcheck
+	time.Sleep(30 * time.Millisecond)
+	c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case l := <-logs:
+			if strings.Contains(l, "nothing is listening") {
+				return
+			}
+		case <-deadline:
+			t.Fatal("the 4005 close code was not explained")
+		}
+	}
+}
+
+func TestProxyCommandNeedsASandbox(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	defer srv.Close()
+	defer setupEnv(t, srv)()
+	if _, err := run(t, "proxy", "8080:80"); err == nil || commands.ExitCode(err) != commands.ExitUsage {
+		t.Fatalf("no current sandbox must be a usage error: %v", err)
+	}
 }
