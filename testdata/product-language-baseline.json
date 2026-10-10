@@ -1,0 +1,29 @@
+{
+  "note": "Known glossary violations in CLI help text and messages. Shrink this file; never grow it. Regenerate with -update-language-baseline.",
+  "total": 24,
+  "counts": {
+    "checkpoint.go::checkpoint": 2,
+    "forge.go::cancelled-spelling": 1,
+    "miosa [Short]::em-dash": 1,
+    "miosa api [Long]::credentials": 1,
+    "miosa checkpoint [Long]::checkpoint": 1,
+    "miosa checkpoint [Short]::checkpoint": 1,
+    "miosa checkpoint [name]::cli-retired-command": 1,
+    "miosa checkpoint create [--comment]::checkpoint": 1,
+    "miosa checkpoint create [Short]::checkpoint": 1,
+    "miosa checkpoint delete [Short]::checkpoint": 1,
+    "miosa checkpoint info [Short]::checkpoint": 1,
+    "miosa checkpoint list [Short]::checkpoint": 1,
+    "miosa forge [Long]::credentials": 1,
+    "miosa logout [Short]::credentials": 1,
+    "miosa restore [Long]::checkpoint": 1,
+    "miosa restore [Short]::checkpoint": 1,
+    "miosa restore [Short]::restore-snapshot": 1,
+    "miosa restore [name]::cli-retired-command": 1,
+    "miosa url update [--auth]::tenant": 1,
+    "miosa url update [Long]::secret-variable": 1,
+    "miosa url update [Long]::tenant": 1,
+    "restore.go::checkpoint": 1,
+    "restore.go::restore-snapshot": 1
+  }
+}

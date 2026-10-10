@@ -101,9 +101,9 @@ func TestListCommand_JSONOutput(t *testing.T) {
 func TestListCommand_WorkspaceFilter(t *testing.T) {
 	sandboxes := []miosa.SandboxData{
 		{ID: "abc", Name: "box-ws1", State: miosa.StatusRunning, CreatedAt: "2026-04-18T00:00:00Z",
-			Metadata: map[string]string{"workspace": "ws1"}},
+			Metadata: map[string]any{"workspace": "ws1"}},
 		{ID: "def", Name: "box-ws2", State: miosa.StatusRunning, CreatedAt: "2026-04-18T00:00:00Z",
-			Metadata: map[string]string{"workspace": "ws2"}},
+			Metadata: map[string]any{"workspace": "ws2"}},
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

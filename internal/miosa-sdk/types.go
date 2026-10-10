@@ -44,6 +44,9 @@ type ComputerData struct {
 	PreviewDomain string             `json:"preview_domain"`
 	CreatedAt     string             `json:"created_at"`
 	UpdatedAt     string             `json:"updated_at"`
+
+	// Environment and setup state (miosa-compute docs/api/environments.md).
+	MachineEnvironment
 }
 
 // CreateComputerInput is the request body for POST /computers.
@@ -52,6 +55,15 @@ type CreateComputerInput struct {
 	TemplateType string            `json:"template_type,omitempty"`
 	Size         ComputerSize      `json:"size,omitempty"`
 	Metadata     map[string]string `json:"metadata,omitempty"`
+
+	// Environment names the environment to start from (default when empty).
+	Environment string `json:"environment,omitempty"`
+	// NoEnv starts the computer with nothing of the owner's passed in.
+	NoEnv bool `json:"no_env,omitempty"`
+	// Env sets per-computer variables on top of the environment's.
+	Env map[string]string `json:"env,omitempty"`
+	// SetupFile is the content of a one-off script run in the background once the computer is ready.
+	SetupFile string `json:"setup_file,omitempty"`
 }
 
 // ListComputersInput are optional query parameters for GET /computers.

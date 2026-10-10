@@ -8,7 +8,7 @@ func newWorkspaceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "workspace",
 		Short: "Manage workspaces",
-		Long:  `Create, list, and delete workspaces.`,
+		Long:  `Workspaces group machines, deployments and data inside your organization. <workspace> is a slug, name or id.`,
 	}
 
 	cmd.AddCommand(
@@ -16,6 +16,7 @@ func newWorkspaceCmd() *cobra.Command {
 		newWorkspaceListCmd(),
 		newWorkspaceDeleteCmd(),
 	)
+	cmd.AddCommand(workspaceOps()...)
 	return cmd
 }
 

@@ -126,16 +126,18 @@ func errorFromResponse(resp *http.Response) error {
 
 func extractCode(body []byte) string {
 	var payload struct {
-		Code  string `json:"code"`
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
+		Code  string          `json:"code"`
+		Error json.RawMessage `json:"error"`
 	}
 	if json.Unmarshal(body, &payload) != nil {
 		return ""
 	}
-	if payload.Error.Code != "" {
-		return payload.Error.Code
+	// {"error":{"code":"X"}} nests the code; {"error":"msg","code":"X"} does not.
+	var nested struct {
+		Code string `json:"code"`
+	}
+	if len(payload.Error) > 0 && json.Unmarshal(payload.Error, &nested) == nil && nested.Code != "" {
+		return nested.Code
 	}
 	return payload.Code
 }
@@ -148,6 +150,15 @@ func extractMessage(body []byte, statusCode int) string {
 	}
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(body, &obj); err == nil {
+		// Nested envelope: {"error": {"code": "...", "message": "..."}}.
+		if raw, ok := obj["error"]; ok {
+			var nested struct {
+				Message string `json:"message"`
+			}
+			if json.Unmarshal(raw, &nested) == nil && nested.Message != "" {
+				return nested.Message
+			}
+		}
 		for _, key := range []string{"message", "error", "detail"} {
 			if raw, ok := obj[key]; ok {
 				var s string
@@ -163,6 +174,10 @@ func extractMessage(body []byte, statusCode int) string {
 				return list[0]
 			}
 		}
+	}
+	// A JSON object with no readable message: do not print the raw object.
+	if body[0] == '{' {
+		return fmt.Sprintf("request failed with status %d", statusCode)
 	}
 	// Fall back to the raw body if it's a plain string.
 	if s := strings.Trim(string(body), `"`); s != "" {
@@ -190,4 +205,41 @@ func isRetryable(err error) bool {
 		return true
 	}
 	return false
+}
+
+// IsStarting reports whether err is the retryable "machine is still starting"
+// refusal: a 409/423/425/503 whose code or message says "starting".
+// Callers that run commands right after create should back off and retry.
+func IsStarting(err error) bool {
+	var base *MiosaError
+	for e := err; e != nil; {
+		switch v := e.(type) {
+		case *MiosaError:
+			base = v
+		case *ValidationError:
+			base = &v.MiosaError
+		case *ServerError:
+			base = &v.MiosaError
+		case *NotFoundError:
+			base = &v.MiosaError
+		}
+		if base != nil {
+			break
+		}
+		u, ok := e.(interface{ Unwrap() error })
+		if !ok {
+			break
+		}
+		e = u.Unwrap()
+	}
+	if base == nil {
+		return false
+	}
+	switch base.StatusCode {
+	case http.StatusConflict, http.StatusLocked, http.StatusTooEarly, http.StatusServiceUnavailable:
+	default:
+		return false
+	}
+	hay := strings.ToLower(base.Code + " " + base.Message)
+	return strings.Contains(hay, "starting")
 }

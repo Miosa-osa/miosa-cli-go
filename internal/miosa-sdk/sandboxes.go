@@ -38,12 +38,15 @@ type SandboxData struct {
 	ReadyAt        string            `json:"ready_at"`
 	ExitCode       *int              `json:"exit_code"`
 	Tags           map[string]string `json:"tags"`
-	Metadata       map[string]string `json:"metadata"`
+	Metadata       map[string]any    `json:"metadata"`
 	CreatedAt      string            `json:"created_at"`
 	StartedAt      string            `json:"started_at"`
 	DestroyedAt    string            `json:"destroyed_at"`
 	LastActivityAt string            `json:"last_activity_at"`
 	AgentSessionID string            `json:"agent_session_id"`
+
+	// Environment and setup state (miosa-compute docs/api/environments.md).
+	MachineEnvironment
 
 	// Compatibility fields used by older CLI table rendering.
 	Size         ComputerSize   `json:"size,omitempty"`
@@ -69,6 +72,18 @@ type CreateSandboxInput struct {
 	ProjectSlug    string            `json:"project_slug,omitempty"`
 	ProjectName    string            `json:"project_name,omitempty"`
 	Metadata       map[string]string `json:"metadata,omitempty"`
+	// WaitSec asks the create request itself to wait up to this many seconds
+	// (2 to 120) for readiness; the sandbox is returned either way.
+	WaitSec int `json:"wait,omitempty"`
+
+	// Environment names the environment to start from (default when empty).
+	Environment string `json:"environment,omitempty"`
+	// NoEnv starts the sandbox with nothing of the owner's passed in.
+	NoEnv bool `json:"no_env,omitempty"`
+	// Env sets per-sandbox variables on top of the environment's.
+	Env map[string]string `json:"env,omitempty"`
+	// SetupFile is the content of a one-off script run in the background once the sandbox is ready.
+	SetupFile string `json:"setup_file,omitempty"`
 }
 
 // ListSandboxesInput are optional query parameters for GET /sandboxes.
@@ -178,7 +193,7 @@ func normalizeSandboxData(data SandboxData) SandboxData {
 		data.Size = sandboxSize(data.CPUCount, data.MemoryMB)
 	}
 	if data.Metadata == nil {
-		data.Metadata = map[string]string{}
+		data.Metadata = map[string]any{}
 	}
 	if data.Tags == nil {
 		data.Tags = map[string]string{}

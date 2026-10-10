@@ -2,193 +2,111 @@ package commands
 
 import (
 	"fmt"
+	"net/url"
 
 	"github.com/spf13/cobra"
+
+	"github.com/Miosa-osa/miosa-cli-go/internal/api"
 )
 
+// A sandbox "service" is a named, persistent process: it keeps its command id
+// and logs after the CLI disconnects. start/stop/delete are built from the
+// process routes since the service routes only create, list, show, restart and
+// read logs.
+
+var serviceCols = []Col{
+	{Head: "NAME", Path: "name"}, {Head: "STATUS", Path: "status"}, {Head: "PID", Path: "pid"},
+	{Head: "COMMAND", Path: "command"}, {Head: "ID", Path: "id", Fmt: "short"},
+}
+
 func newServicesCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "services",
-		Short: "Manage supervised services in a sandbox",
-		Long:  `Create, list, start, stop, and tail logs for supervised processes inside a sandbox.`,
-	}
+	sandbox := Arg{Name: "sandbox", Optional: true, Current: true, Complete: "sandbox"}
+	cmd := group("services", "Run named long-lived services in a sandbox",
+		`A service is a named background process that outlives your session: its status and
+logs stay available after the CLI disconnects. The sandbox is optional everywhere
+(the current one is used).
 
-	cmd.AddCommand(
-		newServicesListCmd(),
-		newServicesCreateCmd(),
-		newServicesStartCmd(),
-		newServicesStopCmd(),
-		newServicesRestartCmd(),
-		newServicesDeleteCmd(),
-		newServicesLogsCmd(),
+  miosa services create my-box --name web --command "python -m http.server 8080"
+  miosa services list
+  miosa services logs web --tail 50
+  miosa services restart web`, []string{"service", "svc"},
+		Op{
+			Use: "list [sandbox]", Aliases: []string{"ls"}, Short: "List services",
+			Method: "GET", Path: "/sandboxes/{0}/services", Args: []Arg{sandbox}, Cols: serviceCols,
+		},
+		Op{
+			Use: "create [sandbox]", Short: "Start a service",
+			Method: "POST", Path: "/sandboxes/{0}/services", Args: []Arg{sandbox},
+			Flags: []Flag{
+				{Name: "name", Usage: "Service name", Required: true},
+				{Name: "command", Usage: "Command to run", Required: true},
+				{Name: "cwd", Usage: "Working directory (default /workspace)"},
+				{Name: "env", Usage: "Environment variable KEY=VALUE (repeatable)", Type: "kv"},
+				{Name: "sudo", Usage: "Run as root", Type: "bool"},
+			},
+			Detail: serviceDetail, Done: "Started service",
+		},
+		Op{
+			Use: "get [sandbox] <service>", Aliases: []string{"show"}, Short: "Show one service",
+			Method: "GET", Path: "/sandboxes/{0}/services/{1}", Args: []Arg{sandbox, {Name: "service"}}, Detail: serviceDetail,
+		},
+		Op{
+			Use: "restart [sandbox] <service>", Aliases: []string{"start"}, Short: "Restart a service (also starts a stopped one)",
+			Method: "POST", Path: "/sandboxes/{0}/services/{1}/restart", Args: []Arg{sandbox, {Name: "service"}}, Detail: serviceDetail, Done: "Restarted {1}",
+		},
+		Op{
+			Use: "logs [sandbox] <service>", Short: "Show a service's output",
+			Method: "GET", Path: "/sandboxes/{0}/services/{1}/logs", Args: []Arg{sandbox, {Name: "service"}},
+			Flags: []Flag{{Name: "tail", Short: "n", Type: "int", Usage: "Number of recent lines", Default: "100"}},
+			Lines: "data.lines",
+		},
 	)
+	cmd.AddCommand(newServicesStopCmd("stop", "Stop a service", []string{"delete", "rm"}))
 	return cmd
 }
 
-func newServicesListCmd() *cobra.Command {
+var serviceDetail = []Col{
+	{Head: "Name", Path: "name"}, {Head: "Status", Path: "status"}, {Head: "PID", Path: "pid"}, {Head: "Command", Path: "command"},
+	{Head: "Directory", Path: "cwd"}, {Head: "Exit code", Path: "exit_code"}, {Head: "Started", Path: "started_at", Fmt: "age"}, {Head: "Id", Path: "id"},
+}
+
+func newServicesStopCmd(use, short string, aliases []string) *cobra.Command {
 	return &cobra.Command{
-		Use:     "list [name|id]",
-		Aliases: []string{"ls"},
-		Short:   "List services in a sandbox",
-		Args:    cobra.MaximumNArgs(1),
-		RunE:    runServicesList,
-	}
-}
-
-func runServicesList(cmd *cobra.Command, args []string) error {
-	_, cfg, err := buildClient()
-	if err != nil {
-		return die(err)
-	}
-
-	nameOrID := ""
-	if len(args) > 0 {
-		nameOrID = args[0]
-	}
-	nameOrID, err = requireSandbox(nameOrID, cfg.CurrentSandbox)
-	if err != nil {
-		return die(err)
-	}
-
-	return die(sandboxNativeFeatureUnavailable(
-		"sandbox supervised services",
-		"use sandbox exec/template start today; native service routes will ship as sandbox APIs before this command is enabled",
-	))
-}
-
-func newServicesCreateCmd() *cobra.Command {
-	var (
-		name    string
-		command string
-		restart string
-	)
-	cmd := &cobra.Command{
-		Use:   "create [name|id]",
-		Short: "Create a supervised service",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(c *cobra.Command, args []string) error {
-			return runServicesCreate(c, args, name, command, restart)
+		Use:     use + " [sandbox] <service>",
+		Aliases: aliases,
+		Short:   short,
+		Long:    "Stop a service by killing its process. Start it again with 'services restart'.",
+		Args:    cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p := printerFor(cmd)
+			ref, name := "current", args[0]
+			if len(args) == 2 {
+				ref, name = args[0], args[1]
+			}
+			c, _, err := buildClient()
+			if err != nil {
+				return die(err)
+			}
+			base := "/sandboxes/" + url.PathEscape(ref)
+			var svc struct {
+				Data struct {
+					ID string `json:"id"`
+				} `json:"data"`
+			}
+			if err := c.API.Get(cmd.Context(), base+"/services/"+url.PathEscape(name), nil, &svc); err != nil {
+				return die(err)
+			}
+			if svc.Data.ID == "" {
+				return die(&api.Error{Status: 404, Code: "NOT_FOUND", Message: fmt.Sprintf("no running service named %q", name)})
+			}
+			if err := c.API.Delete(cmd.Context(), base+"/processes/"+svc.Data.ID, nil, nil); err != nil {
+				return die(err)
+			}
+			if isJSON() {
+				return p.JSON(map[string]string{"service": name, "status": "stopped"})
+			}
+			p.Success("Stopped service %q", name)
+			return nil
 		},
 	}
-	cmd.Flags().StringVar(&name, "name", "", "Service name (required)")
-	cmd.Flags().StringVar(&command, "command", "", "Command to run (required)")
-	cmd.Flags().StringVar(&restart, "restart", "on-failure", "Restart policy: always, on-failure, or no")
-	_ = cmd.MarkFlagRequired("name")
-	_ = cmd.MarkFlagRequired("command")
-	return cmd
-}
-
-func runServicesCreate(cmd *cobra.Command, args []string, name, command, restart string) error {
-	_, cfg, err := buildClient()
-	if err != nil {
-		return die(err)
-	}
-
-	nameOrID := ""
-	if len(args) > 0 {
-		nameOrID = args[0]
-	}
-	nameOrID, err = requireSandbox(nameOrID, cfg.CurrentSandbox)
-	if err != nil {
-		return die(err)
-	}
-
-	switch restart {
-	case "always", "on-failure", "no":
-	default:
-		return die(fmt.Errorf("invalid restart policy %q: must be always, on-failure, or no", restart))
-	}
-
-	return die(sandboxNativeFeatureUnavailable(
-		"sandbox supervised services",
-		"use sandbox exec/template start today; native service routes will ship as sandbox APIs before this command is enabled",
-	))
-}
-
-func newServicesStartCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "start <service>",
-		Short: "Start a service",
-		Args:  cobra.ExactArgs(1),
-		RunE:  runServicesLifecycle("start"),
-	}
-}
-
-func newServicesStopCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "stop <service>",
-		Short: "Stop a service",
-		Args:  cobra.ExactArgs(1),
-		RunE:  runServicesLifecycle("stop"),
-	}
-}
-
-func newServicesRestartCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "restart <service>",
-		Short: "Restart a service",
-		Args:  cobra.ExactArgs(1),
-		RunE:  runServicesLifecycle("restart"),
-	}
-}
-
-func newServicesDeleteCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "delete <service>",
-		Short: "Delete a service",
-		Args:  cobra.ExactArgs(1),
-		RunE:  runServicesLifecycle("delete"),
-	}
-}
-
-func runServicesLifecycle(action string) func(*cobra.Command, []string) error {
-	return func(cmd *cobra.Command, args []string) error {
-		_, cfg, err := buildClient()
-		if err != nil {
-			return die(err)
-		}
-
-		nameOrID, err := requireSandbox("", cfg.CurrentSandbox)
-		if err != nil {
-			return die(err)
-		}
-		_ = nameOrID
-		return die(sandboxNativeFeatureUnavailable(
-			"sandbox supervised services",
-			"use sandbox exec/template start today; native service routes will ship as sandbox APIs before this command is enabled",
-		))
-	}
-}
-
-func newServicesLogsCmd() *cobra.Command {
-	var follow bool
-	cmd := &cobra.Command{
-		Use:   "logs <service>",
-		Short: "Tail service logs",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(c *cobra.Command, args []string) error {
-			return runServicesLogs(c, args, follow)
-		},
-	}
-	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "Stream logs continuously")
-	return cmd
-}
-
-func runServicesLogs(cmd *cobra.Command, args []string, follow bool) error {
-	_, cfg, err := buildClient()
-	if err != nil {
-		return die(err)
-	}
-
-	nameOrID, err := requireSandbox("", cfg.CurrentSandbox)
-	if err != nil {
-		return die(err)
-	}
-	_ = nameOrID
-	_ = follow
-
-	return die(sandboxNativeFeatureUnavailable(
-		"sandbox supervised service logs",
-		"use GET /api/v1/sandboxes/{id}/logs for template/app logs until native service routes are deployed",
-	))
 }

@@ -6,9 +6,9 @@ package client
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -18,7 +18,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Miosa-osa/miosa-cli-go/internal/api"
 	"github.com/Miosa-osa/miosa-cli-go/internal/config"
+	"github.com/Miosa-osa/miosa-cli-go/internal/terminal"
 	miosa "github.com/Miosa-osa/miosa-go"
 	"github.com/gorilla/websocket"
 )
@@ -62,9 +64,18 @@ type WorkspaceTransport interface {
 	Delete(ctx context.Context, id string) error
 }
 
-// ProxyTransport handles local-port-to-VM-port forwarding (Phase 4 — not yet deployed).
+// ForwardOptions tune a port forward.
+type ForwardOptions struct {
+	// Bind is the local address to listen on (default 127.0.0.1).
+	Bind string
+	// Logf receives one line per connection event and per failure. Nil is silent.
+	Logf func(format string, args ...any)
+}
+
+// ProxyTransport forwards a local TCP port to a port inside a sandbox over the
+// control plane's WebSocket tunnel.
 type ProxyTransport interface {
-	Forward(ctx context.Context, computerID string, localPort, remotePort int) error
+	Forward(ctx context.Context, sandboxID string, localPort, remotePort int, opts ...ForwardOptions) error
 }
 
 // ServicesTransport handles supervised process management.
@@ -173,44 +184,22 @@ type restClient struct {
 	baseURL string
 	apiKey  string
 	http    *http.Client
+	api     *api.Client
 }
 
 func newRestClient(baseURL, apiKey string) *restClient {
+	a := api.New(baseURL, apiKey)
+	a.UserAgent = UserAgent
 	return &restClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
-		http:    &http.Client{Timeout: 60 * time.Second},
+		http:    a.HTTP,
+		api:     a,
 	}
 }
 
 func (c *restClient) do(ctx context.Context, method, path string, body interface{}) (*http.Response, error) {
-	var bodyReader io.Reader
-	if body != nil {
-		buf, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("marshal request: %w", err)
-		}
-		bodyReader = bytes.NewReader(buf)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bodyReader)
-	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("http: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		defer resp.Body.Close()
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		return nil, fmt.Errorf("API error status=%d body=%s", resp.StatusCode, string(raw))
-	}
-	return resp, nil
+	return c.api.Do(ctx, api.Request{Method: method, Path: path, Body: body})
 }
 
 func (c *restClient) getJSON(ctx context.Context, path string, out interface{}) error {
@@ -437,10 +426,20 @@ func (r *realCheckpoints) Restore(ctx context.Context, computerID, checkpointID 
 		Status:       out.Data.State,
 		TemplateType: out.Data.TemplateID,
 		Size:         out.Data.Size,
-		Metadata:     out.Data.Metadata,
+		Metadata:     stringMetadata(out.Data.Metadata),
 		CreatedAt:    out.Data.CreatedAt,
 		UpdatedAt:    out.Data.CreatedAt,
 	}, nil
+}
+
+func stringMetadata(metadata map[string]any) map[string]string {
+	result := make(map[string]string)
+	for key, value := range metadata {
+		if text, ok := value.(string); ok {
+			result[key] = text
+		}
+	}
+	return result
 }
 
 // ─── Workspaces (real implementation) ────────────────────────────────────────
@@ -502,19 +501,33 @@ func (r *realWorkspaces) Delete(ctx context.Context, id string) error {
 // control plane and bridging it to a local TCP listener.
 // The control-plane endpoint is:
 //
-//	GET /api/v1/computers/:id/tunnel/:port  (WebSocket, subprotocol miosa-tunnel-v1)
+//	GET /api/v1/sandboxes/:id/tunnel/:port  (WebSocket, subprotocol miosa-tunnel-v1)
+//
+// A key needs the sandboxes:exec scope. Binary frames carry the TCP stream
+// verbatim in both directions.
 type realProxy struct {
 	baseURL string
 	apiKey  string
 }
 
-// Forward listens on 127.0.0.1:localPort and for each incoming TCP connection
-// opens a WebSocket tunnel to remotePort inside the sandbox. The function blocks
-// until ctx is cancelled (caller is responsible for cancellation on SIGINT).
-func (p *realProxy) Forward(ctx context.Context, computerID string, localPort, remotePort int) error {
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
+// Forward listens on the bind address (default 127.0.0.1) at localPort and for
+// each incoming TCP connection opens a WebSocket tunnel to remotePort inside
+// the sandbox. It blocks until ctx is cancelled.
+func (p *realProxy) Forward(ctx context.Context, sandboxID string, localPort, remotePort int, opts ...ForwardOptions) error {
+	var o ForwardOptions
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+	if o.Bind == "" {
+		o.Bind = "127.0.0.1"
+	}
+	logf := o.Logf
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(o.Bind, fmt.Sprint(localPort)))
 	if err != nil {
-		return fmt.Errorf("proxy: listen on :%d: %w", localPort, err)
+		return fmt.Errorf("proxy: listen on %s:%d: %w", o.Bind, localPort, err)
 	}
 	defer ln.Close()
 
@@ -532,17 +545,19 @@ func (p *realProxy) Forward(ctx context.Context, computerID string, localPort, r
 			}
 			return fmt.Errorf("proxy: accept: %w", err)
 		}
-		go p.handleTunnelConn(ctx, tcpConn, computerID, remotePort)
+		go p.handleTunnelConn(ctx, tcpConn, sandboxID, remotePort, localPort, logf)
 	}
 }
 
 // handleTunnelConn opens a WS tunnel for one accepted TCP connection and
-// bridges bytes bidirectionally until either side closes.
-func (p *realProxy) handleTunnelConn(ctx context.Context, tcpConn net.Conn, computerID string, remotePort int) {
+// bridges bytes bidirectionally until either side closes. A failure is logged
+// and drops this connection only; the listener keeps running.
+func (p *realProxy) handleTunnelConn(ctx context.Context, tcpConn net.Conn, sandboxID string, remotePort, localPort int, logf func(string, ...any)) {
 	defer tcpConn.Close()
 
-	wsURL, err := p.tunnelURL(computerID, remotePort)
+	wsURL, err := p.tunnelURL(sandboxID, remotePort)
 	if err != nil {
+		logf("%v", err)
 		return
 	}
 
@@ -553,12 +568,17 @@ func (p *realProxy) handleTunnelConn(ctx context.Context, tcpConn net.Conn, comp
 		HandshakeTimeout: 10 * time.Second,
 		Subprotocols:     []string{"miosa-tunnel-v1"},
 	}
-	wsConn, _, err := dialer.DialContext(ctx, wsURL, hdr)
+	wsConn, resp, err := dialer.DialContext(ctx, wsURL, hdr)
 	if err != nil {
-		// Connection refused / not running — log and drop, don't crash the listener.
+		if resp != nil {
+			logf("port %d -> %d: the tunnel was refused (%s)", localPort, remotePort, resp.Status)
+		} else {
+			logf("port %d -> %d: %v", localPort, remotePort, err)
+		}
 		return
 	}
 	defer wsConn.Close()
+	logf("port %d -> %d: connected", localPort, remotePort)
 
 	// TCP → WS
 	tcpToWS := make(chan int64, 1)
@@ -592,6 +612,10 @@ func (p *realProxy) handleTunnelConn(ctx context.Context, tcpConn net.Conn, comp
 		for {
 			_, data, err := wsConn.ReadMessage()
 			if err != nil {
+				var ce *websocket.CloseError
+				if errors.As(err, &ce) && ce.Code != websocket.CloseNormalClosure {
+					logf("port %d -> %d: %v", localPort, remotePort, (&terminal.CloseError{Code: ce.Code, Text: ce.Text}))
+				}
 				break
 			}
 			total += int64(len(data))
@@ -610,7 +634,7 @@ func (p *realProxy) handleTunnelConn(ctx context.Context, tcpConn net.Conn, comp
 }
 
 // tunnelURL converts the REST base URL to a WebSocket URL for the tunnel endpoint.
-func (p *realProxy) tunnelURL(computerID string, remotePort int) (string, error) {
+func (p *realProxy) tunnelURL(sandboxID string, remotePort int) (string, error) {
 	u, err := url.Parse(p.baseURL)
 	if err != nil {
 		return "", fmt.Errorf("proxy: parse base URL: %w", err)
@@ -622,7 +646,7 @@ func (p *realProxy) tunnelURL(computerID string, remotePort int) (string, error)
 		u.Scheme = "ws"
 	}
 	u.Path = strings.TrimRight(u.Path, "/") +
-		fmt.Sprintf("/computers/%s/tunnel/%d", computerID, remotePort)
+		fmt.Sprintf("/sandboxes/%s/tunnel/%d", sandboxID, remotePort)
 	return u.String(), nil
 }
 
@@ -789,6 +813,9 @@ func UpdateVisibility(ctx context.Context, rc *restClient, computerID, visibilit
 // implementations for each API surface.
 type Client struct {
 	SDK         *miosa.Client
+	API         *api.Client // retrying JSON client with typed errors
+	Key         string      // resolved API key (empty when not signed in)
+	BaseURL     string      // resolved API base URL
 	RC          *restClient // direct REST client (bypasses SDK for new endpoints)
 	Exec        ExecSession
 	Checkpoints CheckpointTransport
@@ -802,6 +829,12 @@ type Client struct {
 type ResolveOptions struct {
 	APIKey string
 	APIURL string
+	// Retries is the retry count for the API client; negative keeps the default.
+	Retries int
+	// Headers are sent on every request (for example X-Miosa-Org).
+	Headers map[string]string
+	// Timeout is the HTTP timeout of the SDK client. Zero keeps the SDK default.
+	Timeout time.Duration
 }
 
 // New builds a Client by resolving credentials and URL in priority order:
@@ -822,11 +855,35 @@ func New(opts ResolveOptions) (*Client, config.Config, error) {
 		apiURL = config.DefaultBaseURL
 	}
 
-	sdk := miosa.NewClient(apiKey, miosa.WithBaseURL(apiURL))
 	rc := newRestClient(apiURL, apiKey)
+	ac := rc.api
+	if opts.Retries >= 0 {
+		ac.MaxRetries = opts.Retries
+	}
+	if opts.Timeout > 0 {
+		ac.HTTP.Timeout = opts.Timeout
+	}
+	ac.Headers = opts.Headers
+	// Every sandbox argument may be an id, a name, "current" or "self".
+	ac.Resolver = &api.Resolver{Aliases: map[string]string{
+		"current": cfg.CurrentSandbox,
+		"self":    os.Getenv("MIOSA_SANDBOX_ID"),
+	}}
+
+	sdkOpts := []miosa.ClientOption{miosa.WithBaseURL(apiURL), miosa.WithPathResolver(ac.RewritePath)}
+	if opts.Timeout > 0 {
+		sdkOpts = append(sdkOpts, miosa.WithTimeout(opts.Timeout))
+	}
+	if opts.Retries >= 0 {
+		sdkOpts = append(sdkOpts, miosa.WithMaxRetries(opts.Retries))
+	}
+	sdk := miosa.NewClient(apiKey, sdkOpts...)
 
 	c := &Client{
 		SDK:         sdk,
+		API:         ac,
+		Key:         apiKey,
+		BaseURL:     apiURL,
 		RC:          rc,
 		Exec:        &realExec{rc: rc},
 		Checkpoints: &realCheckpoints{rc: rc},
@@ -840,8 +897,17 @@ func New(opts ResolveOptions) (*Client, config.Config, error) {
 
 // MustAuthenticated returns an error if no API key is configured.
 func (c *Client) MustAuthenticated() error {
+	if c.Key == "" {
+		return ErrNotAuthenticated
+	}
 	return nil
 }
+
+// ErrNotAuthenticated is returned when no API key is configured.
+var ErrNotAuthenticated = errors.New("not authenticated (run 'miosa login' or set MIOSA_API_KEY)")
+
+// UserAgent is sent with every request. The commands package sets the version.
+var UserAgent = "miosa-cli"
 
 // resolve returns the first non-empty string from candidates.
 func resolve(candidates ...string) string {
