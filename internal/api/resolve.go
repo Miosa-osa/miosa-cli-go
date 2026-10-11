@@ -17,7 +17,7 @@ var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[
 func IsUUID(s string) bool { return uuidRe.MatchString(s) }
 
 // sandboxLiterals are path segments under /sandboxes/ that are routes, not ids.
-var sandboxLiterals = map[string]bool{"": true, "batch": true, "batches": true, "by-name": true, "run": true}
+var sandboxLiterals = map[string]bool{"": true, "batch": true, "batches": true, "by-name": true, "run": true, "runtimes": true}
 
 // Resolver maps sandbox references (names and aliases) to ids and rewrites
 // request paths so every command accepts a name wherever an id is allowed.

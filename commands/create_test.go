@@ -306,3 +306,94 @@ func TestCreateCommand_NoName(t *testing.T) {
 		t.Fatalf("create without name failed: %v", err)
 	}
 }
+
+func TestCreateCommand_RuntimeSetsProfile(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/sandboxes" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		var raw map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		// The wire carries runtime_profile, never the CLI selector.
+		if got, _ := raw["runtime_profile"].(string); got != "soma" {
+			t.Fatalf("runtime_profile = %q, want soma (body: %#v)", got, raw)
+		}
+		if _, ok := raw["runtime"]; ok {
+			t.Fatalf("the compatibility selector must not reach the wire: %#v", raw)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		w.Write(fakeSandbox("abc123", "my-box"))
+	}))
+	defer srv.Close()
+	cleanup := setupEnv(t, srv)
+	defer cleanup()
+
+	if _, err := run(t, "create", "my-box", "--runtime", "soma"); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+}
+
+func TestCreateCommand_RuntimeFirecrackerMapsToStandard(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body miosa.CreateSandboxInput
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if body.RuntimeProfile != "standard" {
+			t.Fatalf("runtime_profile = %q, want standard", body.RuntimeProfile)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		w.Write(fakeSandbox("abc123", "my-box"))
+	}))
+	defer srv.Close()
+	cleanup := setupEnv(t, srv)
+	defer cleanup()
+
+	if _, err := run(t, "create", "my-box", "--runtime", "firecracker"); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+}
+
+func TestCreateCommand_RuntimeOmittedByDefault(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if _, ok := raw["runtime_profile"]; ok {
+			t.Fatalf("without --runtime the body must omit runtime_profile: %#v", raw)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		w.Write(fakeSandbox("abc123", "my-box"))
+	}))
+	defer srv.Close()
+	cleanup := setupEnv(t, srv)
+	defer cleanup()
+
+	if _, err := run(t, "create", "my-box"); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+}
+
+func TestCreateCommand_InvalidRuntime(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("server should not be called for an invalid runtime")
+	}))
+	defer srv.Close()
+	cleanup := setupEnv(t, srv)
+	defer cleanup()
+
+	_, err := run(t, "create", "my-box", "--runtime", "quantum")
+	if err == nil {
+		t.Fatal("expected a usage error for an invalid runtime")
+	}
+	if code := commands.ExitCode(err); code != commands.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (usage)", code, commands.ExitUsage)
+	}
+}

@@ -52,6 +52,7 @@ func TestRewritePath(t *testing.T) {
 		{"/sandboxes/batches/abc", "/sandboxes/batches/abc"},
 		{"/sandboxes/by-name/x", "/sandboxes/by-name/x"},
 		{"/sandboxes/run", "/sandboxes/run"},
+		{"/sandboxes/runtimes", "/sandboxes/runtimes"},
 		{"/computers/desk/urls", "/computers/" + id1 + "/urls"},
 		{"/computers/" + id1, "/computers/" + id1},
 		{"/computers/ghost", "/computers/ghost"},

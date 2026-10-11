@@ -25,6 +25,7 @@ Regenerate with `make docs`.
 - [`miosa audit`](#miosa-audit) - Show the audit log of API activity
 - [`miosa batch`](#miosa-batch) - Create many sandboxes in one request
 - [`miosa billing`](#miosa-billing) - Credits, spend, invoices and plan
+- [`miosa browser`](#miosa-browser) - Drive a sandbox's live browser over the DevTools Protocol
 - [`miosa catalog`](#miosa-catalog) - Show canonical compute products, templates, sizes, and readiness
 - [`miosa chat`](#miosa-chat) - Chats with an agent that remembers
 - [`miosa checkpoint`](#miosa-checkpoint) - Manage sandbox checkpoints
@@ -77,6 +78,7 @@ Regenerate with `make docs`.
 - [`miosa restore`](#miosa-restore) - Restore a sandbox from a checkpoint
 - [`miosa resume`](#miosa-resume) - Resume a paused sandbox
 - [`miosa run`](#miosa-run) - List, follow and stop agent runs
+- [`miosa runtimes`](#miosa-runtimes) - Show the sandbox runtimes the platform offers
 - [`miosa schedule`](#miosa-schedule) - Scheduled jobs
 - [`miosa service-account`](#miosa-service-account) - Non-human accounts that own API keys for pipelines and programs
 - [`miosa services`](#miosa-services) - Run named long-lived services in a sandbox
@@ -920,6 +922,49 @@ Model usage by day.
 miosa billing usage
 ```
 
+### `miosa browser`
+
+Drive a sandbox's live browser over the DevTools Protocol.
+
+```
+miosa browser
+```
+
+The browser runs inside the sandbox. 'forward' opens it on your machine,
+which is what Selenium and chromedp expect, without exposing the plaintext
+debugging port.
+
+#### `miosa browser forward`
+
+Forward a sandbox's CDP endpoint to a local port.
+
+```
+miosa browser forward <sandbox_id> [flags]
+```
+
+Mint a scoped, expiring CDP grant for the sandbox's live browser and serve it
+on 127.0.0.1:<port>.
+It proxies CDP discovery (/json/*) to the cdp host and the
+/devtools/* WebSocket the client then dials, rewriting webSocketDebuggerUrl to
+the local listener.
+The grant stays in the host label, so no plaintext
+debugging port is ever exposed.
+
+Then point a tool at the local port:
+
+```
+  Selenium:  options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")
+  chromedp:  chromedp.NewRemoteAllocator(ctx, "http://127.0.0.1:9222")
+
+  miosa browser forward my-box
+  miosa browser forward my-box --port 9333
+```
+
+Flags:
+
+- `--bind string` - Local address to listen on. (default `127.0.0.1`)
+- `--port int` - Local port to listen on. (default `9222`)
+
 ### `miosa catalog`
 
 Show canonical compute products, templates, sizes, and readiness.
@@ -1738,6 +1783,7 @@ Examples:
 ```
   miosa create my-box
   miosa create my-box --size medium --template miosa-sandbox
+  miosa create my-box --runtime soma
   miosa create --size large
   miosa create my-box --env staging
   miosa create my-box --no-env
@@ -1759,6 +1805,7 @@ Flags:
 - `--idle-timeout string` - Pause after this much inactivity: seconds, 15m, 1h.
 - `--meta stringArray` - Metadata, KEY=VALUE (repeatable).
 - `--no-env` - Pass nothing of yours to the sandbox (safe to hand to third parties).
+- `--runtime string` - Sandbox runtime: firecracker, soma or auto.
 - `--setup-file string` - Shell script (UTF-8, max 64KB) run in the background once the sandbox is ready.
 - `--size string` - Sandbox size: micro, tiny, xs, small, quad, medium, large, xl. (default `small`)
 - `--template string` - Sandbox template, for example miosa-sandbox, nextjs, fastapi, or hono. (default `miosa-sandbox`)
@@ -6328,6 +6375,41 @@ Flags:
 - `--from string` - Start date, 2026-10-01 or RFC 3339.
 - `--group-by string` - Group results by runner, model or agent.
 - `--to string` - End date.
+
+### `miosa runtimes`
+
+Show the sandbox runtimes the platform offers.
+
+```
+miosa runtimes
+```
+
+Show the sandbox runtimes the platform can schedule a sandbox on.
+
+A runtime is the engine a sandbox boots on: Firecracker, the default; SOMA,
+the faster start for supported Linux images; or Auto, which lets the platform
+pick.
+Availability is a live gate: a runtime the platform has turned off is
+listed with the reason it is unavailable.
+
+Pass a runtime to 'miosa create' with --runtime <id>.
+
+#### `miosa runtimes list`
+
+List the sandbox runtimes and their availability.
+
+```
+miosa runtimes list
+```
+
+List every sandbox runtime with its live availability and largest shape.
+
+```
+  miosa runtimes list
+  miosa runtimes list --json | jq -r '.data[] | select(.available) | .id'
+```
+
+Aliases: `ls`.
 
 ### `miosa schedule`
 
