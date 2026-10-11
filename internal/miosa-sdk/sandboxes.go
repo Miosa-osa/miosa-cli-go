@@ -84,6 +84,14 @@ type CreateSandboxInput struct {
 	Env map[string]string `json:"env,omitempty"`
 	// SetupFile is the content of a one-off script run in the background once the sandbox is ready.
 	SetupFile string `json:"setup_file,omitempty"`
+
+	// Runtime is a compatibility selector for the runtime profile, one of
+	// "firecracker", "soma" or "auto". It is mapped to RuntimeProfile and is
+	// never sent on the wire itself.
+	Runtime string `json:"-"`
+	// RuntimeProfile selects the sandbox runtime on the wire (the server's
+	// "standard", "soma" or "auto"). Empty omits it and the server decides.
+	RuntimeProfile string `json:"runtime_profile,omitempty"`
 }
 
 // ListSandboxesInput are optional query parameters for GET /sandboxes.
@@ -115,6 +123,9 @@ type Sandbox struct {
 func (s *SandboxesService) Create(ctx context.Context, input CreateSandboxInput) (*Sandbox, error) {
 	if input.TemplateID == "" && input.Image == "" {
 		input.TemplateID = SandboxTemplate
+	}
+	if input.RuntimeProfile == "" && input.Runtime != "" {
+		input.RuntimeProfile = RuntimeProfileFor(input.Runtime)
 	}
 
 	var data SandboxData
@@ -266,6 +277,24 @@ func (s *Sandbox) Wait(ctx context.Context, target ComputerStatus, pollInterval 
 		case <-time.After(interval):
 		}
 	}
+}
+
+// runtimeProfileAliases maps the compatibility runtime selectors to the
+// runtime_profile values the API expects on the wire.
+var runtimeProfileAliases = map[string]string{
+	"firecracker": "standard",
+	"soma":        "soma",
+	"auto":        "auto",
+}
+
+// RuntimeProfileFor maps a compatibility runtime selector (firecracker, soma
+// or auto) to the wire runtime_profile. An unknown selector is returned
+// unchanged so the server can judge it.
+func RuntimeProfileFor(runtime string) string {
+	if profile, ok := runtimeProfileAliases[runtime]; ok {
+		return profile
+	}
+	return runtime
 }
 
 func trimTrailingSlash(value string) string {

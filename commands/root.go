@@ -183,6 +183,8 @@ func init() {
 		newServicesCmd(),
 		newPolicyCmd(),
 		newCatalogCmd(),
+		newRuntimesCmd(),
+		newBrowserCmd(),
 		newForgeCmd(),
 		newAPICmd(),
 		newEnvCmd(),
@@ -269,7 +271,7 @@ var helpGroups = []struct {
 }{
 	{"account", "Account and setup:", []string{"login", "logout", "whoami", "profile", "config", "doctor", "update", "version", "open", "org", "limits"}},
 	{"machines", "Sandboxes and computers:", []string{"create", "list", "info", "use", "destroy", "pause", "resume", "stop", "recover", "fork", "extend", "tag",
-		"exec", "ssh", "console", "files", "logs", "events", "usage", "wait", "ports", "preview", "process", "desktop", "computer", "services", "policy", "proxy", "url", "env", "snapshot", "checkpoint", "restore", "catalog", "device"}},
+		"exec", "ssh", "console", "files", "logs", "events", "usage", "wait", "ports", "preview", "process", "desktop", "computer", "services", "policy", "proxy", "url", "env", "snapshot", "checkpoint", "restore", "catalog", "runtimes", "device"}},
 	{"agents", "Agents:", []string{"prompt", "run", "chat", "agent", "connections"}},
 	{"platform", "Platform:", []string{"api-key", "webhook", "deploy", "template", "workspace", "billing", "audit", "forge", "api", "mcp"}},
 }

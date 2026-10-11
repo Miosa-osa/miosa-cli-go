@@ -23,11 +23,16 @@ type createOptions struct {
 // sandboxSizes are the sizes the platform offers (see 'miosa catalog').
 var sandboxSizes = []string{"micro", "tiny", "xs", "small", "quad", "medium", "large", "xl"}
 
+// sandboxRuntimes are the runtime selectors 'miosa create --runtime' accepts;
+// see 'miosa runtimes list' for what each one offers right now.
+var sandboxRuntimes = []string{"firecracker", "soma", "auto"}
+
 func newCreateCmd() *cobra.Command {
 	var (
 		size      string
 		template  string
 		workspace string
+		runtime   string
 		envFlags  machineEnvFlags
 		opts      createOptions
 	)
@@ -42,6 +47,7 @@ If no name is provided, one is generated automatically.
 Examples:
   miosa create my-box
   miosa create my-box --size medium --template miosa-sandbox
+  miosa create my-box --runtime soma
   miosa create --size large
   miosa create my-box --env staging
   miosa create my-box --no-env
@@ -57,7 +63,7 @@ nothing of yours. --setup-file runs a script (UTF-8, up to 64KB) in the
 background once the sandbox is ready; watch it with 'miosa info'.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCreate(cmd, args, size, template, workspace, envFlags, opts)
+			return runCreate(cmd, args, size, template, workspace, runtime, envFlags, opts)
 		},
 	}
 
@@ -69,12 +75,13 @@ background once the sandbox is ready; watch it with 'miosa info'.`,
 	cmd.Flags().StringArrayVar(&opts.meta, "meta", nil, "Metadata, KEY=VALUE (repeatable)")
 	cmd.Flags().StringVar(&template, "template", "miosa-sandbox", "Sandbox template, for example miosa-sandbox, nextjs, fastapi, or hono")
 	cmd.Flags().StringVar(&workspace, "workspace", "", "Workspace slug to assign the sandbox to")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Sandbox runtime: firecracker, soma or auto")
 	envFlags.bind(cmd, "sandbox")
 
 	return cmd
 }
 
-func runCreate(cmd *cobra.Command, args []string, size, template, workspace string, envFlags machineEnvFlags, opts createOptions) error {
+func runCreate(cmd *cobra.Command, args []string, size, template, workspace, runtime string, envFlags machineEnvFlags, opts createOptions) error {
 	p := printerFor(cmd)
 
 	envName, noEnv, setup, err := envFlags.resolve()
@@ -104,6 +111,12 @@ func runCreate(cmd *cobra.Command, args []string, size, template, workspace stri
 		return usagef("%v", err)
 	}
 
+	if runtime != "" {
+		if _, ok := parseSandboxRuntime(runtime); !ok {
+			return usagef("--runtime: invalid runtime %q: must be one of %s", runtime, strings.Join(sandboxRuntimes, ", "))
+		}
+	}
+
 	input := miosa.CreateSandboxInput{
 		Name:        name,
 		TemplateID:  template,
@@ -111,6 +124,7 @@ func runCreate(cmd *cobra.Command, args []string, size, template, workspace stri
 		Environment: envName,
 		NoEnv:       noEnv,
 		SetupFile:   setup,
+		Runtime:     runtime,
 	}
 	if workspace != "" {
 		input.WorkspaceSlug = workspace
@@ -198,6 +212,18 @@ func parseSandboxSize(size string) (miosa.ComputerSize, error) {
 		}
 	}
 	return "", fmt.Errorf("invalid size %q: must be one of %s", size, strings.Join(sandboxSizes, ", "))
+}
+
+// parseSandboxRuntime validates a --runtime value against the runtime
+// selectors the CLI offers. The empty selector is valid and means "ask the
+// server to decide", so it is not reported as a match.
+func parseSandboxRuntime(runtime string) (string, bool) {
+	for _, r := range sandboxRuntimes {
+		if r == runtime {
+			return r, true
+		}
+	}
+	return "", false
 }
 
 // createWaitSeconds is how long to ask the create request to wait for

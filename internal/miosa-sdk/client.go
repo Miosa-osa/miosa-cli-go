@@ -81,6 +81,7 @@ type Client struct {
 	// Services — populated by NewClient.
 	Computers *ComputersService
 	Sandboxes *SandboxesService
+	Runtimes  *RuntimesService
 	Agent     *AgentService
 	Files     *FilesService
 	Credits   *CreditsService
@@ -108,6 +109,7 @@ func NewClient(apiKey string, opts ...ClientOption) *Client {
 	}
 	c.Computers = &ComputersService{client: c}
 	c.Sandboxes = &SandboxesService{client: c}
+	c.Runtimes = &RuntimesService{client: c}
 	c.Agent = &AgentService{client: c}
 	c.Files = &FilesService{client: c}
 	c.Credits = &CreditsService{client: c}
