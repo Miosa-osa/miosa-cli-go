@@ -76,7 +76,7 @@ func (s *ExecService) Spawn(ctx context.Context, command string, opts SpawnOptio
 	wsURL := buildExecWSURL(s.client.baseURL, s.computerID, command, opts)
 	header := http.Header{
 		"Authorization": []string{"Bearer " + s.client.apiKey},
-		"User-Agent":    []string{"miosa-go/" + sdkVersion},
+		"User-Agent":    []string{s.client.userAgent},
 	}
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, header)

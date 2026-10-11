@@ -25,6 +25,12 @@ const (
 type ClientOption func(*Client)
 
 // WithBaseURL overrides the default API base URL.
+// WithUserAgent replaces the User-Agent sent on every request. The default is
+// "miosa-cli/<sdk version>".
+func WithUserAgent(ua string) ClientOption {
+	return func(c *Client) { c.userAgent = ua }
+}
+
 func WithBaseURL(u string) ClientOption {
 	return func(c *Client) { c.baseURL = u }
 }
@@ -68,6 +74,7 @@ type Client struct {
 	baseURL    string
 	httpClient *http.Client
 	maxRetries int
+	userAgent  string
 
 	pathResolver PathResolver
 
@@ -94,6 +101,7 @@ func NewClient(apiKey string, opts ...ClientOption) *Client {
 			Timeout: defaultTimeout,
 		},
 		maxRetries: defaultMaxRetries,
+		userAgent:  "miosa-cli/" + sdkVersion,
 	}
 	for _, o := range opts {
 		o(c)
@@ -152,7 +160,7 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, body io
 			return nil, fmt.Errorf("failed to build request: %w", err)
 		}
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-		req.Header.Set("User-Agent", "miosa-go/"+sdkVersion)
+		req.Header.Set("User-Agent", c.userAgent)
 		if body != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
@@ -262,7 +270,7 @@ func (c *Client) postMultipart(ctx context.Context, path string, body io.ReadSee
 		return fmt.Errorf("failed to build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("User-Agent", "miosa-go/"+sdkVersion)
+	req.Header.Set("User-Agent", c.userAgent)
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
 

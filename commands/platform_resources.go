@@ -115,6 +115,12 @@ uploads. <deployment> is a name, slug or id.
 			Cols: []Col{{Head: "NAME", Path: "name"}, {Head: "UPDATED", Path: "updated_at", Fmt: "age"}},
 		},
 		Op{
+			Use: "env-set <deployment>", Short: "Set the deployment's environment variables (values are encrypted at rest)",
+			Method: "POST", Path: "/deployments/{0}/env", Args: []Arg{d},
+			Flags: []Flag{{Name: "set", Usage: "Environment variable KEY=VALUE (repeatable)", Type: "kv", Field: "env", Required: true}},
+			Done:  "Updated the environment of {0}",
+		},
+		Op{
 			Use: "domains <deployment>", Short: "List custom domains",
 			Method: "GET", Path: "/deployments/{0}/domains", Args: []Arg{d},
 			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "HOSTNAME", Path: "hostname"}, {Head: "STATUS", Path: "status"}, {Head: "VERIFIED", Path: "verified"}},

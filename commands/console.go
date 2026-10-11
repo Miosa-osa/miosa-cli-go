@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"syscall"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -113,7 +112,7 @@ func openConsole(cmd *cobra.Command, ref, shell, cwd string, command []string) e
 	if err := c.API.Post(cmd.Context(), "/sandboxes/"+id+"/terminal", body, &sess); err != nil {
 		return die(err)
 	}
-	ctx, cancel := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, syscall.SIGHUP)
+	ctx, cancel := signal.NotifyContext(cmd.Context(), consoleStopSignals()...)
 	defer cancel()
 	conn, err := terminal.Dial(ctx, sess, c.Key)
 	if err != nil {
@@ -129,19 +128,8 @@ func openConsole(cmd *cobra.Command, ref, shell, cwd string, command []string) e
 	defer restore()
 
 	resizes := make(chan terminal.Size, 4)
-	winch := make(chan os.Signal, 1)
-	signal.Notify(winch, syscall.SIGWINCH)
-	defer signal.Stop(winch)
-	go func() {
-		for range winch {
-			if w, h, err := term.GetSize(fd); err == nil {
-				select {
-				case resizes <- terminal.Size{Cols: w, Rows: h}:
-				default:
-				}
-			}
-		}
-	}()
+	stopResize := watchResize(fd, resizes)
+	defer stopResize()
 
 	res, err := terminal.Bridge(ctx, conn, inFile, cmd.OutOrStdout(), resizes)
 	restore()

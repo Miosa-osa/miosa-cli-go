@@ -16,6 +16,11 @@ Both are regenerated with `make docs`.
 brew install --cask Miosa-osa/homebrew-tap/miosa
 ```
 
+**npm**
+```sh
+npm install -g @miosa/cli
+```
+
 **Linux / macOS (install script)**
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Miosa-osa/miosa-cli-go/main/install.sh | sh
@@ -33,7 +38,7 @@ make install   # builds and copies to ~/.local/bin/miosa
 ```
 
 Update an installed binary with `miosa update`.
-It verifies the SHA-256 of the download against the release `checksums.txt`, and refuses to replace a Homebrew-managed binary (use `brew upgrade` there).
+It verifies the SHA-256 of the download against the release `checksums.txt`, and refuses to replace a Homebrew- or npm-managed binary (use `brew upgrade` or `npm install -g @miosa/cli@latest` there).
 `miosa update --check` only reports.
 A one-line notice appears at most once a day when a newer version exists; silence it with `--no-update-notice` or `MIOSA_NO_UPDATE_NOTICE=1`.
 
@@ -366,7 +371,7 @@ The SDK in `internal/miosa-sdk` is a separate module: `cd internal/miosa-sdk && 
 
 ## Distribution
 
-The public CLI is distributed as a native `miosa` binary through GitHub Releases, Homebrew (cask), and the install script.
+The public CLI is distributed as a native `miosa` binary through GitHub Releases, Homebrew (cask), the install script, and npm.
 GoReleaser builds Linux and macOS archives for `amd64` and `arm64`.
-It is not distributed through npm.
+It is also published to npm as `@miosa/cli` (a launcher plus per-platform binary packages; see `npm/`).
 Python package distribution is reserved for the Python SDK (`pip install miosa`), not the CLI.

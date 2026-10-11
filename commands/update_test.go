@@ -139,6 +139,34 @@ func TestUpdateRefusesHomebrewManagedCopy(t *testing.T) {
 	}
 }
 
+func TestUpdateRefusesNpmManagedCopy(t *testing.T) {
+	for _, path := range []string{
+		"/usr/lib/node_modules/@miosa/cli-linux-x64/bin/miosa",
+		"/home/u/.pnpm/node_modules/@miosa/cli/vendor/miosa",
+	} {
+		releaseServer(t, "v1.3.0", []byte("x"), false)
+		restoreV := commands.SetVersionForTest("1.2.4")
+		restoreP := commands.SetSelfPathForTest(path)
+		_, err := run(t, "update")
+		restoreP()
+		restoreV()
+		if err == nil || !strings.Contains(err.Error(), "npm install -g @miosa/cli@latest") {
+			t.Fatalf("%s: err = %v", path, err)
+		}
+	}
+}
+
+func TestUpdateRefusesWhenShimMarksNpmInstall(t *testing.T) {
+	releaseServer(t, "v1.3.0", []byte("x"), false)
+	t.Setenv("MIOSA_INSTALL_METHOD", "npm")
+	defer commands.SetVersionForTest("1.2.4")()
+	defer commands.SetSelfPathForTest("/somewhere/else/miosa")()
+	_, err := run(t, "update")
+	if err == nil || !strings.Contains(err.Error(), "managed by npm") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestUpdateRefusesWithoutChecksums(t *testing.T) {
 	var base string
 	srv := plainServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -193,5 +221,12 @@ func TestInstallScriptURLUsesPublishedInstaller(t *testing.T) {
 	const want = "https://raw.githubusercontent.com/Miosa-osa/miosa-cli-go/main/install.sh"
 	if commands.InstallScriptURL != want {
 		t.Fatalf("install script URL = %q, want %q", commands.InstallScriptURL, want)
+	}
+}
+
+func TestVersionFlagPrintsVersion(t *testing.T) {
+	out, err := run(t, "--version")
+	if err != nil || !strings.HasPrefix(out, "miosa version ") {
+		t.Fatalf("out = %q err = %v", out, err)
 	}
 }

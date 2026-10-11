@@ -42,7 +42,7 @@ func (s *EventsService) Subscribe(ctx context.Context, opts EventSubscribeOption
 
 	header := make(map[string][]string)
 	header["Authorization"] = []string{"Bearer " + s.client.apiKey}
-	header["User-Agent"] = []string{"miosa-go/" + sdkVersion}
+	header["User-Agent"] = []string{s.client.userAgent}
 
 	dialer := websocket.DefaultDialer
 	conn, _, err := dialer.DialContext(ctx, wsURL, header)
