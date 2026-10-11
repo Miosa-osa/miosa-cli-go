@@ -101,6 +101,7 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa deploy domain-verify` | POST | `/deployments/{0}/domains/{1}/verify` |
 | `miosa deploy domains` | GET | `/deployments/{0}/domains` |
 | `miosa deploy env` | GET | `/deployments/{0}/env` |
+| `miosa deploy env-set` | POST | `/deployments/{0}/env` |
 | `miosa deploy get` | GET | `/deployments/{0}` |
 | `miosa deploy list` | GET | `/deployments` |
 | `miosa deploy logs` | GET | `/deployments/{0}/logs` |
@@ -115,6 +116,20 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa deploy versions` | GET | `/deployments/{0}/versions` |
 | `miosa desktop start` | POST | `/sandboxes/{0}/desktop` |
 | `miosa desktop url` | GET | `/sandboxes/{0}/desktop` |
+| `miosa device browser` | GET | `/devices/{0}/browser` |
+| `miosa device capabilities` | GET | `/devices/{0}/capabilities` |
+| `miosa device exec` | POST | `/devices/{0}/exec` |
+| `miosa device expose` | POST | `/devices/{0}/expose` |
+| `miosa device extend` | POST | `/devices/{0}/extend` |
+| `miosa device files` | GET | `/devices/{0}/files` |
+| `miosa device get` | GET | `/devices/{0}` |
+| `miosa device list` | GET | `/devices` |
+| `miosa device pause` | POST | `/devices/{0}/pause` |
+| `miosa device read` | GET | `/devices/{0}/files/read` |
+| `miosa device resume` | POST | `/devices/{0}/resume` |
+| `miosa device rm` | DELETE | `/devices/{0}` |
+| `miosa device stop` | POST | `/devices/{0}/stop` |
+| `miosa device write` | POST | `/devices/{0}/files/write` |
 | `miosa egress allowlist` | GET | `/egress/allowlist` |
 | `miosa egress audit` | GET | `/egress/audit` |
 | `miosa egress policies` | GET | `/egress/policies` |
@@ -176,6 +191,17 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa host app list` | GET | `/opencomputers/hosts/{0}/apps` |
 | `miosa host app start` | POST | `/opencomputers/hosts/{0}/apps/{1}/start` |
 | `miosa host app uninstall` | DELETE | `/opencomputers/hosts/{0}/apps/{1}` |
+| `miosa host backup list` | GET | `/opencomputers/hosts/{0}/backup-configs` |
+| `miosa host backup new` | POST | `/opencomputers/hosts/{0}/backup-configs` |
+| `miosa host backup pause` | POST | `/opencomputers/hosts/{0}/backup-configs/{1}/pause` |
+| `miosa host backup resume` | POST | `/opencomputers/hosts/{0}/backup-configs/{1}/resume` |
+| `miosa host backup rm` | DELETE | `/opencomputers/hosts/{0}/backup-configs/{1}` |
+| `miosa host backup snapshot fork` | POST | `/opencomputers/snapshots/{0}/restore` |
+| `miosa host backup snapshot get` | GET | `/opencomputers/snapshots/{0}` |
+| `miosa host backup snapshot list` | GET | `/opencomputers/hosts/{0}/backup-configs/{1}/snapshots` |
+| `miosa host backup snapshot rm` | DELETE | `/opencomputers/snapshots/{0}` |
+| `miosa host backup trigger` | POST | `/opencomputers/hosts/{0}/backup-configs/{1}/trigger` |
+| `miosa host backup update` | PATCH | `/opencomputers/hosts/{0}/backup-configs/{1}` |
 | `miosa host cluster get` | GET | `/opencomputers/clusters/{0}` |
 | `miosa host cluster list` | GET | `/opencomputers/clusters` |
 | `miosa host cluster rm` | DELETE | `/opencomputers/clusters/{0}` |
@@ -197,6 +223,11 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa host fs rm` | DELETE | `/opencomputers/hosts/{0}/fs` |
 | `miosa host fs stat` | GET | `/opencomputers/hosts/{0}/fs/stat` |
 | `miosa host get` | GET | `/opencomputers/hosts/{0}` |
+| `miosa host gha-runner get` | GET | `/opencomputers/hosts/{0}/gha-runners/{1}` |
+| `miosa host gha-runner list` | GET | `/opencomputers/hosts/{0}/gha-runners` |
+| `miosa host gha-runner new` | POST | `/opencomputers/hosts/{0}/gha-runners` |
+| `miosa host gha-runner refresh` | POST | `/opencomputers/hosts/{0}/gha-runners/{1}/refresh` |
+| `miosa host gha-runner rm` | DELETE | `/opencomputers/hosts/{0}/gha-runners/{1}` |
 | `miosa host group add` | POST | `/opencomputers/groups/{0}/members/{1}` |
 | `miosa host group exec` | POST | `/opencomputers/groups/{0}/exec` |
 | `miosa host group get` | GET | `/opencomputers/groups/{0}` |
@@ -209,6 +240,12 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa host job list` | GET | `/opencomputers/hosts/{0}/exec` |
 | `miosa host jobs` | GET | `/opencomputers/hosts/{0}/jobs` |
 | `miosa host list` | GET | `/opencomputers/hosts` |
+| `miosa host mesh add-host` | POST | `/opencomputers/meshes/{0}/hosts/{1}` |
+| `miosa host mesh get` | GET | `/opencomputers/meshes/{0}` |
+| `miosa host mesh list` | GET | `/opencomputers/meshes` |
+| `miosa host mesh new` | POST | `/opencomputers/meshes` |
+| `miosa host mesh remove-host` | DELETE | `/opencomputers/meshes/{0}/hosts/{1}` |
+| `miosa host mesh rm` | DELETE | `/opencomputers/meshes/{0}` |
 | `miosa host metrics` | GET | `/opencomputers/hosts/{0}/metrics` |
 | `miosa host rm` | DELETE | `/opencomputers/hosts/{0}` |
 | `miosa host runtime` | GET | `/opencomputers/hosts/{0}/runtime` |

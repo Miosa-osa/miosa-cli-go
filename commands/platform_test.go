@@ -46,6 +46,7 @@ func TestPlatformCommandsSendTheRightRequests(t *testing.T) {
 		{args: []string{"deploy", "rm", "my-app", "-y"}, method: "DELETE", path: "/deployments/" + depID, reply: `{}`, wantOut: "Deleted", needsYes: true},
 		{args: []string{"deploy", "builds", "my-app"}, method: "GET", path: "/deployments/" + depID + "/builds", reply: `{"data":[]}`, wantOut: "No results"},
 		{args: []string{"deploy", "env", "my-app"}, method: "GET", path: "/deployments/" + depID + "/env", reply: `{"env_vars":[{"name":"DATABASE_URL"}]}`, wantOut: "DATABASE_URL"},
+		{args: []string{"deploy", "env-set", "my-app", "--set", "DATABASE_URL=postgres://x", "--set", "FEATURE=on"}, method: "POST", path: "/deployments/" + depID + "/env", reply: `{"data":[]}`, body: map[string]any{"env": map[string]any{"DATABASE_URL": "postgres://x", "FEATURE": "on"}}, wantOut: "Updated the environment"},
 		{args: []string{"deploy", "domains", "my-app"}, method: "GET", path: "/deployments/" + depID + "/domains", reply: list(`{"id":"d1d1d1d1-0000-0000-0000-000000000000","hostname":"app.example.com","status":"pending"}`), wantOut: "app.example.com"},
 		{args: []string{"deploy", "domain-add", "my-app", "app.example.com"}, method: "POST", path: "/deployments/" + depID + "/domains", reply: `{"data":{"id":"d1"}}`, body: map[string]any{"hostname": "app.example.com"}},
 		{args: []string{"deploy", "domain-verify", "my-app", "d1"}, method: "POST", path: "/deployments/" + depID + "/domains/d1/verify", reply: `{}`},

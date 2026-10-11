@@ -870,7 +870,7 @@ func New(opts ResolveOptions) (*Client, config.Config, error) {
 		"self":    os.Getenv("MIOSA_SANDBOX_ID"),
 	}}
 
-	sdkOpts := []miosa.ClientOption{miosa.WithBaseURL(apiURL), miosa.WithPathResolver(ac.RewritePath)}
+	sdkOpts := []miosa.ClientOption{miosa.WithBaseURL(apiURL), miosa.WithPathResolver(ac.RewritePath), miosa.WithUserAgent(UserAgent)}
 	if opts.Timeout > 0 {
 		sdkOpts = append(sdkOpts, miosa.WithTimeout(opts.Timeout))
 	}

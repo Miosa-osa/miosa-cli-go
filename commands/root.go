@@ -37,8 +37,9 @@ var globalFlags struct {
 }
 
 var rootCmd = &cobra.Command{
-	Use:   "miosa",
-	Short: "miosa — the official CLI for MIOSA",
+	Use:     "miosa",
+	Version: cliVersion,
+	Short:   "miosa — the official CLI for MIOSA",
 	Long: `miosa is the command-line tool for MIOSA: sandboxes and computers, files and
 previews, agents and their runs, deployments, API keys and webhooks.
 
@@ -151,6 +152,7 @@ func resetCommandFlags(cmd *cobra.Command) {
 }
 
 func init() {
+	rootCmd.SetVersionTemplate("miosa version {{.Version}}\n")
 	pf := rootCmd.PersistentFlags()
 	pf.StringVar(&globalFlags.APIKey, "api-key", "", "API key (overrides MIOSA_API_KEY and config)")
 	pf.StringVar(&globalFlags.APIURL, "api-url", "", "API base URL (overrides MIOSA_BASE_URL and config)")
@@ -267,9 +269,9 @@ var helpGroups = []struct {
 }{
 	{"account", "Account and setup:", []string{"login", "logout", "whoami", "profile", "config", "doctor", "update", "version", "open", "org", "limits"}},
 	{"machines", "Sandboxes and computers:", []string{"create", "list", "info", "use", "destroy", "pause", "resume", "stop", "recover", "fork", "extend", "tag",
-		"exec", "ssh", "console", "files", "logs", "events", "usage", "wait", "ports", "preview", "process", "desktop", "computer", "services", "policy", "proxy", "url", "env", "snapshot", "checkpoint", "restore", "catalog"}},
+		"exec", "ssh", "console", "files", "logs", "events", "usage", "wait", "ports", "preview", "process", "desktop", "computer", "services", "policy", "proxy", "url", "env", "snapshot", "checkpoint", "restore", "catalog", "device"}},
 	{"agents", "Agents:", []string{"prompt", "run", "chat", "agent", "connections"}},
-	{"platform", "Platform:", []string{"api-key", "webhook", "deploy", "template", "workspace", "billing", "audit", "forge", "api"}},
+	{"platform", "Platform:", []string{"api-key", "webhook", "deploy", "template", "workspace", "billing", "audit", "forge", "api", "mcp"}},
 }
 
 // sandboxArgCommands take a sandbox as their first argument.

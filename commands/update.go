@@ -223,14 +223,29 @@ func replaceBinary(path string, data []byte) error {
 	return os.Rename(tmp.Name(), path)
 }
 
-// packageManaged reports whether path lives where a package manager owns it.
-func packageManaged(path string) (string, bool) {
+// npmInstallEnv is set by the @miosa/cli npm shim when it launches the binary.
+// It marks an npm-managed copy even when the package manager keeps the files
+// somewhere the path check cannot recognise.
+const npmInstallEnv = "MIOSA_INSTALL_METHOD"
+
+// packageManaged reports whether this copy belongs to a package manager, which
+// then owns upgrades. It returns the manager's name and the command to run.
+func packageManaged(path string) (manager, hint string, managed bool) {
+	slashed := filepath.ToSlash(path)
 	for _, m := range []string{"/Cellar/", "/homebrew/", "/Caskroom/"} {
-		if strings.Contains(path, m) {
-			return "brew upgrade miosa", true
+		if strings.Contains(slashed, m) {
+			return "Homebrew", "brew upgrade miosa", true
 		}
 	}
-	return "", false
+	for _, m := range []string{"/node_modules/@miosa/cli/", "/node_modules/@miosa/cli-"} {
+		if strings.Contains(slashed, m) {
+			return "npm", "npm install -g @miosa/cli@latest", true
+		}
+	}
+	if os.Getenv(npmInstallEnv) == "npm" {
+		return "npm", "npm install -g @miosa/cli@latest", true
+	}
+	return "", "", false
 }
 
 func newUpdateCmd() *cobra.Command {
@@ -244,8 +259,8 @@ func newUpdateCmd() *cobra.Command {
 		Long: `Download the latest release for this platform from GitHub, verify it against
 the release's SHA-256 checksums, and replace the running binary.
 
-If miosa was installed with Homebrew, run the package manager instead; update
-prints the command.
+If miosa was installed with Homebrew or npm, run the package manager instead;
+update prints the command.
 
   miosa update            # install the latest release
   miosa update --check    # only report whether a newer release exists
@@ -308,8 +323,8 @@ func runUpdate(cmd *cobra.Command, checkOnly bool, target string, force bool) er
 	if err != nil {
 		return die(fmt.Errorf("locating the running binary: %w", err))
 	}
-	if hint, ok := packageManaged(path); ok {
-		return die(fmt.Errorf("this copy is managed by Homebrew; run: %s", hint))
+	if manager, hint, ok := packageManaged(path); ok {
+		return die(fmt.Errorf("this copy is managed by %s; run: %s", manager, hint))
 	}
 
 	name := archiveName(latest)
@@ -408,6 +423,12 @@ func maybeNotifyUpdate(w io.Writer) {
 		}
 	}
 	if c.Latest != "" && compareVersions(c.Latest, cliVersion) > 0 {
-		fmt.Fprintf(w, "\nA new miosa release is available: %s -> %s (run 'miosa update')\n", cliVersion, c.Latest)
+		upgrade := "miosa update"
+		if p, err := selfPath(); err == nil {
+			if _, hint, ok := packageManaged(p); ok {
+				upgrade = hint
+			}
+		}
+		fmt.Fprintf(w, "\nA new miosa release is available: %s -> %s (run '%s')\n", cliVersion, c.Latest, upgrade)
 	}
 }

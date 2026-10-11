@@ -170,6 +170,12 @@ organization can run work on: commands, containers, apps, tunnels and agents.
 		),
 		hostSecretGroup(host),
 	)
+	// The container group also carries the two streaming reads (logs, stats),
+	// which are bespoke commands rather than declarative Ops.
+	if container, _, err := cmd.Find([]string{"container"}); err == nil {
+		container.AddCommand(hostContainerStreamCmds(host)...)
+	}
+	cmd.AddCommand(hostExtraGroups(host)...)
 	return cmd
 }
 

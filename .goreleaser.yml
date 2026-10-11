@@ -15,9 +15,14 @@ builds:
     goos:
       - darwin
       - linux
+      - windows
     goarch:
       - amd64
       - arm64
+    ignore:
+      # No windows/arm64 archive: the npm win32 package is x64 only.
+      - goos: windows
+        goarch: arm64
     ldflags:
       - -s -w
       - -X 'github.com/Miosa-osa/miosa-cli-go/commands.cliVersion={{.Version}}'

@@ -38,6 +38,7 @@ Regenerate with `make docs`.
 - [`miosa deploy`](#miosa-deploy) - Inspect and operate deployments
 - [`miosa desktop`](#miosa-desktop) - Start and open a sandbox's remote desktop
 - [`miosa destroy`](#miosa-destroy) - Permanently destroy sandboxes
+- [`miosa device`](#miosa-device) - Every machine you can run work on, across runtime kinds
 - [`miosa doctor`](#miosa-doctor) - Diagnose configuration, connectivity and authentication
 - [`miosa egress`](#miosa-egress) - Outbound network policy for sandboxes
 - [`miosa env`](#miosa-env) - Manage environments (what new machines start with)
@@ -56,6 +57,7 @@ Regenerate with `make docs`.
 - [`miosa login`](#miosa-login) - Sign in to MIOSA
 - [`miosa logout`](#miosa-logout) - Remove stored credentials
 - [`miosa logs`](#miosa-logs) - Show a sandbox's system log
+- [`miosa mcp`](#miosa-mcp) - Connect AI clients to the MIOSA Model Context Protocol server
 - [`miosa member`](#miosa-member) - People in your organization
 - [`miosa notifications`](#miosa-notifications) - Your notifications
 - [`miosa open`](#miosa-open) - Open the web console (or print its URL)
@@ -1955,6 +1957,18 @@ List the deployment's environment variable names.
 miosa deploy env <deployment>
 ```
 
+#### `miosa deploy env-set`
+
+Set the deployment's environment variables (values are encrypted at rest).
+
+```
+miosa deploy env-set <deployment> [flags]
+```
+
+Flags:
+
+- `--set stringArray` - Environment variable KEY=VALUE (repeatable).
+
 #### `miosa deploy get`
 
 Show a deployment.
@@ -2145,6 +2159,181 @@ Flags:
 
 - `-f, --force` - Same as --yes.
 - `-y, --yes` - Do not ask for confirmation.
+
+### `miosa device`
+
+Every machine you can run work on, across runtime kinds.
+
+```
+miosa device
+```
+
+A device is any runtime MIOSA can run a command on: a sandbox, a computer or
+another kind. <device> is an id.
+
+```
+  miosa device list
+  miosa device list --status running
+  miosa device capabilities <device>
+  miosa device exec <device> -- uname -a
+```
+
+Aliases: `devices`.
+
+#### `miosa device browser`
+
+Show the URL of a device's browser (computers).
+
+```
+miosa device browser <device>
+```
+
+#### `miosa device capabilities`
+
+What this device can do.
+
+```
+miosa device capabilities <device>
+```
+
+Aliases: `caps`.
+
+#### `miosa device exec`
+
+Run a command on a device.
+
+```
+miosa device exec <device> [flags]
+```
+
+Flags:
+
+- `-c, --command string` - Shell command to run.
+- `--timeout-ms int` - Time limit in milliseconds.
+
+#### `miosa device expose`
+
+Publish a port of a device.
+
+```
+miosa device expose <device> <port>
+```
+
+#### `miosa device extend`
+
+Replace a device's time to live.
+
+```
+miosa device extend <device> [flags]
+```
+
+Flags:
+
+- `--timeout string` - New time to live, for example 30m or 2h.
+
+#### `miosa device files`
+
+List a directory on a device.
+
+```
+miosa device files <device> [flags]
+```
+
+Aliases: `ls`.
+
+Flags:
+
+- `--path string` - Directory (default /workspace).
+
+#### `miosa device get`
+
+Show one device.
+
+```
+miosa device get <device>
+```
+
+Aliases: `show`.
+
+#### `miosa device list`
+
+List devices.
+
+```
+miosa device list [flags]
+```
+
+Aliases: `ls`.
+
+Flags:
+
+- `-n, --limit int` - How many.
+- `--name string` - Only devices whose name contains this.
+- `--status string` - Only this state.
+
+#### `miosa device pause`
+
+Pause a device.
+
+```
+miosa device pause <device>
+```
+
+#### `miosa device read`
+
+Read a file (base64) from a device.
+
+```
+miosa device read <device> [flags]
+```
+
+Flags:
+
+- `--path string` - Path to read.
+
+#### `miosa device resume`
+
+Resume a paused device.
+
+```
+miosa device resume <device>
+```
+
+#### `miosa device rm`
+
+Permanently destroy a device.
+
+```
+miosa device rm <device> [flags]
+```
+
+Aliases: `delete`, `destroy`.
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
+
+#### `miosa device stop`
+
+Stop a device, keeping its disk.
+
+```
+miosa device stop <device>
+```
+
+#### `miosa device write`
+
+Write a file on a device.
+
+```
+miosa device write <device> [flags]
+```
+
+Flags:
+
+- `--content string` - File contents (or pass a JSON body with --file).
+- `--file string` - Read the request body from a JSON file (- for standard input); flags override its fields.
+- `--path string` - Path to write.
 
 ### `miosa doctor`
 
@@ -3764,6 +3953,180 @@ Flags:
 
 - `-y, --yes` - Do not ask for confirmation.
 
+#### `miosa host backup`
+
+Scheduled backups of directories on a host.
+
+```
+miosa host backup
+```
+
+A backup configuration names a directory on a host, a schedule and how many
+snapshots to keep.
+A snapshot can be forked onto a host.
+
+```
+  miosa host backup list <host>
+  miosa host backup new <host> --name nightly --path /data --schedule "0 3 * * *"
+  miosa host backup trigger <host> nightly
+  miosa host backup snapshot list <host> nightly
+```
+
+Aliases: `backups`.
+
+##### `miosa host backup list`
+
+List backup configurations.
+
+```
+miosa host backup list <host>
+```
+
+Aliases: `ls`.
+
+##### `miosa host backup new`
+
+Create a backup configuration.
+
+```
+miosa host backup new <host> [flags]
+```
+
+Aliases: `create`.
+
+Flags:
+
+- `--compression int` - Compression level 0-9.
+- `--exclude stringArray` - Glob to exclude (repeatable).
+- `--keep int` - How many snapshots to keep.
+- `--keep-days int` - How many days to keep snapshots.
+- `--name string` - A name for the configuration.
+- `--path string` - Directory on the host to back up.
+- `--schedule string` - Schedule expression, for example "0 3 * * *".
+- `--timezone string` - Timezone the schedule is read in.
+
+##### `miosa host backup pause`
+
+Pause a backup's schedule.
+
+```
+miosa host backup pause <host> <config>
+```
+
+##### `miosa host backup resume`
+
+Resume a backup's schedule.
+
+```
+miosa host backup resume <host> <config>
+```
+
+##### `miosa host backup rm`
+
+Delete a backup configuration.
+
+```
+miosa host backup rm <host> <config> [flags]
+```
+
+Aliases: `delete`.
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
+
+##### `miosa host backup snapshot`
+
+Snapshots taken by a backup configuration.
+
+```
+miosa host backup snapshot
+```
+
+Aliases: `snapshots`.
+
+###### `miosa host backup snapshot fork`
+
+Write a snapshot's files onto a host.
+
+```
+miosa host backup snapshot fork <snapshot> [flags]
+```
+
+Flags:
+
+- `--file string` - Read the request body from a JSON file (- for standard input); flags override its fields.
+- `--overwrite` - Overwrite files that already exist.
+- `--to-host string` - Host to write onto (default: the original).
+- `--to-path string` - Path to write into.
+- `-y, --yes` - Do not ask for confirmation.
+
+###### `miosa host backup snapshot get`
+
+Show one snapshot.
+
+```
+miosa host backup snapshot get <snapshot>
+```
+
+Aliases: `show`.
+
+###### `miosa host backup snapshot list`
+
+List a configuration's snapshots.
+
+```
+miosa host backup snapshot list <host> <config> [flags]
+```
+
+Aliases: `ls`.
+
+Flags:
+
+- `--before string` - Only snapshots started before this time.
+- `--limit int` - How many.
+
+###### `miosa host backup snapshot rm`
+
+Delete a snapshot.
+
+```
+miosa host backup snapshot rm <snapshot> [flags]
+```
+
+Aliases: `delete`.
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
+
+##### `miosa host backup trigger`
+
+Take a snapshot now.
+
+```
+miosa host backup trigger <host> <config>
+```
+
+##### `miosa host backup update`
+
+Change a backup configuration.
+
+```
+miosa host backup update <host> <config> [flags]
+```
+
+Flags:
+
+- `--compression int` - Compression level 0-9.
+- `--exclude stringArray` - Glob to exclude (repeatable).
+- `--keep int` - How many snapshots to keep.
+- `--keep-days int` - How many days to keep snapshots.
+- `--name string` - A name for the configuration.
+- `--path string` - Directory on the host to back up.
+- `--schedule string` - Schedule expression.
+- `--timezone string` - Timezone the schedule is read in.
+
 #### `miosa host cluster`
 
 Groups of hosts that serve a model together.
@@ -3909,6 +4272,17 @@ miosa host container list <host>
 
 Aliases: `ls`.
 
+##### `miosa host container logs`
+
+Stream a container's log.
+
+```
+miosa host container logs <host> <container>
+```
+
+Stream until the connection ends or Ctrl-C is pressed.
+With --json each event is one JSON object per line.
+
 ##### `miosa host container restart`
 
 Restart a container.
@@ -3958,6 +4332,17 @@ Start a container.
 ```
 miosa host container start <host> <container>
 ```
+
+##### `miosa host container stats`
+
+Stream a container's resource usage.
+
+```
+miosa host container stats <host> <container>
+```
+
+Stream until the connection ends or Ctrl-C is pressed.
+With --json each event is one JSON object per line.
 
 ##### `miosa host container stop`
 
@@ -4039,6 +4424,99 @@ miosa host get <host>
 ```
 
 Aliases: `show`.
+
+#### `miosa host gha-runner`
+
+Self-hosted GitHub Actions runners on a host.
+
+```
+miosa host gha-runner
+```
+
+A runner is a GitHub Actions runner the host keeps registered for one
+repository.
+Create one with a token; MIOSA stores it and starts the runner.
+
+```
+  miosa host gha-runner list <host>
+  miosa host gha-runner new <host> --repo https://github.com/acme/app --token <token>
+  miosa host gha-runner events <host> <runner>
+```
+
+Aliases: `gha-runners`, `runner`, `runners`.
+
+##### `miosa host gha-runner events`
+
+Stream a runner's activity events.
+
+```
+miosa host gha-runner events <host> <runner>
+```
+
+Stream events as the runner picks up and finishes jobs.
+Ctrl-C stops.
+With --json each event is one JSON object per line.
+
+##### `miosa host gha-runner get`
+
+Show one runner.
+
+```
+miosa host gha-runner get <host> <runner>
+```
+
+Aliases: `show`.
+
+##### `miosa host gha-runner list`
+
+List runners on a host.
+
+```
+miosa host gha-runner list <host>
+```
+
+Aliases: `ls`.
+
+##### `miosa host gha-runner new`
+
+Register a runner for a repository.
+
+```
+miosa host gha-runner new <host> [flags]
+```
+
+Aliases: `create`, `add`.
+
+Flags:
+
+- `--ephemeral` - Deregister the runner after one job.
+- `--label stringArray` - Runner label (repeatable).
+- `--name string` - Runner name (default: generated).
+- `--repo string` - Repository URL, for example https://github.com/acme/app.
+- `--token string` - GitHub registration token (sent to the host, not stored).
+- `--token-secret string` - Name of a host secret holding the token.
+
+##### `miosa host gha-runner refresh`
+
+Reinstall and restart a runner.
+
+```
+miosa host gha-runner refresh <host> <runner>
+```
+
+##### `miosa host gha-runner rm`
+
+Deregister a runner.
+
+```
+miosa host gha-runner rm <host> <runner> [flags]
+```
+
+Aliases: `delete`.
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
 
 #### `miosa host group`
 
@@ -4190,6 +4668,104 @@ Aliases: `ls`.
 Flags:
 
 - `--tag string` - Only hosts with this tag.
+
+#### `miosa host mesh`
+
+Private encrypted host-to-host networks (WireGuard).
+
+```
+miosa host mesh
+```
+
+A mesh links several of your hosts on a private encrypted network so they can
+reach each other without going over the public internet.
+
+```
+  miosa host mesh list
+  miosa host mesh new lab --host <host> --host <host>
+  miosa host mesh get lab
+```
+
+Aliases: `meshes`.
+
+##### `miosa host mesh add-host`
+
+Add a host to a mesh.
+
+```
+miosa host mesh add-host <mesh> <host>
+```
+
+##### `miosa host mesh events`
+
+Stream a mesh's events.
+
+```
+miosa host mesh events <mesh>
+```
+
+Stream events (host joins, key rotation, state changes) as they happen.
+Ctrl-C stops.
+
+##### `miosa host mesh get`
+
+Show one mesh and its hosts.
+
+```
+miosa host mesh get <mesh>
+```
+
+Aliases: `show`.
+
+##### `miosa host mesh list`
+
+List meshes.
+
+```
+miosa host mesh list
+```
+
+Aliases: `ls`.
+
+##### `miosa host mesh new`
+
+Create a mesh.
+
+```
+miosa host mesh new <name> [flags]
+```
+
+Aliases: `create`.
+
+Flags:
+
+- `--host stringArray` - Host to add to the mesh (repeatable).
+
+##### `miosa host mesh remove-host`
+
+Remove a host from a mesh.
+
+```
+miosa host mesh remove-host <mesh> <host> [flags]
+```
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
+
+##### `miosa host mesh rm`
+
+Delete a mesh.
+
+```
+miosa host mesh rm <mesh> [flags]
+```
+
+Aliases: `delete`.
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
 
 #### `miosa host metrics`
 
@@ -4608,6 +5184,90 @@ Flags:
 
 - `-f, --follow` - Keep streaming new lines.
 - `-n, --lines int` - Number of recent lines. (default `100`)
+
+### `miosa mcp`
+
+Connect AI clients to the MIOSA Model Context Protocol server.
+
+```
+miosa mcp
+```
+
+MIOSA serves a Model Context Protocol server at <api-url>/mcp over
+Streamable HTTP, authenticated with the same API key as the rest of the CLI.
+It gives an AI client tools to create and manage sandboxes, computers,
+deployments, storage, databases and volumes.
+
+```
+  miosa mcp tools                       list the tools the server exposes
+  miosa mcp install --client claude     add the server to Claude Code's config
+  miosa mcp install --client cursor     add the server to Cursor's config
+  miosa mcp serve                       run a stdio bridge for clients that need one
+```
+
+#### `miosa mcp install`
+
+Add MIOSA MCP to an AI client's config.
+
+```
+miosa mcp install [flags]
+```
+
+Writes the hosted MCP endpoint (and your API key) into an AI client's config
+file, keeping the other servers it already lists. --print shows the change
+without writing anything.
+
+```
+  miosa mcp install                          Claude Code, user scope
+  miosa mcp install --client cursor          Cursor
+  miosa mcp install --client gemini          Gemini CLI
+  miosa mcp install --client claude --scope project   a shared .mcp.json
+```
+
+Flags:
+
+- `--client string` - Client to configure: claude, cursor, gemini or manual. (default `claude`)
+- `--force` - Overwrite an existing entry of the same name.
+- `--name string` - Name to register MIOSA MCP under. (default `miosa`)
+- `--print` - Print the config instead of writing it.
+- `--scope string` - Config scope for claude: user or project. (default `user`)
+- `--url string` - MCP endpoint (default: the API base URL + /mcp).
+
+#### `miosa mcp serve`
+
+Run a stdio bridge to MIOSA MCP for clients that need one.
+
+```
+miosa mcp serve [flags]
+```
+
+Reads newline-delimited JSON-RPC 2.0 messages from standard input, forwards
+each to MIOSA MCP, and writes the response as one line on standard output.
+Notifications (which have no response) produce no output.
+
+```
+  {
+    "mcpServers": {
+      "miosa": {"command": "miosa", "args": ["mcp", "serve"]}
+    }
+  }
+```
+
+Flags:
+
+- `--url string` - MCP endpoint (default: the API base URL + /mcp).
+
+#### `miosa mcp tools`
+
+List the tools MIOSA MCP exposes.
+
+```
+miosa mcp tools [flags]
+```
+
+Flags:
+
+- `--url string` - MCP endpoint (default: the API base URL + /mcp).
 
 ### `miosa member`
 
@@ -6384,8 +7044,8 @@ miosa update [flags]
 Download the latest release for this platform from GitHub, verify it against
 the release's SHA-256 checksums, and replace the running binary.
 
-If miosa was installed with Homebrew, run the package manager instead; update
-prints the command.
+If miosa was installed with Homebrew or npm, run the package manager instead;
+update prints the command.
 
 ```
   miosa update            # install the latest release
