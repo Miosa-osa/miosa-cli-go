@@ -35,7 +35,7 @@ Regenerate with `make docs`.
 - [`miosa console`](#miosa-console) - Open an interactive shell in a sandbox
 - [`miosa create`](#miosa-create) - Create a new sandbox
 - [`miosa db`](#miosa-db) - Managed databases
-- [`miosa deploy`](#miosa-deploy) - Inspect and operate deployments
+- [`miosa deploy`](#miosa-deploy) - Create and operate deployments
 - [`miosa desktop`](#miosa-desktop) - Start and open a sandbox's remote desktop
 - [`miosa destroy`](#miosa-destroy) - Permanently destroy sandboxes
 - [`miosa device`](#miosa-device) - Every machine you can run work on, across runtime kinds
@@ -1886,16 +1886,19 @@ miosa db wake <database>
 
 ### `miosa deploy`
 
-Inspect and operate deployments.
+Create and operate deployments.
 
 ```
-miosa deploy
+miosa deploy [flags]
 ```
 
 Deployments are the running, versioned apps published from sandboxes, git or
 uploads. <deployment> is a name, slug or id.
 
 ```
+  miosa deploy                          deploy the current directory
+  miosa deploy create --from-sandbox my-box --wait
+  miosa deploy create --git https://github.com/me/app
   miosa deploy list
   miosa deploy get my-app
   miosa deploy logs my-app -n 100
@@ -1905,6 +1908,16 @@ uploads. <deployment> is a name, slug or id.
 
 Aliases: `deployments`, `deployment`.
 
+Flags:
+
+- `--branch string` - Git branch to build (default: the current one).
+- `--domain string` - Custom domain to attach (then add the DNS record it shows).
+- `--env stringArray` - Environment variable KEY=VALUE (repeatable).
+- `--name string` - Deployment name (default: the argument, the repo or the directory name).
+- `--wait` - Wait until the deployment is live, then print its URL.
+- `--wait-timeout duration` - How long --wait may take. (default `10m0s`)
+- `--yes` - Do not ask for confirmation.
+
 #### `miosa deploy builds`
 
 List builds.
@@ -1912,6 +1925,62 @@ List builds.
 ```
 miosa deploy builds <deployment>
 ```
+
+#### `miosa deploy create`
+
+Create and publish a deployment from a sandbox, a git repo or a directory.
+
+```
+miosa deploy create [name] [flags]
+```
+
+Create a new deployment and make it live.
+
+Pick exactly one source:
+
+```
+  --from-sandbox <sandbox>   Publish a running sandbox's output.
+  --git <url>                Connect a git repository and build it.
+  --dir <path>               Upload a local directory (built static output).
+
+```
+With --from-sandbox, --dir is where the app lives inside the sandbox (default
+/workspace).
+On its own, --dir is a local directory to package and upload.
+A
+sandbox publish is static by default; give --run-command (or --type dynamic)
+to publish a running server, or --type docker_deploy for App Engine.
+
+```
+  miosa deploy create --from-sandbox my-box --wait
+  miosa deploy create --from-sandbox my-box --port 3000 --run-command "npm start"
+  miosa deploy create --git https://github.com/me/app --branch main --wait
+  miosa deploy create --dir ./dist --name my-site
+
+```
+--env sets environment variables (repeatable, encrypted at rest). --domain
+attaches a custom domain; 'miosa deploy domains <deployment>' shows the DNS
+record to add. --wait blocks until the deployment is live and prints its URL.
+
+Aliases: `publish`.
+
+Flags:
+
+- `--branch string` - Git branch to build (default: the current one).
+- `--build-command string` - Build command (git source only).
+- `--dir string` - With --from-sandbox: the app's path inside the sandbox. On its own: a local directory to upload.
+- `--domain string` - Custom domain to attach (then add the DNS record it shows).
+- `--entrypoint string` - With --from-sandbox: the entry file for a static publish.
+- `--env stringArray` - Environment variable KEY=VALUE (repeatable).
+- `--from-sandbox string` - Publish this sandbox (name, id or 'current').
+- `--git string` - Deploy this git repository URL.
+- `--image string` - App Engine container image (not exposed by the public API; see --type docker_deploy).
+- `--name string` - Deployment name (default: the argument, the repo or the directory name).
+- `--port int` - With --from-sandbox: the port the app serves on.
+- `--run-command string` - Command the app starts with (makes the publish dynamic).
+- `--type string` - Runtime to publish as: static, dynamic or docker_deploy (default: static, or dynamic with --run-command).
+- `--wait` - Wait until the deployment is live, then print its URL.
+- `--wait-timeout duration` - How long --wait may take. (default `10m0s`)
 
 #### `miosa deploy domain-add`
 

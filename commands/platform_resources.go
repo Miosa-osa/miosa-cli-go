@@ -12,7 +12,7 @@ import (
 
 func init() {
 	rootCmd.AddCommand(
-		deployCmd(), dbCmd(), storageCmd(), volumeCmd(), workflowCmd(), scheduleCmd(), legacyCronCmd(), functionCmd(),
+		newDeployCmd(), dbCmd(), storageCmd(), volumeCmd(), workflowCmd(), scheduleCmd(), legacyCronCmd(), functionCmd(),
 		templateCmd(), projectCmd(), billingCmd(), auditCmd(), alertsCmd(), notificationsCmd(),
 		memberCmd(), egressCmd(), regionsCmd(), cloudCmd(),
 	)
@@ -35,17 +35,12 @@ var deployDetail = []Col{
 	{Head: "Workspace", Path: "workspace_id"}, {Head: "Created", Path: "created_at", Fmt: "age"},
 }
 
-func deployCmd() *cobra.Command {
+// deployOps are the declarative subcommands of 'deploy' (list, get, logs, ...).
+// 'miosa deploy' itself and its 'create' child are bespoke and live in
+// deploy_create.go.
+func deployOps() []Op {
 	d := idArg("deployment")
-	return group("deploy", "Inspect and operate deployments",
-		`Deployments are the running, versioned apps published from sandboxes, git or
-uploads. <deployment> is a name, slug or id.
-
-  miosa deploy list
-  miosa deploy get my-app
-  miosa deploy logs my-app -n 100
-  miosa deploy rollback my-app --to <version-id>
-  miosa deploy domains my-app`, []string{"deployments", "deployment"},
+	return []Op{
 		Op{
 			Use: "list", Aliases: []string{"ls"}, Short: "List deployments",
 			Method: "GET", Path: "/deployments", Cols: deployCols,
@@ -141,7 +136,7 @@ uploads. <deployment> is a name, slug or id.
 			Use: "domain-rm <deployment> <domain-id>", Short: "Detach a custom domain",
 			Method: "DELETE", Path: "/deployments/{0}/domains/{1}", Args: []Arg{d, idArg("domain")}, Confirm: "Detach domain {1}?", Done: "Detached {1}",
 		},
-	)
+	}
 }
 
 // ─── db ───────────────────────────────────────────────────────────────────────
