@@ -301,6 +301,8 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa run stop` | POST | `/runs/{0}/cancel` |
 | `miosa run usage` | GET | `/runs/usage` |
 | `miosa runtimes list` | GET | `/sandboxes/runtimes` |
+| `miosa sandbox resize` | PATCH | `/sandboxes/{0}/resources` |
+| `miosa sandbox resources` | GET | `/sandboxes/{0}/resources` |
 | `miosa schedule executions` | GET | `/cron-jobs/{0}/executions` |
 | `miosa schedule get` | GET | `/cron-jobs/{0}` |
 | `miosa schedule list` | GET | `/cron-jobs` |

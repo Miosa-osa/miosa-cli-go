@@ -134,6 +134,7 @@ Anywhere a sandbox is expected you may give its name, its id, `current` (set wit
 | Lifecycle | `create`, `list`, `info`, `use`, `destroy`, `stop`, `pause`, `resume`, `fork`, `recover`, `extend`, `tag`, `wait`, `usage`, `computer` |
 | Work inside | `exec`, `ssh`, `console`, `files`, `process` (`ps`), `services`, `logs`, `events`, `ports`, `preview`, `url`, `proxy`, `desktop` |
 | State | `snapshot`, `checkpoint`, `restore`, `env`, `policy` |
+| Resources | `sandbox` (`resources`, `resize`) |
 | Agents | `prompt`, `run`, `chat`, `agent`, `connections` |
 | Platform | `deploy`, `batch`, `host`, `db`, `storage`, `volume`, `workflow`, `schedule`, `function`, `template`, `project`, `workspace`, `forge`, `catalog`, `regions`, `egress`, `cloud`, `gateway` |
 | Access and billing | `api-key`, `service-account`, `webhook`, `member`, `billing`, `audit`, `alerts`, `notifications` |
@@ -169,6 +170,25 @@ The key, certificate and host file live in a private temporary directory removed
 Standard input is piped through, so `miosa ssh my-box -- bash -s < setup.sh` works; `--api` runs over the MIOSA API instead, and so does a machine without `ssh`.
 `ssh user@host` and `scp` against a sandbox directly do not work: there is no public SSH endpoint.
 `miosa proxy my-box 5432:5432` forwards local ports to sandbox ports over a WebSocket tunnel (any TCP service; the key needs `sandboxes:exec`).
+
+### Sandbox resources and resize
+
+`miosa sandbox resources <id>` reads the sandbox's vCPU and memory and what it
+can change on the running sandbox right now.
+`miosa sandbox resize <id> --cpu <n> --memory <mb>` changes them; give at least
+one flag.
+
+```sh
+miosa sandbox resources my-box
+miosa sandbox resize my-box --cpu 4
+miosa sandbox resize my-box --memory 8192
+```
+
+Only vCPU changes live today, only on a running Firecracker sandbox, only up to
+the count it booted with, and only on hosts with the cpu controller enabled.
+Memory needs a restart; SOMA, and hosts without the controller, cannot resize
+live (exit code 5, `RESIZE_UNSUPPORTED`). When the change can only be made by
+recreating the sandbox, `resize` reports the new id.
 
 ## Environments
 

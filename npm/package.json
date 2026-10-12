@@ -1,0 +1,8 @@
+{
+  "name": "miosa-cli-npm-packaging",
+  "private": true,
+  "description": "Tooling and tests for the @miosa/cli npm packages (not published)",
+  "scripts": {
+    "test": "node --test"
+  }
+}

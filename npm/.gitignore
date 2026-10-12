@@ -1,0 +1,4 @@
+dist/
+vendor/
+*.tgz
+node_modules/

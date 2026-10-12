@@ -1,0 +1,45 @@
+{
+  "name": "@miosa/cli",
+  "version": "2.3.1",
+  "description": "The official MIOSA command-line tool (native binary, installed per platform)",
+  "bin": {
+    "miosa": "bin/miosa.js"
+  },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "optionalDependencies": {
+    "@miosa/cli-darwin-arm64": "2.3.1",
+    "@miosa/cli-darwin-x64": "2.3.1",
+    "@miosa/cli-linux-arm64": "2.3.1",
+    "@miosa/cli-linux-x64": "2.3.1",
+    "@miosa/cli-win32-x64": "2.3.1"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "scripts",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "miosa",
+    "cli",
+    "sandbox",
+    "computers",
+    "deploy"
+  ],
+  "author": "MIOSA",
+  "license": "MIT",
+  "homepage": "https://docs.miosa.ai/cli",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Miosa-osa/miosa.git",
+    "directory": "sdks/cli/npm/cli"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

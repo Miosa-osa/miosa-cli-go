@@ -79,6 +79,7 @@ Regenerate with `make docs`.
 - [`miosa resume`](#miosa-resume) - Resume a paused sandbox
 - [`miosa run`](#miosa-run) - List, follow and stop agent runs
 - [`miosa runtimes`](#miosa-runtimes) - Show the sandbox runtimes the platform offers
+- [`miosa sandbox`](#miosa-sandbox) - Inspect and resize a sandbox's vCPU and memory
 - [`miosa schedule`](#miosa-schedule) - Scheduled jobs
 - [`miosa service-account`](#miosa-service-account) - Non-human accounts that own API keys for pipelines and programs
 - [`miosa services`](#miosa-services) - Run named long-lived services in a sandbox
@@ -930,9 +931,60 @@ Drive a sandbox's live browser over the DevTools Protocol.
 miosa browser
 ```
 
-The browser runs inside the sandbox. 'forward' opens it on your machine,
-which is what Selenium and chromedp expect, without exposing the plaintext
-debugging port.
+The browser runs inside the sandbox. 'start' launches it lazily and 'open'
+shows its live view; 'forward' and 'devtools' open it on your machine over the
+DevTools Protocol, which is what Selenium and chromedp expect, without exposing
+the plaintext debugging port.
+Actions (goto, click, type, key) drive it directly.
+
+Every subcommand targets the current sandbox unless --sandbox names another.
+
+Flags:
+
+
+#### `miosa browser cdp`
+
+Mint a CDP grant for the live browser.
+
+```
+miosa browser cdp [flags]
+```
+
+Mint a scoped, expiring CDP grant and print its WebSocket URL and the cdp host
+forms, plus Playwright and Puppeteer one-liners.
+Needs the sandboxes:write
+scope.
+The cdp host carries the CDP token: do not log or share it.
+
+Flags:
+
+- `--ttl int` - Grant lifetime in seconds (0 = server default).
+
+#### `miosa browser click`
+
+Click at a point in the live browser.
+
+```
+miosa browser click <x> <y>
+```
+
+#### `miosa browser devtools`
+
+Forward CDP and open chrome://inspect.
+
+```
+miosa browser devtools [flags]
+```
+
+Forward the sandbox's CDP endpoint to a local port (default 9222, the port
+chrome://inspect auto-discovers), open chrome://inspect/#devices, and block
+until Ctrl-C.
+Needs the sandboxes:write scope.
+
+Flags:
+
+- `--bind string` - Local address to listen on. (default `127.0.0.1`)
+- `--port int` - Local port for the forwarded CDP endpoint. (default `9222`)
 
 #### `miosa browser forward`
 
@@ -964,6 +1016,153 @@ Flags:
 
 - `--bind string` - Local address to listen on. (default `127.0.0.1`)
 - `--port int` - Local port to listen on. (default `9222`)
+
+#### `miosa browser goto`
+
+Navigate the live browser to a URL.
+
+```
+miosa browser goto <url>
+```
+
+#### `miosa browser key`
+
+Press a key in the live browser.
+
+```
+miosa browser key <key>
+```
+
+Press a key or key combination, for example "Enter" or "ctrl+a".
+Needs the
+sandboxes:write scope.
+
+#### `miosa browser open`
+
+Start the live browser and open its view URL.
+
+```
+miosa browser open [flags]
+```
+
+Start the sandbox's browser lazily and open its live view URL in your browser.
+Use --print to only print the URL.
+Needs the sandboxes:write scope.
+
+Flags:
+
+- `--print` - Print the live URL instead of opening it.
+- `--ttl int` - Session lifetime in seconds (0 = server default).
+
+#### `miosa browser revoke`
+
+Revoke share links for the live browser.
+
+```
+miosa browser revoke [flags]
+```
+
+Revoke either every share and CDP link (--all) or one share (--share-id ID).
+Exactly one of the two is required.
+Needs the sandboxes:write scope.
+
+Flags:
+
+- `--all` - Revoke every share and CDP link.
+- `--share-id string` - Revoke one share by id.
+
+#### `miosa browser screenshot`
+
+Capture a screenshot of the live browser.
+
+```
+miosa browser screenshot [flags]
+```
+
+Capture a screenshot of the sandbox's live browser.
+With -O the image is
+written to a file (the path is required) and the path and size are printed;
+without -O the raw image bytes go to stdout.
+The global -o selects the output
+format, so this uses -O/--output-file.
+Needs the sandboxes:read scope.
+
+Flags:
+
+- `--format string` - Image format: png or jpeg (default: server default).
+- `-O, --output-file string` - Write the image to this file path.
+- `--tab string` - Target tab id (default: the active tab).
+
+#### `miosa browser share`
+
+Create a view-only share link for the live browser.
+
+```
+miosa browser share [flags]
+```
+
+Create a view-only share link for the sandbox's live browser and print its
+view URL, share id, and expiry.
+The server shares view-only mode; --view-only is
+accepted because it is the only mode.
+Needs the sandboxes:write scope.
+
+Flags:
+
+- `--ttl int` - Share lifetime in seconds (0 = server default).
+- `--view-only` - View-only mode (the only mode the server shares).
+
+#### `miosa browser start`
+
+Start the sandbox's live browser.
+
+```
+miosa browser start [flags]
+```
+
+Start the sandbox's browser lazily and print its state and live view URL.
+A
+stopped sandbox answers SANDBOX_NOT_RUNNING; resume it first.
+Needs the
+sandboxes:write scope.
+
+Flags:
+
+- `--ttl int` - Session lifetime in seconds (0 = server default).
+
+#### `miosa browser status`
+
+Show the live browser state without starting it.
+
+```
+miosa browser status
+```
+
+Read the live browser state without starting anything.
+Prints the state, the
+epoch, the viewport, and every external Chrome attached to the browser.
+Needs
+the sandboxes:read scope.
+
+#### `miosa browser stop`
+
+Stop the sandbox's live browser.
+
+```
+miosa browser stop
+```
+
+Stop the sandbox's browser and print its state.
+Needs the sandboxes:write
+scope.
+
+#### `miosa browser type`
+
+Type text into the live browser.
+
+```
+miosa browser type <text>
+```
 
 ### `miosa catalog`
 
@@ -6410,6 +6609,64 @@ List every sandbox runtime with its live availability and largest shape.
 ```
 
 Aliases: `ls`.
+
+### `miosa sandbox`
+
+Inspect and resize a sandbox's vCPU and memory.
+
+```
+miosa sandbox
+```
+
+Show a sandbox's vCPU and memory and what it can change on the running
+sandbox right now, and change them.
+
+Only vCPU can change on a running Firecracker sandbox today, only up to the
+count it booted with, and only on hosts with the cpu controller enabled (a
+per-host flag).
+Memory never applies live and needs a restart; SOMA and hosts
+without the controller cannot resize live at all.
+
+```
+  miosa sandbox resources my-box
+  miosa sandbox resize my-box --cpu 4
+  miosa sandbox resize my-box --memory 8192
+```
+
+#### `miosa sandbox resize`
+
+Change a sandbox's vCPU or memory.
+
+```
+miosa sandbox resize [sandbox] --cpu <n> --memory <mb> [flags]
+```
+
+Change the vCPU count and/or memory of a sandbox.
+At least one of --cpu or
+--memory is required.
+
+The change is applied live where the runtime supports it (vCPU on a running
+Firecracker sandbox, up to its booted count); otherwise the sandbox needs a
+restart, or is recreated at the new size and gets a new id.
+
+Flags:
+
+- `--cpu int` - New vCPU count (leave unset to keep it).
+- `--memory int` - New memory in MB (leave unset to keep it).
+
+#### `miosa sandbox resources`
+
+Show vCPU, memory, and what can change live.
+
+```
+miosa sandbox resources [sandbox]
+```
+
+Read the sandbox's current vCPU and memory and the capabilities the host
+reports for it: whether vCPU and memory can change on the running sandbox
+right now, up to what, and why not when they cannot.
+
+Takes a sandbox name, an id, or nothing for the current sandbox.
 
 ### `miosa schedule`
 
