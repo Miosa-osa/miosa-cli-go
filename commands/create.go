@@ -73,7 +73,7 @@ background once the sandbox is ready; watch it with 'miosa info'.`,
 	cmd.Flags().StringVar(&opts.ttl, "ttl", "", "Time to live: seconds, 90m, 2h or 2d (default: the plan's)")
 	cmd.Flags().StringVar(&opts.idle, "idle-timeout", "", "Pause after this much inactivity: seconds, 15m, 1h")
 	cmd.Flags().StringArrayVar(&opts.meta, "meta", nil, "Metadata, KEY=VALUE (repeatable)")
-	cmd.Flags().StringVar(&template, "template", "miosa-sandbox", "Sandbox template, for example miosa-sandbox, nextjs, fastapi, or hono")
+	cmd.Flags().StringVar(&template, "template", "miosa-sandbox", "Sandbox template, for example miosa-sandbox, nextjs, static-html, or fastapi-auth")
 	cmd.Flags().StringVar(&workspace, "workspace", "", "Workspace slug to assign the sandbox to")
 	cmd.Flags().StringVar(&runtime, "runtime", "", "Sandbox runtime: firecracker, soma or auto")
 	envFlags.bind(cmd, "sandbox")

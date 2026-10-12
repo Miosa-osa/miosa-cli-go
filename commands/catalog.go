@@ -34,7 +34,7 @@ state. Readiness states are fast_ready, cold_boot_only, and missing.`,
 	}
 
 	cmd.Flags().StringVar(&product, "product", "", "Filter by product id: sandbox, computer, docker_deploy_host")
-	cmd.Flags().StringVar(&templateID, "template", "", "Filter by template id, e.g. nextjs or miosa-desktop")
+	cmd.Flags().StringVar(&templateID, "template", "", "Filter by template id, e.g. miosa-sandbox, nextjs, or static-html")
 	cmd.Flags().StringVar(&size, "size", "", "Filter by size: xs, small, medium, large, xl")
 	cmd.Flags().StringVar(&state, "state", "", "Filter by readiness: fast_ready, cold_boot_only, missing")
 	return cmd
