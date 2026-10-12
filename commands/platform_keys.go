@@ -111,6 +111,22 @@ The key goes to standard output on create, so you can capture it:
 			Cols: []Col{{Head: "NAME", Path: "name"}, {Head: "SCOPES", Path: "scopes", Fmt: "count"}, {Head: "FOR", Path: "description"}},
 		},
 		Op{
+			Use: "get <id>", Aliases: []string{"show"}, Short: "Show one key (never its secret)",
+			Method: "GET", Path: "/api-keys/{0}", Args: []Arg{{Name: "key"}}, Detail: keyDetail,
+		},
+		Op{
+			Use: "events <id>", Short: "Show when a key was used and what changed",
+			Method: "GET", Path: "/api-keys/{0}/events", Args: []Arg{{Name: "key"}},
+			Cols: []Col{
+				{Head: "TYPE", Path: "type"}, {Head: "WHEN", Path: "inserted_at", Fmt: "age"},
+				{Head: "ACTOR", Path: "actor_id", Fmt: "short"}, {Head: "IP", Path: "ip"}, {Head: "DETAILS", Path: "details"},
+			},
+			Flags: []Flag{
+				{Name: "limit", Type: "int", Usage: "How many events", In: "query"},
+				{Name: "type", Usage: "Only events of this type", In: "query"},
+			},
+		},
+		Op{
 			Use: "rm <id>", Aliases: []string{"revoke", "delete"}, Short: "Revoke a key (it stops working immediately)",
 			Method: "DELETE", Path: "/api-keys/{0}", Args: []Arg{{Name: "key"}}, Confirm: "Revoke API key {0}? Anything using it stops working.", Done: "Revoked {0}",
 		},
@@ -125,8 +141,41 @@ The key goes to standard output on create, so you can capture it:
 			Flags: []Flag{{Name: "name", Usage: "New name"}, {Name: "rate-limit", Type: "int", Usage: "Requests per minute", Field: "rate_limit_rpm"}},
 		},
 	)
-	cmd.AddCommand(newKeyCreateCmd(), newKeyScopedCmd())
+	cmd.AddCommand(newKeyCreateCmd(), newKeyScopedCmd(), newKeyPresetCmd())
 	return cmd
+}
+
+// newKeyPresetCmd manages the organization's own named scope sets, on top of
+// the built-in ones. Owners and admins only.
+func newKeyPresetCmd() *cobra.Command {
+	return group("preset", "Save named scope sets for new keys",
+		`A preset is a name for a scope list, so a team mints keys by name. The built-in
+presets (read-only, ci, agent, cli) cannot be changed; add your own.
+
+  miosa api-key preset new backend --scope sandboxes:read --scope agents:read
+  miosa api-key preset rm backend
+
+Only organization owners and admins manage presets.`,
+		nil,
+		Op{
+			Use: "new <name>", Aliases: []string{"create", "add"}, Short: "Save a named scope set",
+			Method: "POST", Path: "/api-keys/presets", Args: []Arg{{Name: "name"}},
+			Flags: []Flag{
+				{Name: "scope", Type: "strings", Field: "scopes", Usage: "A scope to include, for example sandboxes:read (repeatable)", Required: true},
+				{Name: "description", Usage: "What the preset is for"},
+			},
+			Body: func(args []string, body map[string]any) (map[string]any, error) {
+				body["name"] = args[0]
+				return body, nil
+			},
+			Detail: []Col{{Head: "Name", Path: "name"}, {Head: "Scopes", Path: "scopes", Fmt: "list"}, {Head: "For", Path: "description"}},
+		},
+		Op{
+			Use: "rm <name>", Aliases: []string{"delete", "remove"}, Short: "Remove a custom preset",
+			Method: "DELETE", Path: "/api-keys/presets/{0}", Args: []Arg{{Name: "preset"}},
+			Confirm: "Delete preset {0}?", Done: "Deleted {0}",
+		},
+	)
 }
 
 func newKeyCreateCmd() *cobra.Command {
