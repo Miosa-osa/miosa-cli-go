@@ -141,11 +141,14 @@ func TestConnectionsSigninDeviceCodeFailureCancelsTheSession(t *testing.T) {
 	}
 }
 
-func TestConnectionsSigninNeedsATargetAndExplainsSessionOnlyRoutes(t *testing.T) {
-	fakeRoutes(t, map[string]any{"POST /agent-signins": resp{401, `{"error":"Token is invalid or malformed","code":"INVALID_TOKEN"}`}})
-	if _, err := run(t, "connections", "add", "models", "claude"); err == nil || commands.ExitCode(err) != commands.ExitUsage || !strings.Contains(err.Error(), "--sandbox") {
-		t.Fatalf("no target: %v", err)
+func TestConnectionsSigninNeedsNoMachineAndExplainsSessionOnlyRoutes(t *testing.T) {
+	fakeRoutes(t, map[string]any{"POST /agent-signins": resp{422, `{"error":{"code":"SIGNIN_TARGET_NOT_FOUND","message":"sandbox_not_found"}}`}})
+	// A sign-in runs on the control plane: no machine is required to start one,
+	// and a server that does want one says so.
+	if _, err := run(t, "connections", "add", "models", "claude"); err == nil || !strings.Contains(err.Error(), "--sandbox") {
+		t.Fatalf("a server that needs a machine must say so: %v", err)
 	}
+	fakeRoutes(t, map[string]any{"POST /agent-signins": resp{401, `{"error":"Token is invalid or malformed","code":"INVALID_TOKEN"}`}})
 	_, err := run(t, "connections", "add", "models", "claude", "--sandbox", boxID)
 	if err == nil || !strings.Contains(err.Error(), "only accepts a console session") {
 		t.Fatalf("err = %v", err)

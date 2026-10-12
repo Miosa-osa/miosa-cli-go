@@ -57,10 +57,16 @@ func newPromptCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "prompt [text...]",
 		Short: "Run an agent on a sandbox or computer and follow it",
-		Long: `Send an instruction to a coding agent (Claude Code, Codex or OSA) running in a
-sandbox or computer, stream what it does, and print its answer. The run uses
-YOUR model connection: add one with 'miosa connections add models'. MIOSA never
-falls back to its own keys; without a connection the run is refused.
+		Long: `Send an instruction to a coding agent running in a sandbox or computer, stream
+what it does, and print its answer. Harnesses: Claude Code, Codex, OSA, OpenCode,
+pi, Prime Agent, Kimi Code, Mistral Vibe and Hermes Agent (the list is read from
+the platform, so a new one works without upgrading the CLI).
+
+The run uses YOUR model connection: add one with 'miosa connections add models'.
+One connected plan or key powers every harness that accepts it: see which with
+'miosa connections harnesses', and choose which connection a harness uses with
+'miosa connections use'. MIOSA never falls back to its own keys; without a
+connection the run is refused.
 
 The target is --sandbox/--computer, the current sandbox ('miosa use'), or a new
 machine MIOSA provisions for the run with --new-machine. The prompt is the
@@ -72,6 +78,7 @@ starts a chat and prints its id.
 
   miosa prompt "add a health check to the api" --sandbox my-box
   miosa prompt --harness codex --model gpt-6.1-sol "fix the failing test"
+  miosa prompt --harness opencode "add a health check"   # on your ChatGPT plan or any key it accepts
   miosa prompt --new-machine --workspace acme "write a README for this repo"
   miosa prompt --chat 3f0c... "now add tests"
   git diff | miosa prompt --sandbox my-box -     # the diff is the prompt
@@ -82,8 +89,8 @@ starts a chat and prints its id.
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&o.harness, "harness", "", "Harness: claude-code, codex or osa (default: the agent's, or claude-code)")
-	f.StringVar(&o.model, "model", "", "Model for the harness (default: the harness default)")
+	f.StringVar(&o.harness, "harness", "", "Harness: claude-code, codex, osa, opencode, pi, prime, kimi, mistral, hermes (default: the agent's, or claude-code)")
+	f.StringVar(&o.model, "model", "", "Model for the harness (default: the harness default; see 'miosa connections harnesses HARNESS')")
 	f.StringVar(&o.agent, "agent", "", "Run a saved agent (name or id) instead of an ad hoc one")
 	f.StringVar(&o.chat, "chat", "", "Chat id; continues the chat if it has runs")
 	f.BoolVar(&o.cont, "continue", false, "Continue the most recent run on the target")
@@ -104,8 +111,12 @@ starts a chat and prints its id.
 	f.StringVar(&o.file, "file", "", "Read the prompt from a file")
 	f.BoolVar(&o.noFollow, "no-follow", false, "Print the run id and return without waiting")
 	f.StringVar(&o.source, "source", "", "Label recorded on the run (max 40 characters)")
-	_ = cmd.RegisterFlagCompletionFunc("harness", func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
-		return []string{"claude-code", "codex", "osa"}, cobra.ShellCompDirectiveNoFileComp
+	_ = cmd.RegisterFlagCompletionFunc("harness", func(c *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		names := fallbackHarnesses
+		if client, _, err := buildClient(); err == nil {
+			names = promptHarnesses(c.Context(), client.API)
+		}
+		return names, cobra.ShellCompDirectiveNoFileComp
 	})
 	_ = cmd.RegisterFlagCompletionFunc("sandbox", func(c *cobra.Command, _ []string, p string) ([]string, cobra.ShellCompDirective) {
 		return completeKind(c, "sandbox", p)
@@ -166,15 +177,6 @@ func runPrompt(cmd *cobra.Command, args []string, o promptOptions) error {
 	if o.reuse != "" && o.reuse != "run" && o.reuse != "chat" {
 		return usagef("--reuse must be run or chat")
 	}
-	if o.harness != "" {
-		switch o.harness {
-		case "claude-code", "codex", "osa":
-		case "claude":
-			o.harness = "claude-code"
-		default:
-			return usagef("--harness must be claude-code, codex or osa (got %q)", o.harness)
-		}
-	}
 
 	c, cfg, err := buildClient()
 	if err != nil {
@@ -182,6 +184,14 @@ func runPrompt(cmd *cobra.Command, args []string, o promptOptions) error {
 	}
 	ctx := cmd.Context()
 	p := printerFor(cmd)
+
+	if o.harness != "" {
+		resolved, err := resolveHarness(ctx, c.API, o.harness)
+		if err != nil {
+			return err
+		}
+		o.harness = resolved
+	}
 
 	body := map[string]any{"instruction": text, "source": orDefault(o.source, "cli")}
 	if o.harness != "" {
@@ -578,3 +588,53 @@ var (
 	messageField = regexp.MustCompile(`"message":"((?:[^"\\]|\\.)*)`)
 	reconnecting = regexp.MustCompile(`^Reconnecting\.\.\. \d+/\d+ \((.*?)(?:, url:.*)?\)?$`)
 )
+
+// fallbackHarnesses are the harnesses a platform that cannot list them is
+// assumed to run: every one the backend has shipped.
+var fallbackHarnesses = []string{"claude-code", "codex", "osa", "opencode", "pi", "prime", "kimi", "mistral", "hermes"}
+
+// harnessAliases are spellings people type that the wire does not accept.
+var harnessAliases = map[string]string{"claude": "claude-code", "claude_code": "claude-code", "hermes-agent": "hermes"}
+
+// promptHarnesses lists the harnesses a prompt can run: the platform's own
+// catalogue (`GET /agents/harnesses`), so a harness the platform adds works
+// without a CLI release, or the built-in list when the catalogue cannot be
+// read. The custom gateway harness needs an agent or a command, not a prompt.
+func promptHarnesses(ctx context.Context, c *api.Client) []string {
+	var out struct {
+		Data []struct {
+			Value string `json:"value"`
+		} `json:"data"`
+	}
+	if err := c.Get(ctx, "/agents/harnesses", nil, &out); err != nil {
+		return fallbackHarnesses
+	}
+	names := make([]string, 0, len(out.Data))
+	for _, h := range out.Data {
+		if h.Value != "" && h.Value != "custom" {
+			names = append(names, h.Value)
+		}
+	}
+	if len(names) == 0 {
+		return fallbackHarnesses
+	}
+	return names
+}
+
+// resolveHarness accepts a harness the platform runs, or fails with the list.
+func resolveHarness(ctx context.Context, c *api.Client, name string) (string, error) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if alias, ok := harnessAliases[name]; ok {
+		name = alias
+	}
+	known := promptHarnesses(ctx, c)
+	for _, k := range known {
+		if k == name {
+			return name, nil
+		}
+	}
+	if name == "custom" {
+		return "", usagef("the custom gateway harness is not a prompt harness: run a saved agent with --agent")
+	}
+	return "", usagef("--harness must be one of %s (got %q)", strings.Join(known, ", "), name)
+}
