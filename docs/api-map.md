@@ -33,7 +33,11 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa agent versions` | GET | `/agents/{0}/versions` |
 | `miosa alerts list` | GET | `/alerts` |
 | `miosa alerts resolve` | POST | `/alerts/{0}/resolve` |
+| `miosa api-key events` | GET | `/api-keys/{0}/events` |
+| `miosa api-key get` | GET | `/api-keys/{0}` |
 | `miosa api-key list` | GET | `/api-keys` |
+| `miosa api-key preset new` | POST | `/api-keys/presets` |
+| `miosa api-key preset rm` | DELETE | `/api-keys/presets/{0}` |
 | `miosa api-key presets` | GET | `/api-keys/presets` |
 | `miosa api-key rm` | DELETE | `/api-keys/{0}` |
 | `miosa api-key rotate` | POST | `/api-keys/{0}/rotate` |
@@ -263,6 +267,14 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa host tunnel list` | GET | `/opencomputers/hosts/{0}/tunnels` |
 | `miosa host tunnel new` | POST | `/opencomputers/hosts/{0}/tunnels` |
 | `miosa host tunnel rm` | DELETE | `/opencomputers/hosts/{0}/tunnels/{1}` |
+| `miosa mcp catalog install` | POST | `/mcp-catalog/{0}/install` |
+| `miosa mcp catalog list` | GET | `/mcp-catalog` |
+| `miosa mcp catalog test` | POST | `/mcp-catalog/{0}/test` |
+| `miosa mcp server add` | POST | `/mcp-servers` |
+| `miosa mcp server get` | GET | `/mcp-servers/{0}` |
+| `miosa mcp server list` | GET | `/mcp-servers` |
+| `miosa mcp server rm` | DELETE | `/mcp-servers/{0}` |
+| `miosa mcp server test` | POST | `/mcp-servers/{0}/test` |
 | `miosa member add` | POST | `/tenant/members` |
 | `miosa member list` | GET | `/tenant/members` |
 | `miosa member rm` | DELETE | `/tenant/members/{0}` |
@@ -336,6 +348,8 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa template rm` | DELETE | `/sandbox-templates/{0}` |
 | `miosa template rollback` | POST | `/sandbox-templates/{0}/rollback` |
 | `miosa template warm-pool` | GET | `/sandbox-templates/{0}/warm-pool` |
+| `miosa token list` | GET | `/tokens/scoped` |
+| `miosa token revoke` | DELETE | `/tokens/scoped/{0}` |
 | `miosa usage` | GET | `/sandboxes/{0}/usage` |
 | `miosa volume create` | POST | `/volumes` |
 | `miosa volume get` | GET | `/volumes/{0}` |

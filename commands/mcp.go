@@ -35,10 +35,13 @@ deployments, storage, databases and volumes.
   miosa mcp tools                       list the tools the server exposes
   miosa mcp install --client claude     add the server to Claude Code's config
   miosa mcp install --client cursor     add the server to Cursor's config
-  miosa mcp serve                       run a stdio bridge for clients that need one`,
+  miosa mcp serve                       run a stdio bridge for clients that need one
+
+The 'server' and 'catalog' subcommands manage the tool servers your agents
+call, and the pre-built catalogue to add them from.`,
 		Args: cobra.NoArgs,
 	}
-	cmd.AddCommand(newMCPToolsCmd(), newMCPInstallCmd(), newMCPServeCmd())
+	cmd.AddCommand(newMCPToolsCmd(), newMCPInstallCmd(), newMCPServeCmd(), newMCPServersCmd(), newMCPCatalogCmd())
 	return cmd
 }
 

@@ -89,6 +89,7 @@ Regenerate with `make docs`.
 - [`miosa storage`](#miosa-storage) - Object storage buckets
 - [`miosa tag`](#miosa-tag) - Show, add or remove sandbox tags
 - [`miosa template`](#miosa-template) - Sandbox templates
+- [`miosa token`](#miosa-token) - Mint short-lived tokens for your end users
 - [`miosa update`](#miosa-update) - Update the miosa CLI to the latest release
 - [`miosa url`](#miosa-url) - Print the public URL for a sandbox
 - [`miosa usage`](#miosa-usage) - Show runtime, time left and estimated cost
@@ -634,6 +635,29 @@ Flags:
 - `--scope stringArray` - A scope to grant, for example sandboxes:exec (repeatable).
 - `--workspace-id string` - Bind the key to one workspace.
 
+#### `miosa api-key events`
+
+Show when a key was used and what changed.
+
+```
+miosa api-key events <id> [flags]
+```
+
+Flags:
+
+- `--limit int` - How many events.
+- `--type string` - Only events of this type.
+
+#### `miosa api-key get`
+
+Show one key (never its secret).
+
+```
+miosa api-key get <id>
+```
+
+Aliases: `show`.
+
 #### `miosa api-key list`
 
 List keys (revoked ones hidden unless --all).
@@ -647,6 +671,54 @@ Aliases: `ls`.
 Flags:
 
 - `--all` - Include revoked keys.
+
+#### `miosa api-key preset`
+
+Save named scope sets for new keys.
+
+```
+miosa api-key preset
+```
+
+A preset is a name for a scope list, so a team mints keys by name.
+The built-in
+presets (read-only, ci, agent, cli) cannot be changed; add your own.
+
+```
+  miosa api-key preset new backend --scope sandboxes:read --scope agents:read
+  miosa api-key preset rm backend
+
+```
+Only organization owners and admins manage presets.
+
+##### `miosa api-key preset new`
+
+Save a named scope set.
+
+```
+miosa api-key preset new <name> [flags]
+```
+
+Aliases: `create`, `add`.
+
+Flags:
+
+- `--description string` - What the preset is for.
+- `--scope stringArray` - A scope to include, for example sandboxes:read (repeatable).
+
+##### `miosa api-key preset rm`
+
+Remove a custom preset.
+
+```
+miosa api-key preset rm <name> [flags]
+```
+
+Aliases: `delete`, `remove`.
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
 
 #### `miosa api-key presets`
 
@@ -1184,7 +1256,7 @@ Flags:
 - `--product string` - Filter by product id: sandbox, computer, docker_deploy_host.
 - `--size string` - Filter by size: xs, small, medium, large, xl.
 - `--state string` - Filter by readiness: fast_ready, cold_boot_only, missing.
-- `--template string` - Filter by template id, e.g. nextjs or miosa-desktop.
+- `--template string` - Filter by template id, e.g. miosa-sandbox, nextjs, or static-html.
 
 ### `miosa chat`
 
@@ -1805,6 +1877,19 @@ every run uses a connection of yours.
   miosa connections rm models anthropic
 
 ```
+For a platform builder: connect accounts for your end users, without sending
+anyone to the console.
+Every command takes --external-user (your own id for the
+user) and --workspace-id:
+
+```
+  miosa connections add models claude --external-user cus_123 --no-wait   # link + code to show them
+  miosa connections add models anthropic --external-user cus_123 --key-stdin <<< "$KEY"
+  miosa connections test models anthropic --external-user cus_123
+  miosa connections tool-keys set APIFY_TOKEN --external-user cus_123 --key-stdin <<< "$TOKEN"
+  miosa connections harnesses --external-user cus_123
+
+```
 An API key needs the connections:read scope to list and connections:write to
 change them: 'miosa api-key create NAME --preset cli' has both.
 A list the key
@@ -1845,24 +1930,32 @@ miosa connections add models <provider> [flags]
 Connect a model provider for your agents.
 
 With an API key (anthropic, openai, google, groq, mistral, openrouter, together,
-ollama, ...): the key is read from standard input (--key-stdin) or typed hidden.
-It is never accepted as an argument, so it stays out of your shell history.
+...): the key is read from standard input (--key-stdin) or typed hidden.
+It is
+never accepted as an argument, so it stays out of your shell history.
 
-With a subscription (claude or chatgpt): MIOSA signs in inside a machine you
-name, prints a URL (and a code), waits for you to approve it in the browser and,
-for Claude, to paste the code back here.
+With a subscription plan (claude, chatgpt, kimi, vibe): MIOSA signs in on the
+control plane, prints a URL (and a code), waits for you to approve it in the
+browser and, for Claude, to paste the code back here.
+
+For one of your end users, add --external-user ID: the account is theirs alone.
+Add --no-wait to print the link and code and return, so your own UI can show them
+(then follow up with 'miosa connections signin ...').
 
 ```
   miosa connections add models anthropic --key-stdin <<< "$ANTHROPIC_API_KEY"
-  miosa connections add models chatgpt --sandbox my-box
-  miosa connections add models claude --sandbox my-box
+  miosa connections add models chatgpt
+  miosa connections add models claude --external-user cus_123 --no-wait
+  miosa connections add models openrouter --external-user cus_123 --key-stdin <<< "$KEY"
 ```
 
 Flags:
 
 - `--computer string` - Computer to sign in inside (subscriptions).
+- `--external-user string` - Connect it for one of your end users (your own id for them).
 - `--key-stdin` - Read the API key from standard input.
 - `--label string` - A label for the connection.
+- `--no-wait` - Subscriptions: print the link and code and return; your UI shows them.
 - `-s, --sandbox string` - Sandbox to sign in inside (subscriptions).
 - `--workspace-id string` - Workspace the connection belongs to.
 
@@ -1890,6 +1983,31 @@ Flags:
 - `--name string` - Name agents refer to it by.
 - `--url string` - The server's MCP endpoint.
 
+#### `miosa connections harnesses`
+
+Which harnesses can run, and with which connections.
+
+```
+miosa connections harnesses [harness] [flags]
+```
+
+Shows each harness (Claude Code, Codex, OpenCode, ...), whether a run would
+have a connection to think with, and which of the connections could power it.
+One plan can power several harnesses.
+
+With a harness name: its models, and whether each is available with what is
+connected.
+
+```
+  miosa connections harnesses --external-user cus_123
+  miosa connections harnesses opencode
+```
+
+Flags:
+
+- `--external-user string` - Act for one of your end users (your own id for them).
+- `--workspace-id string` - Workspace the connection belongs to.
+
 #### `miosa connections list`
 
 List connections.
@@ -1902,7 +2020,9 @@ Aliases: `ls`.
 
 Flags:
 
+- `--external-user string` - Act for one of your end users (your own id for them).
 - `--kind string` - Only models, apps or tools.
+- `--workspace-id string` - Workspace the connection belongs to.
 
 #### `miosa connections rm`
 
@@ -1912,10 +2032,23 @@ Disconnect a model provider, an app or a tool server.
 miosa connections rm <models|apps|tools> <provider-or-id> [flags]
 ```
 
+Disconnect a model provider, an app or a tool server.
+
+For a workspace or an end user (--workspace-id, --external-user) a model provider
+is removed at exactly that scope by name; a wider scope's connection is never
+touched, and the scope falls back to it:
+
+```
+  miosa connections rm models claude --external-user cus_123
+  miosa connections rm models anthropic --external-user cus_123
+```
+
 Aliases: `remove`, `delete`.
 
 Flags:
 
+- `--external-user string` - Act for one of your end users (your own id for them).
+- `--workspace-id string` - Workspace the connection belongs to.
 - `-y, --yes` - Do not ask for confirmation.
 
 #### `miosa connections share`
@@ -1926,13 +2059,215 @@ Share a connection with a workspace (not available yet).
 miosa connections share <id>
 ```
 
+#### `miosa connections signin`
+
+Follow a subscription sign-in started with --no-wait.
+
+```
+miosa connections signin
+```
+
+A subscription sign-in started with 'miosa connections add models claude --no-wait'
+prints a link (and a code).
+Show them to the user in your own UI, then drive
+the sign-in from your side:
+
+```
+  miosa connections signin status SIGNIN_ID
+  miosa connections signin code SIGNIN_ID --code-stdin <<< "$PASTED_CODE"   # Claude
+  miosa connections signin wait SIGNIN_ID                                     # ChatGPT, Kimi
+  miosa connections signin cancel SIGNIN_ID
+```
+
+##### `miosa connections signin cancel`
+
+Cancel a sign-in.
+
+```
+miosa connections signin cancel <signin-id> [flags]
+```
+
+Flags:
+
+- `--external-user string` - Act for one of your end users (your own id for them).
+
+##### `miosa connections signin code`
+
+Hand over the code the user pasted (Claude).
+
+```
+miosa connections signin code <signin-id> [flags]
+```
+
+Flags:
+
+- `--code string` - The pasted code.
+- `--code-stdin` - Read the pasted code from standard input.
+- `--external-user string` - Act for one of your end users (your own id for them).
+
+##### `miosa connections signin status`
+
+Where a sign-in stands.
+
+```
+miosa connections signin status <signin-id> [flags]
+```
+
+Flags:
+
+- `--external-user string` - Act for one of your end users (your own id for them).
+
+##### `miosa connections signin wait`
+
+Wait until the user has approved the sign-in.
+
+```
+miosa connections signin wait <signin-id> [flags]
+```
+
+Flags:
+
+- `--external-user string` - Act for one of your end users (your own id for them).
+- `--timeout duration` - Give up after this long. (default `15m0s`)
+
 #### `miosa connections test`
 
-Check that a tool server answers and list its tools.
+Check that a tool server answers, or that a model connection works.
 
 ```
-miosa connections test <tool-server-id>
+miosa connections test <tool-server-id> | models <provider> [flags]
 ```
+
+With a tool server id: check that it answers and list its tools.
+
+With 'models <provider>': does the connection work?
+One cheap authenticated
+request to the provider (a subscription is checked by its stored state).
+The key
+and the provider's response are never shown.
+Add --external-user to test an end
+user's own connection.
+
+```
+  miosa connections test m1
+  miosa connections test models anthropic --external-user cus_123
+```
+
+Flags:
+
+- `--external-user string` - Act for one of your end users (your own id for them).
+- `--workspace-id string` - Workspace the connection belongs to.
+
+#### `miosa connections tool-keys`
+
+Keys for your tool servers, per workspace or end user.
+
+```
+miosa connections tool-keys
+```
+
+A tool server (Apify, Refero, your own) is defined once with its key as a
+{{secret:NAME}} placeholder.
+Each end user then supplies their own value for NAME, and an agent
+run for that end user reaches the tool server with their key, falling back to
+the workspace's.
+
+```
+  miosa connections tool-keys list --external-user cus_123
+  miosa connections tool-keys set APIFY_TOKEN --key-stdin --external-user cus_123 <<< "$APIFY_TOKEN"
+  miosa connections tool-keys rm APIFY_TOKEN --external-user cus_123
+```
+
+Aliases: `tool-key`.
+
+##### `miosa connections tool-keys list`
+
+Keys the tool servers need, and whether the scope has them.
+
+```
+miosa connections tool-keys list [flags]
+```
+
+Aliases: `ls`.
+
+Flags:
+
+- `--external-user string` - Act for one of your end users (your own id for them).
+- `--workspace-id string` - Workspace the connection belongs to.
+
+##### `miosa connections tool-keys rm`
+
+Remove the key held at exactly this scope.
+
+```
+miosa connections tool-keys rm <NAME> [flags]
+```
+
+Aliases: `remove`, `delete`.
+
+Flags:
+
+- `--external-user string` - Act for one of your end users (your own id for them).
+- `--workspace-id string` - Workspace the connection belongs to.
+- `-y, --yes` - Do not ask for confirmation.
+
+##### `miosa connections tool-keys set`
+
+Set or rotate a tool-server key.
+
+```
+miosa connections tool-keys set <NAME> [flags]
+```
+
+Reads the value from standard input (--key-stdin) or hidden at the prompt; it is
+never accepted as an argument.
+Fails with UNKNOWN_TOOL_KEY when no tool server
+references NAME.
+
+Flags:
+
+- `--external-user string` - Act for one of your end users (your own id for them).
+- `--key-stdin` - Read the value from standard input.
+- `--workspace-id string` - Workspace the connection belongs to.
+
+#### `miosa connections use`
+
+Choose which connections a harness runs on.
+
+```
+miosa connections use <harness> [connection...] [flags]
+```
+
+A connection is connected once and powers every harness that accepts it.
+This
+chooses which ones a harness uses, for the organization or one workspace.
+
+A harness that takes one method at a time (claude-code, codex) takes exactly one
+connection.
+A harness that takes several (opencode, pi, prime, kimi, mistral,
+hermes) takes a list, or --all for every connected one. --model and --effort set
+the harness's defaults.
+
+```
+  miosa connections use claude-code claude            # the Claude plan
+  miosa connections use claude-code anthropic         # the Anthropic key
+  miosa connections use opencode chatgpt openrouter   # the ChatGPT plan and the OpenRouter key
+  miosa connections use opencode --all
+  miosa connections use codex --model gpt-6.1-sol --effort high
+
+```
+Connections are named claude, chatgpt, kimi, vibe (plans) or anthropic, openai,
+openrouter, deepseek, llmgateway, moonshot, mistral, bedrock (keys).
+The harness
+settings belong to you, the builder: they are the same for all of your end users,
+who bring only their connections.
+
+Flags:
+
+- `--all` - Every connected provider (harnesses that take several).
+- `--effort string` - Default reasoning effort: max, xhigh, high, medium, low, minimal or none.
+- `--model string` - Default model of the harness.
+- `--workspace-id string` - Set it for one workspace instead of the organization.
 
 ### `miosa console`
 
@@ -2007,7 +2342,7 @@ Flags:
 - `--runtime string` - Sandbox runtime: firecracker, soma or auto.
 - `--setup-file string` - Shell script (UTF-8, max 64KB) run in the background once the sandbox is ready.
 - `--size string` - Sandbox size: micro, tiny, xs, small, quad, medium, large, xl. (default `small`)
-- `--template string` - Sandbox template, for example miosa-sandbox, nextjs, fastapi, or hono. (default `miosa-sandbox`)
+- `--template string` - Sandbox template, for example miosa-sandbox, nextjs, static-html, or fastapi-auth. (default `miosa-sandbox`)
 - `--ttl string` - Time to live: seconds, 90m, 2h or 2d (default: the plan's).
 - `--wait` - Wait until the sandbox is ready for commands.
 - `--wait-timeout duration` - How long --wait may take. (default `3m0s`)
@@ -5518,7 +5853,72 @@ deployments, storage, databases and volumes.
   miosa mcp install --client claude     add the server to Claude Code's config
   miosa mcp install --client cursor     add the server to Cursor's config
   miosa mcp serve                       run a stdio bridge for clients that need one
+
 ```
+The 'server' and 'catalog' subcommands manage the tool servers your agents
+call, and the pre-built catalogue to add them from.
+
+#### `miosa mcp catalog`
+
+Add a tool server from the pre-built catalogue.
+
+```
+miosa mcp catalog
+```
+
+The catalogue lists tool servers that are ready to add, each with the method it
+takes to authenticate.
+Try one before adding it, then install it as a tool server.
+
+```
+  miosa mcp catalog list
+  miosa mcp catalog test github --value token=ghp_x
+  miosa mcp catalog install github --name github --value token=ghp_x
+```
+
+Aliases: `catalogue`.
+
+##### `miosa mcp catalog install`
+
+Add a catalogue entry as a tool server.
+
+```
+miosa mcp catalog install <slug> [flags]
+```
+
+Flags:
+
+- `--method string` - The authentication method to use.
+- `--name string` - Name for the new tool server.
+- `--value stringArray` - NAME=VALUE for the method (repeatable).
+- `--workspace-id string` - Add it to this workspace.
+
+##### `miosa mcp catalog list`
+
+List the catalogue entries.
+
+```
+miosa mcp catalog list [flags]
+```
+
+Aliases: `ls`.
+
+Flags:
+
+- `--workspace-id string` - Include what this workspace already added.
+
+##### `miosa mcp catalog test`
+
+Check a catalogue entry before adding it.
+
+```
+miosa mcp catalog test <slug> [flags]
+```
+
+Flags:
+
+- `--method string` - The authentication method to use.
+- `--value stringArray` - NAME=VALUE for the method (repeatable).
 
 #### `miosa mcp install`
 
@@ -5571,6 +5971,98 @@ Notifications (which have no response) produce no output.
 Flags:
 
 - `--url string` - MCP endpoint (default: the API base URL + /mcp).
+
+#### `miosa mcp server`
+
+Tool servers agents can call.
+
+```
+miosa mcp server
+```
+
+A tool server is a tool your agents can call over MCP.
+Define it once with
+its secret stored encrypted, and every agent allowed to use it inherits the
+connection.
+
+```
+  list                 the tool servers you defined
+  add github           define one, with its transport, url and secrets
+  test <server>        reach it and list its tools
+  rm <server>          delete it
+
+```
+Secrets are given as --secret NAME=VALUE and are never returned.
+
+Aliases: `servers`.
+
+##### `miosa mcp server add`
+
+Define a tool server.
+
+```
+miosa mcp server add <name> [flags]
+```
+
+Aliases: `create`.
+
+Flags:
+
+- `--args stringArray` - An argument for the command (repeatable).
+- `--command string` - The command to run (stdio).
+- `--secret stringArray` - NAME=VALUE stored encrypted, never returned (repeatable).
+- `--secret-env stringArray` - An environment variable from --secret (repeatable).
+- `--secret-header stringArray` - A header whose value comes from --secret (repeatable).
+- `--transport string` - Transport to reach it: http, stdio or sse.
+- `--url string` - The server URL (http and sse).
+- `--workspace-id string` - Bind the server to one workspace.
+
+##### `miosa mcp server get`
+
+Show one tool server.
+
+```
+miosa mcp server get <server>
+```
+
+Aliases: `show`.
+
+##### `miosa mcp server list`
+
+List the tool servers.
+
+```
+miosa mcp server list [flags]
+```
+
+Aliases: `ls`.
+
+Flags:
+
+- `--status string` - Only servers in this status.
+- `--workspace-id string` - Only the servers of this workspace.
+
+##### `miosa mcp server rm`
+
+Delete a tool server.
+
+```
+miosa mcp server rm <server> [flags]
+```
+
+Aliases: `delete`.
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
+
+##### `miosa mcp server test`
+
+Reach the server and list its tools.
+
+```
+miosa mcp server test <server>
+```
 
 #### `miosa mcp tools`
 
@@ -6213,12 +6705,18 @@ Run an agent on a sandbox or computer and follow it.
 miosa prompt [text...] [flags]
 ```
 
-Send an instruction to a coding agent (Claude Code, Codex or OSA) running in a
-sandbox or computer, stream what it does, and print its answer.
-The run uses
-YOUR model connection: add one with 'miosa connections add models'.
-MIOSA never
-falls back to its own keys; without a connection the run is refused.
+Send an instruction to a coding agent running in a sandbox or computer, stream
+what it does, and print its answer.
+Harnesses: Claude Code, Codex, OSA, OpenCode,
+pi, Prime Agent, Kimi Code, Mistral Vibe and Hermes Agent (the list is read from
+the platform, so a new one works without upgrading the CLI).
+
+The run uses YOUR model connection: add one with 'miosa connections add models'.
+One connected plan or key powers every harness that accepts it: see which with
+'miosa connections harnesses', and choose which connection a harness uses with
+'miosa connections use'.
+MIOSA never falls back to its own keys; without a
+connection the run is refused.
 
 The target is --sandbox/--computer, the current sandbox ('miosa use'), or a new
 machine MIOSA provisions for the run with --new-machine.
@@ -6232,6 +6730,7 @@ starts a chat and prints its id.
 ```
   miosa prompt "add a health check to the api" --sandbox my-box
   miosa prompt --harness codex --model gpt-6.1-sol "fix the failing test"
+  miosa prompt --harness opencode "add a health check"   # on your ChatGPT plan or any key it accepts
   miosa prompt --new-machine --workspace acme "write a README for this repo"
   miosa prompt --chat 3f0c... "now add tests"
   git diff | miosa prompt --sandbox my-box -     # the diff is the prompt
@@ -6246,11 +6745,11 @@ Flags:
 - `--computer string` - Computer to run in.
 - `--continue` - Continue the most recent run on the target.
 - `--file string` - Read the prompt from a file.
-- `--harness string` - Harness: claude-code, codex or osa (default: the agent's, or claude-code).
+- `--harness string` - Harness: claude-code, codex, osa, opencode, pi, prime, kimi, mistral, hermes (default: the agent's, or claude-code).
 - `--idempotency-key string` - Replay-safe key: the same key returns the same run.
 - `--machine string` - Kind of new machine: sandbox or computer.
 - `--max-time int` - Stop the run after this many seconds.
-- `--model string` - Model for the harness (default: the harness default).
+- `--model string` - Model for the harness (default: the harness default; see 'miosa connections harnesses HARNESS').
 - `--new-chat` - Start a chat (a new chat id is generated and printed).
 - `--new-machine` - Provision a machine for this run.
 - `--no-follow` - Print the run id and return without waiting.
@@ -7440,6 +7939,80 @@ Show how many warm sandboxes are kept ready.
 ```
 miosa template warm-pool <template>
 ```
+
+### `miosa token`
+
+Mint short-lived tokens for your end users.
+
+```
+miosa token
+```
+
+Tokens here are for products that act for their own customers.
+Your backend
+authenticates with its msk_* key and mints a token bound to one end user and one
+workspace; that token carries a non-empty subset of your key's own scopes and
+expires within a day at most (default one hour).
+Hand it to the end user's
+browser; never log it.
+
+A token minted here cannot mint or manage other tokens.
+
+```
+  miosa token create cus_123 ws_456 --scope sandboxes:read --expires-in 3600
+  miosa token list
+  miosa token revoke <id>
+```
+
+Aliases: `tokens`, `delegation`.
+
+#### `miosa token create`
+
+Mint a short-lived token for one end user and workspace.
+
+```
+miosa token create <user> <workspace> [flags]
+```
+
+Mint a delegation token. <user> is your own id for the end user; <workspace> is the
+workspace the token is bound to and must belong to your organization. --scope is
+required and may not exceed your own key's scopes.
+
+The token is printed once. --quiet-token prints only the token.
+
+Flags:
+
+- `--expires-in int` - Lifetime in seconds, 1 to 86400 (default 3600).
+- `--quiet-token` - Print only the token.
+- `--scope stringArray` - A scope to grant, for example sandboxes:read (repeatable).
+
+#### `miosa token list`
+
+List the tokens still valid (newest first).
+
+```
+miosa token list [flags]
+```
+
+Aliases: `ls`.
+
+Flags:
+
+- `--before string` - Page backwards from this cursor.
+
+#### `miosa token revoke`
+
+Revoke a token (it stops working at once).
+
+```
+miosa token revoke <id> [flags]
+```
+
+Aliases: `rm`, `delete`.
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
 
 ### `miosa update`
 
