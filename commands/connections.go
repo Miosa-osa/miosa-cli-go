@@ -41,13 +41,24 @@ every run uses a connection of yours.
   miosa connections add tools --name docs --url https://mcp.example.com/sse
   miosa connections rm models anthropic
 
+For a platform builder: connect accounts for your end users, without sending
+anyone to the console. Every command takes --external-user (your own id for the
+user) and --workspace-id:
+
+  miosa connections add models claude --external-user cus_123 --no-wait   # link + code to show them
+  miosa connections add models anthropic --external-user cus_123 --key-stdin <<< "$KEY"
+  miosa connections test models anthropic --external-user cus_123
+  miosa connections tool-keys set APIFY_TOKEN --external-user cus_123 --key-stdin <<< "$TOKEN"
+  miosa connections harnesses --external-user cus_123
+
 An API key needs the connections:read scope to list and connections:write to
 change them: 'miosa api-key create NAME --preset cli' has both. A list the key
 may not read is reported as unavailable instead of failing the whole command.
 Signing in with a subscription or an app prints a link or code to finish in a
 browser.`,
 	}
-	cmd.AddCommand(newConnListCmd(), newConnAddCmd(), newConnRmCmd(), newConnTestCmd(), newConnShareCmd())
+	cmd.AddCommand(newConnListCmd(), newConnAddCmd(), newConnRmCmd(), newConnTestCmd(), newConnShareCmd(),
+		newConnSigninCmd(), newConnToolKeysCmd(), newConnHarnessesCmd(), newConnUseCmd())
 	return cmd
 }
 
@@ -71,7 +82,10 @@ func sessionOnlyNote(err error) string {
 }
 
 func newConnListCmd() *cobra.Command {
-	var kind string
+	var (
+		kind  string
+		scope connScope
+	)
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
@@ -91,6 +105,28 @@ func newConnListCmd() *cobra.Command {
 			ctx := cmd.Context()
 			var rows []connRow
 			unavailable := map[string]string{}
+
+			// A named scope reads the connections read-model, which knows
+			// end users; the unscoped list keeps merging the older sources.
+			if scope.set() {
+				scoped, _, err := scopedConnectionRows(ctx, c.API, scope, kind)
+				if err != nil {
+					return die(sessionHint(err))
+				}
+				if isJSON() {
+					return p.JSON(map[string]any{"data": scoped, "unavailable": unavailable})
+				}
+				if len(scoped) == 0 {
+					p.Line("No connections at this scope yet.")
+					return nil
+				}
+				out := make([][]string, 0, len(scoped))
+				for _, r := range scoped {
+					out = append(out, []string{r.Kind, r.Name, r.Status, r.Detail, r.ID})
+				}
+				p.Table([]string{"KIND", "NAME", "STATUS", "DETAIL", "ID"}, out)
+				return nil
+			}
 
 			if kind == "" || kind == "models" {
 				var keys struct {
@@ -154,6 +190,7 @@ func newConnListCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&kind, "kind", "", "Only models, apps or tools")
+	addScopeFlags(cmd, &scope, true)
 	return cmd
 }
 
@@ -181,6 +218,15 @@ var signinProviders = map[string]string{
 	"chatgpt": "codex", "codex": "codex",
 }
 
+// signinProvider resolves what a person typed to the sign-in provider id: the
+// subscription plans (Claude, ChatGPT, Kimi, the Mistral plan).
+func signinProvider(name string) (string, bool) {
+	if p, ok := plans[name]; ok {
+		return p.Signin, true
+	}
+	return "", false
+}
+
 func readSecret(cmd *cobra.Command, prompt string, fromStdin bool) (string, error) {
 	in := cmd.InOrStdin()
 	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) && !fromStdin {
@@ -206,6 +252,8 @@ func newConnAddModelsCmd() *cobra.Command {
 		computer    string
 		workspaceID string
 		label       string
+		noWait      bool
+		scope       connScope
 	)
 	cmd := &cobra.Command{
 		Use:   "models <provider>",
@@ -213,16 +261,21 @@ func newConnAddModelsCmd() *cobra.Command {
 		Long: `Connect a model provider for your agents.
 
 With an API key (anthropic, openai, google, groq, mistral, openrouter, together,
-ollama, ...): the key is read from standard input (--key-stdin) or typed hidden.
-It is never accepted as an argument, so it stays out of your shell history.
+...): the key is read from standard input (--key-stdin) or typed hidden. It is
+never accepted as an argument, so it stays out of your shell history.
 
-With a subscription (claude or chatgpt): MIOSA signs in inside a machine you
-name, prints a URL (and a code), waits for you to approve it in the browser and,
-for Claude, to paste the code back here.
+With a subscription plan (claude, chatgpt, kimi, vibe): MIOSA signs in on the
+control plane, prints a URL (and a code), waits for you to approve it in the
+browser and, for Claude, to paste the code back here.
+
+For one of your end users, add --external-user ID: the account is theirs alone.
+Add --no-wait to print the link and code and return, so your own UI can show them
+(then follow up with 'miosa connections signin ...').
 
   miosa connections add models anthropic --key-stdin <<< "$ANTHROPIC_API_KEY"
-  miosa connections add models chatgpt --sandbox my-box
-  miosa connections add models claude --sandbox my-box`,
+  miosa connections add models chatgpt
+  miosa connections add models claude --external-user cus_123 --no-wait
+  miosa connections add models openrouter --external-user cus_123 --key-stdin <<< "$KEY"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			provider := strings.ToLower(args[0])
@@ -233,29 +286,39 @@ for Claude, to paste the code back here.
 			p := printerFor(cmd)
 			ctx := cmd.Context()
 
-			if sp, ok := signinProviders[provider]; ok && !keyStdin {
-				target := orDefault(sandbox, cfg.CurrentSandbox)
-				body := map[string]any{"provider": sp}
-				switch {
-				case computer != "":
-					id, err := c.API.ResolveComputer(ctx, computer)
-					if err != nil {
-						return die(err)
+			scope.Workspace = workspaceID
+
+			if sp, ok := signinProvider(provider); ok && !keyStdin {
+				body := scope.apply(map[string]any{"provider": sp})
+				// An end user's account is never connected from inside a
+				// machine of yours; for a workspace a machine is optional.
+				if scope.ExternalUser == "" {
+					target := orDefault(sandbox, cfg.CurrentSandbox)
+					switch {
+					case computer != "":
+						id, err := c.API.ResolveComputer(ctx, computer)
+						if err != nil {
+							return die(err)
+						}
+						body["computer_id"] = id
+					case target != "":
+						id, err := c.API.ResolveSandbox(ctx, target)
+						if err != nil {
+							return die(err)
+						}
+						body["sandbox_id"] = id
 					}
-					body["computer_id"] = id
-				case target != "":
-					id, err := c.API.ResolveSandbox(ctx, target)
-					if err != nil {
-						return die(err)
-					}
-					body["sandbox_id"] = id
-				default:
-					return usagef("signing in runs inside a machine: pass --sandbox NAME or --computer NAME (or 'miosa use <name>')")
 				}
-				if workspaceID != "" {
-					body["workspace_id"] = workspaceID
+				if err := requireEndUserScope(ctx, c.API, scope); err != nil {
+					return err
+				}
+				if noWait {
+					return startSigninNoWait(cmd, c.API, p, body)
 				}
 				return runSignin(cmd, c.API, p, body)
+			}
+			if noWait {
+				return usagef("--no-wait applies to subscription plans (claude, chatgpt, kimi, vibe)")
 			}
 
 			key, err := readSecret(cmd, "API key (input hidden): ", keyStdin)
@@ -265,7 +328,14 @@ for Claude, to paste the code back here.
 			if key == "" {
 				return usagef("no API key provided (use --key-stdin or type it at the prompt)")
 			}
-			if sp, ok := signinProviders[provider]; ok {
+			// A key for an end user (or for a workspace, on a provider that is
+			// not a subscription's own key) is an agent credential at that
+			// scope. The unscoped key keeps its older routes.
+			if _, legacyKey := signinProviders[provider]; scope.ExternalUser != "" || (scope.Workspace != "" && !legacyKey) {
+				if err := putAgentKey(cmd, c.API, provider, key, scope); err != nil {
+					return err
+				}
+			} else if sp, ok := signinProviders[provider]; ok {
 				body := map[string]any{"provider": sp, "api_key": key}
 				if workspaceID != "" {
 					body["workspace_id"] = workspaceID
@@ -291,6 +361,10 @@ for Claude, to paste the code back here.
 	cmd.Flags().StringVar(&computer, "computer", "", "Computer to sign in inside (subscriptions)")
 	cmd.Flags().StringVar(&workspaceID, "workspace-id", "", "Workspace the connection belongs to")
 	cmd.Flags().StringVar(&label, "label", "", "A label for the connection")
+	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Subscriptions: print the link and code and return; your UI shows them")
+	cmd.Flags().StringVar(&scope.ExternalUser, "external-user", "", "Connect it for one of your end users (your own id for them)")
+	cmd.Flags().StringVar(&scope.ExternalUser, "external-user-id", "", "Same as --external-user")
+	_ = cmd.Flags().MarkHidden("external-user-id")
 	return cmd
 }
 
@@ -327,7 +401,7 @@ func runSignin(cmd *cobra.Command, c *api.Client, p interface {
 		Data signinSession `json:"data"`
 	}
 	if err := c.Post(ctx, "/agent-signins", body, &start); err != nil {
-		return die(sessionHint(err))
+		return die(signinHint(err))
 	}
 	s := start.Data
 	errOut := cmd.ErrOrStderr()
@@ -489,19 +563,34 @@ that are secrets are read from the environment, not the command line:
 }
 
 func newConnRmCmd() *cobra.Command {
-	var yes bool
+	var (
+		yes   bool
+		scope connScope
+	)
 	cmd := &cobra.Command{
 		Use:     "rm <models|apps|tools> <provider-or-id>",
 		Aliases: []string{"remove", "delete"},
 		Short:   "Disconnect a model provider, an app or a tool server",
-		Args:    cobra.ExactArgs(2),
+		Long: `Disconnect a model provider, an app or a tool server.
+
+For a workspace or an end user (--workspace-id, --external-user) a model provider
+is removed at exactly that scope by name; a wider scope's connection is never
+touched, and the scope falls back to it:
+
+  miosa connections rm models claude --external-user cus_123
+  miosa connections rm models anthropic --external-user cus_123`,
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p := printerFor(cmd)
 			kind, ref := args[0], args[1]
 			var path string
+			var query url.Values
 			switch kind {
 			case "models":
-				if _, ok := signinProviders[strings.ToLower(ref)]; ok {
+				if scope.set() && !api.IsUUID(ref) {
+					path = "/agents/credentials/" + url.PathEscape(planCredential(strings.ToLower(ref)))
+					query = scope.query()
+				} else if _, ok := signinProviders[strings.ToLower(ref)]; ok {
 					if api.IsUUID(ref) {
 						path = "/agent-accounts/" + url.PathEscape(ref)
 					} else {
@@ -528,7 +617,10 @@ func newConnRmCmd() *cobra.Command {
 			if err != nil {
 				return die(err)
 			}
-			if err := c.API.Delete(cmd.Context(), path, nil, nil); err != nil {
+			if err := requireEndUserScope(cmd.Context(), c.API, scope); err != nil {
+				return err
+			}
+			if err := c.API.Delete(cmd.Context(), path, query, nil); err != nil {
 				return die(sessionHint(err))
 			}
 			if isJSON() {
@@ -539,15 +631,35 @@ func newConnRmCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Do not ask for confirmation")
+	addScopeFlags(cmd, &scope, true)
 	return cmd
 }
 
 func newConnTestCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "test <tool-server-id>",
-		Short: "Check that a tool server answers and list its tools",
-		Args:  cobra.ExactArgs(1),
+	var scope connScope
+	cmd := &cobra.Command{
+		Use:   "test <tool-server-id> | models <provider>",
+		Short: "Check that a tool server answers, or that a model connection works",
+		Long: `With a tool server id: check that it answers and list its tools.
+
+With 'models <provider>': does the connection work? One cheap authenticated
+request to the provider (a subscription is checked by its stored state). The key
+and the provider's response are never shown. Add --external-user to test an end
+user's own connection.
+
+  miosa connections test m1
+  miosa connections test models anthropic --external-user cus_123`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if args[0] == "models" {
+				if len(args) != 2 {
+					return usagef("usage: miosa connections test models <provider>")
+				}
+				return testCredential(cmd, strings.ToLower(args[1]), scope)
+			}
+			if len(args) != 1 {
+				return usagef("usage: miosa connections test <tool-server-id> | models <provider>")
+			}
 			p := printerFor(cmd)
 			c, _, err := buildClient()
 			if err != nil {
@@ -560,6 +672,8 @@ func newConnTestCmd() *cobra.Command {
 			return p.JSON(resp)
 		},
 	}
+	addScopeFlags(cmd, &scope, true)
+	return cmd
 }
 
 func newConnShareCmd() *cobra.Command {

@@ -147,6 +147,28 @@ Mint a key that can do this with `miosa api-key create NAME --preset cli`.
 Add a connection with `miosa connections add models` (the key is read from a prompt or stdin, never from an argument).
 A run without a usable connection fails with a message that names this command.
 
+A platform builder connects accounts for its end users with `--external-user ID` (your own id for them), without sending anyone to the console:
+
+```sh
+miosa connections add models claude --external-user cus_123 --no-wait --json   # link + code for your UI
+miosa connections signin code SIGNIN_ID --external-user cus_123 --code-stdin <<< "$PASTED_CODE"
+miosa connections signin wait SIGNIN_ID --external-user cus_123                # ChatGPT, Kimi
+miosa connections add models openrouter --external-user cus_123 --key-stdin <<< "$KEY"
+miosa connections test models anthropic --external-user cus_123
+miosa connections tool-keys set APIFY_TOKEN --external-user cus_123 --key-stdin <<< "$TOKEN"
+miosa connections harnesses --external-user cus_123
+miosa connections rm models claude --external-user cus_123 --yes
+```
+
+One connected plan or key powers every harness that accepts it. `miosa prompt --harness` takes every harness the platform lists (claude-code, codex, osa, opencode, pi, prime, kimi, mistral, hermes, and new ones as they ship), and `miosa connections use` chooses which connections a harness runs on:
+
+```sh
+miosa connections use opencode chatgpt openrouter      # the ChatGPT plan and an OpenRouter key
+miosa connections use claude-code claude --model claude-sonnet-5-5
+miosa connections harnesses opencode                   # its models and what is available
+miosa prompt --harness opencode --model gpt-6.1-sol --sandbox my-box "add a health check"
+```
+
 ```sh
 miosa prompt --sandbox my-box "fix the failing test"
 miosa prompt --new-machine --harness codex "write a README"

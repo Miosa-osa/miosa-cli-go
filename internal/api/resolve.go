@@ -142,7 +142,12 @@ func (c *Client) ResolveComputer(ctx context.Context, ref string) (string, error
 }
 
 // agentLiterals are /agents/<segment> routes that are not agent ids.
-var agentLiterals = map[string]bool{"": true, "harnesses": true, "harness-versions": true, "templates": true, "defaults": true, "chats": true}
+var agentLiterals = map[string]bool{
+	"": true, "harnesses": true, "harness-versions": true, "templates": true, "defaults": true, "chats": true,
+	// The Agents tab: settings, the model picker, shared credentials and the
+	// keys of tool servers. None of these is an agent named "credentials".
+	"settings": true, "models": true, "credentials": true, "tool-keys": true,
+}
 
 // ResolveAgent returns the id for an agent reference: a UUID or an agent name.
 func (c *Client) ResolveAgent(ctx context.Context, ref string) (string, error) {
