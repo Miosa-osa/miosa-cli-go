@@ -92,6 +92,10 @@ func deployOps() []Op {
 			Method: "POST", Path: "/deployments/{0}/redeploy", Args: []Arg{d}, Done: "Redeploying {0}",
 		},
 		Op{
+			Use: "purge-cache <deployment>", Short: "Purge the static edge cache for a deployment",
+			Method: "POST", Path: "/deployments/{0}/purge-cache", Args: []Arg{d}, Confirm: "Purge the edge cache for {0}?", Done: "Purged the edge cache for {0}",
+		},
+		Op{
 			Use: "stop <deployment>", Short: "Stop a deployment",
 			Method: "POST", Path: "/deployments/{0}/stop", Args: []Arg{d}, Confirm: "Stop deployment {0}? It stops serving traffic.", Done: "Stopped {0}",
 		},
