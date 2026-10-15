@@ -1,0 +1,175 @@
+package commands
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"net/url"
+	"os"
+	"os/exec"
+	"strings"
+
+	"github.com/spf13/cobra"
+)
+
+const defaultForgeGitHost = "forge.miosa.ai"
+
+// newForgeAuthCmd is `miosa forge auth`: git credentials for Forge over HTTPS,
+// the same shape as `gh auth setup-git`. Git asks the helper for a password and
+// gets this CLI's MIOSA API key; nothing is written to disk by the helper.
+func newForgeAuthCmd() *cobra.Command {
+	auth := &cobra.Command{Use: "auth", Short: "Use your MIOSA API key for Forge git (clone, push and pull over HTTPS)"}
+	var host string
+	setup := &cobra.Command{
+		Use:   "setup-git",
+		Short: "Make git use your MIOSA login for Forge repositories",
+		Long: `Configures git (globally, for the Forge host only) to ask this CLI for
+your API key when it talks to Forge. After it, plain git works against Forge:
+
+  git clone https://forge.miosa.ai/<org>/<repo>.git
+  git push
+
+The password git receives is the API key this CLI is signed in with
+('miosa login'); nothing is stored by git.`,
+		Example: "  miosa forge auth setup-git\n  miosa forge repo clone my-repo",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if _, _, err := buildClient(); err != nil {
+				return die(err)
+			}
+			helper, err := forgeHelperCommand()
+			if err != nil {
+				return die(err)
+			}
+			key := "credential.https://" + host + ".helper"
+			// An empty entry first resets helpers inherited from other config
+			// (osxkeychain and friends) for this host only.
+			for _, args := range [][]string{
+				{"config", "--global", "--replace-all", key, ""},
+				{"config", "--global", "--add", key, helper},
+			} {
+				if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+					return die(fmt.Errorf("git %s: %v %s", strings.Join(args, " "), err, strings.TrimSpace(string(out))))
+				}
+			}
+			printerFor(cmd).Success("git now uses your MIOSA login for https://%s", host)
+			return nil
+		},
+	}
+	setup.Flags().StringVar(&host, "host", defaultForgeGitHost, "Forge git host")
+
+	credential := &cobra.Command{
+		Use:    "git-credential <get|store|erase>",
+		Short:  "Git credential helper (called by git, not by people)",
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if args[0] != "get" {
+				return nil // store/erase: nothing is kept
+			}
+			req := readCredentialRequest(cmd.InOrStdin())
+			if req["protocol"] != "https" || !isForgeHost(req["host"]) {
+				return nil
+			}
+			c, _, err := buildClient()
+			if err != nil || c.Key == "" {
+				return nil // git falls through to its next helper / prompt
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "username=miosa\npassword=%s\n", c.Key)
+			return nil
+		},
+	}
+	auth.AddCommand(setup, credential)
+	return auth
+}
+
+func readCredentialRequest(r io.Reader) map[string]string {
+	out := map[string]string{}
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" {
+			break
+		}
+		if k, v, ok := strings.Cut(line, "="); ok {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func isForgeHost(host string) bool {
+	host = strings.ToLower(host)
+	if extra := os.Getenv("MIOSA_FORGE_GIT_HOST"); extra != "" && strings.EqualFold(host, extra) {
+		return true
+	}
+	return host == defaultForgeGitHost
+}
+
+func forgeHelperCommand() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return "!" + shellQuote(exe) + " forge auth git-credential", nil
+}
+
+func shellQuote(s string) string {
+	if !strings.ContainsAny(s, " '\"\\$`") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// newForgeRepoCloneCmd is `miosa forge repo clone <repo> [dir]`: git clone with
+// this CLI as the credential helper for that one command, so it works before
+// (and without) setup-git.
+func newForgeRepoCloneCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "clone <repo> [directory]",
+		Short:   "Clone a Forge repository with your MIOSA login",
+		Example: "  miosa forge repo clone my-repo\n  miosa forge repo clone acme/my-repo ./src",
+		Args:    cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, _, err := buildClient()
+			if err != nil {
+				return die(err)
+			}
+			var resp struct {
+				Data struct {
+					CloneURL *string `json:"clone_url"`
+					Name     string  `json:"name"`
+				} `json:"data"`
+			}
+			if err := c.API.Get(cmd.Context(), "/forge/repositories/"+url.PathEscape(args[0]), nil, &resp); err != nil {
+				return die(fmt.Errorf("repository %s: %w", args[0], err))
+			}
+			if resp.Data.CloneURL == nil || *resp.Data.CloneURL == "" {
+				return usagef("repository %s has no clone URL yet (it is still being created)", args[0])
+			}
+			u, err := url.Parse(*resp.Data.CloneURL)
+			if err != nil {
+				return die(err)
+			}
+			helper, err := forgeHelperCommand()
+			if err != nil {
+				return die(err)
+			}
+			gitArgs := []string{
+				"-c", "credential.https://" + u.Host + ".helper=",
+				"-c", "credential.https://" + u.Host + ".helper=" + helper,
+				"clone", *resp.Data.CloneURL,
+			}
+			if len(args) == 2 {
+				gitArgs = append(gitArgs, args[1])
+			}
+			git := exec.Command("git", gitArgs...)
+			git.Stdout, git.Stderr, git.Stdin = cmd.OutOrStdout(), cmd.ErrOrStderr(), cmd.InOrStdin()
+			git.Env = append(os.Environ(), "MIOSA_FORGE_GIT_HOST="+u.Host)
+			if err := git.Run(); err != nil {
+				return die(fmt.Errorf("git clone: %w", err))
+			}
+			return nil
+		},
+	}
+}

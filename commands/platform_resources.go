@@ -127,7 +127,8 @@ guesses which one you meant.`,
 		Op{
 			Use: "redeploy <deployment>", Short: "Build and release again from the same source",
 			Long:    "Rebuilds the deployment from its configured source (repository branch or sandbox) and releases the result. An uploaded static site has nothing to rebuild: push a new version with 'miosa deploy push' instead.",
-			Example: "  miosa deploy redeploy my-app",
+			Example: "  miosa deploy redeploy my-app\n  miosa deploy redeploy my-app --commit 1a2b3c4d",
+			Flags:   []Flag{{Name: "commit", Usage: "Forge deployments: build this commit instead of the branch head", Field: "commit_sha"}},
 			Method:  "POST", Path: "/deployments/{0}/redeploy", Args: []Arg{d}, Done: "Redeploying {0}",
 		},
 		Op{

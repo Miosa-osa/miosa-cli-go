@@ -108,7 +108,8 @@ func TestForgeHelpOmitsUnsupportedCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, unsupported := range []string{"clone", "pull-request", "check", "release", "sync"} {
+	// clone is supported since 2.3.9 (forge repo clone + forge auth setup-git).
+	for _, unsupported := range []string{"pull-request", "check", "release", "sync"} {
 		if strings.Contains(out, unsupported) {
 			t.Fatalf("help advertises unsupported command %q: %s", unsupported, out)
 		}
@@ -177,5 +178,35 @@ func TestForgeCommandContractMatchesBothDistributions(t *testing.T) {
 				t.Errorf("command %s is missing %s", name, flag)
 			}
 		}
+	}
+}
+
+// git asks the helper for credentials; only the Forge host gets the API key.
+func TestForgeGitCredentialAnswersOnlyForTheForgeHost(t *testing.T) {
+	t.Setenv("MIOSA_API_KEY", "msk_test_forge_key")
+	commands.ResetForTest()
+	root := commands.Root()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetIn(strings.NewReader("protocol=https\nhost=forge.miosa.ai\npath=acme/app.git\n\n"))
+	root.SetArgs([]string{"forge", "auth", "git-credential", "get"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "username=miosa\n") || !strings.Contains(out.String(), "password=msk_test_forge_key\n") {
+		t.Fatalf("want username/password for forge.miosa.ai, got %q", out.String())
+	}
+
+	commands.ResetForTest()
+	root = commands.Root()
+	out.Reset()
+	root.SetOut(&out)
+	root.SetIn(strings.NewReader("protocol=https\nhost=github.com\n\n"))
+	root.SetArgs([]string{"forge", "auth", "git-credential", "get"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("another host must get nothing, got %q", out.String())
 	}
 }

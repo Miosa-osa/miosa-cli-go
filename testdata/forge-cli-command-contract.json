@@ -19,9 +19,10 @@
       "args": ["<repository-id>"],
       "flags": ["--name", "--slug", "--visibility", "--project-id", "--json"]
     },
-    "delete": { "args": ["<repository-id>"], "flags": ["--yes", "--json"] }
+    "delete": { "args": ["<repository-id>"], "flags": ["--yes", "--json"] },
+    "clone": { "args": ["<repo>", "[directory]"], "flags": ["--json"] }
   },
   "json_envelope": "data",
   "visibility": ["public", "private", "internal"],
-  "unsupported": ["clone", "pull-request", "check", "merge", "release", "sync"]
+  "unsupported": ["pull-request", "check", "merge", "release", "sync"]
 }

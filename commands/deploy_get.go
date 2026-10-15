@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -42,6 +43,12 @@ func runDeployGet(cmd *cobra.Command, ref string) error {
 
 	var resp map[string]any
 	if err := c.API.Get(cmd.Context(), "/deployments/"+url.PathEscape(ref), nil, &resp); err != nil {
+		// A version id is not a deployment: say which deployment it belongs to.
+		if ae, ok := asAPIError(err); ok && ae.Status == 404 && versionRefShape.MatchString(ref) {
+			if dep, n, ok := findVersionOwner(cmd, c, ref); ok {
+				return usagef("%s is version %d of deployment %s, not a deployment - see 'miosa deploy versions %s'", ref, n, dep, dep)
+			}
+		}
 		return die(err)
 	}
 	obj := unwrapObject(resp)
@@ -117,4 +124,40 @@ func activeVersionFacts(cmd *cobra.Command, c *client.Client, data map[string]an
 		runtime = nil
 	}
 	return kind, runtime
+}
+
+var versionRefShape = regexp.MustCompile(`^[0-9a-fA-F]{8}([0-9a-fA-F-]{0,28})$`)
+
+// findVersionOwner looks for a version whose id starts with ref among the
+// caller's deployments (one list call, then one versions call per deployment).
+func findVersionOwner(cmd *cobra.Command, c *client.Client, ref string) (string, int, bool) {
+	var deps struct {
+		Data []map[string]any `json:"data"`
+	}
+	q := url.Values{}
+	q.Set("limit", "100")
+	if err := c.API.Get(cmd.Context(), "/deployments", q, &deps); err != nil {
+		return "", 0, false
+	}
+	ref = strings.ToLower(ref)
+	for _, d := range deps.Data {
+		id, _ := d["id"].(string)
+		name, _ := d["name"].(string)
+		if id == "" {
+			continue
+		}
+		var vs struct {
+			Data []map[string]any `json:"data"`
+		}
+		if c.API.Get(cmd.Context(), "/deployments/"+url.PathEscape(id)+"/versions", nil, &vs) != nil {
+			continue
+		}
+		for _, v := range vs.Data {
+			if vid, _ := v["id"].(string); strings.HasPrefix(vid, ref) {
+				n, _ := v["version_number"].(float64)
+				return firstNonEmpty(name, id), int(n), true
+			}
+		}
+	}
+	return "", 0, false
 }
