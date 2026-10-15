@@ -469,6 +469,17 @@ func deployFromDir(ctx context.Context, c *client.Client, p *output.Printer, f *
 		}
 	}
 
+	// Pushing to a deployment named by id, hostname or a stale link: print and
+	// link it under its real name, not the reference that found it.
+	if !createNew && linkedName == "" {
+		var dep struct {
+			Data map[string]any `json:"data"`
+		}
+		if err := c.API.Get(ctx, "/deployments/"+url.PathEscape(target), nil, &dep); err == nil {
+			linkedName, _ = dep.Data["name"].(string)
+		}
+	}
+
 	var sid, depID string
 	if createNew {
 		var session dropSessionResponse
@@ -547,7 +558,13 @@ func deployFromDir(ctx context.Context, c *client.Client, p *output.Printer, f *
 	// Remember (or refresh) the deployment so the next 'miosa deploy' in this
 	// folder pushes a new version instead of creating a duplicate. Written on
 	// every push too, so folders deployed before the link existed get one.
-	_ = writeDeploymentLink(root, deploymentLink{DeploymentID: out.ID, Name: firstNonEmpty(out.Name, linkedName, f.name)})
+	link := deploymentLink{DeploymentID: out.ID, Name: firstNonEmpty(out.Name, linkedName, f.name)}
+	_ = writeDeploymentLink(root, link)
+	// `push --dir ./dist` from the project folder: the project folder is where
+	// the next bare 'miosa deploy' looks, so link it too.
+	if project := projectFolderFor(root); project != "" {
+		_ = writeDeploymentLink(project, link)
+	}
 	return out, nil
 }
 
@@ -780,6 +797,7 @@ uploads. <deployment> is a name, slug or id.
 	cmd.AddCommand(newDeployCreateCmd())
 	cmd.AddCommand(newDeployPushCmd())
 	cmd.AddCommand(newDeployPromoteCmd())
+	cmd.AddCommand(newDeployDomainUpdateCmd())
 	cmd.AddCommand(newDeployGetCmd())
 	cmd.AddCommand(newDeployVersionsCmd())
 	cmd.AddCommand(newDeployDiffCmd())
@@ -792,6 +810,13 @@ func runDeployCurrentDir(cmd *cobra.Command, args []string, flags *deployFlags) 
 	f := *flags
 	if len(args) > 0 && f.name == "" {
 		f.name = args[0]
+	}
+	// An unlinked folder named like an existing deployment belongs to it: link
+	// and push (an upload deployment) or point at redeploy (a repository one),
+	// whether or not the folder is a git checkout. A new deployment needs a
+	// different name on purpose.
+	if handled, err := deployToExistingByName(cmd, &f); handled || err != nil {
+		return err
 	}
 	if repo, branch := gitOrigin("."); repo != "" {
 		f.git = repo
@@ -884,23 +909,91 @@ func normalizeGitURL(u string) string {
 // exactly name. The lookup route also accepts short ids and hostnames, so a
 // hit counts only when the returned name or slug is the one asked for.
 func existingDeploymentByName(ctx context.Context, c *client.Client, name string) (id, found string, ok bool, err error) {
+	id, found, _, ok, err = existingDeploymentByNameWithSource(ctx, c, name)
+	return id, found, ok, err
+}
+
+// existingDeploymentByNameWithSource is existingDeploymentByName plus the
+// deployment's source_type ("upload", "git", ...).
+func existingDeploymentByNameWithSource(ctx context.Context, c *client.Client, name string) (id, found, source string, ok bool, err error) {
 	var resp struct {
 		Data map[string]any `json:"data"`
 	}
 	if gerr := c.API.Get(ctx, "/deployments/"+url.PathEscape(name), nil, &resp); gerr != nil {
 		if ae, isAPI := asAPIError(gerr); isAPI && (ae.Status == 404 || ae.Status == 400) {
-			return "", "", false, nil
+			return "", "", "", false, nil
 		}
 		if ae, isAPI := asAPIError(gerr); isAPI && strings.EqualFold(ae.Code, "AMBIGUOUS_DEPLOYMENT") {
-			return "", "", false, fmt.Errorf("more than one deployment is named %q - pass --deployment <id>: %w", name, gerr)
+			return "", "", "", false, fmt.Errorf("more than one deployment is named %q - pass --deployment <id>: %w", name, gerr)
 		}
-		return "", "", false, gerr
+		return "", "", "", false, gerr
 	}
 	gotName, _ := resp.Data["name"].(string)
 	gotSlug, _ := resp.Data["slug"].(string)
 	if !strings.EqualFold(gotName, name) && !strings.EqualFold(gotSlug, name) {
-		return "", "", false, nil
+		return "", "", "", false, nil
 	}
 	id, _ = resp.Data["id"].(string)
-	return id, firstNonEmpty(gotName, gotSlug, name), id != "", nil
+	source, _ = resp.Data["source_type"].(string)
+	return id, firstNonEmpty(gotName, gotSlug, name), source, id != "", nil
+}
+
+// deployToExistingByName handles a bare 'miosa deploy' in an unlinked folder
+// whose name matches an existing deployment. It reports handled=false when
+// there is no such deployment (or the folder is already linked).
+func deployToExistingByName(cmd *cobra.Command, f *deployFlags) (bool, error) {
+	if f.deployment != "" {
+		return false, nil
+	}
+	if _, linked := readDeploymentLink("."); linked {
+		return false, nil
+	}
+	name := f.name
+	if name == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return false, nil
+		}
+		name = filepath.Base(wd)
+	}
+	c, _, err := buildClient()
+	if err != nil {
+		return false, nil
+	}
+	id, found, source, ok, err := existingDeploymentByNameWithSource(cmd.Context(), c, name)
+	if err != nil {
+		return true, die(err)
+	}
+	if !ok {
+		return false, nil
+	}
+	if strings.EqualFold(source, "git") {
+		return true, usagef("deployment %q (%s) already exists and builds from its repository - rebuild it with 'miosa deploy redeploy %s', or pass --name for a new deployment", found, shortRef(id), found)
+	}
+	if !f.yes {
+		if err := confirmDestructive(cmd, fmt.Sprintf("Deployment %q (%s) already exists. Link this folder and push it as a new version?", found, shortRef(id))); err != nil {
+			return true, err
+		}
+	}
+	f.git, f.dir, f.deployment, f.name = "", ".", id, found
+	return true, runDeployCreate(cmd, nil, f)
+}
+
+// projectFolderFor is the current directory when the upload root sits inside
+// it (push --dir ./dist), so the folder a person deploys from gets the link.
+// Never the home directory: ~/.miosa is the CLI's own config.
+func projectFolderFor(root string) string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	wd, _ = filepath.Abs(wd)
+	if home, herr := os.UserHomeDir(); herr == nil && filepath.Clean(home) == filepath.Clean(wd) {
+		return ""
+	}
+	rel, err := filepath.Rel(wd, root)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return ""
+	}
+	return wd
 }

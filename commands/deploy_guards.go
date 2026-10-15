@@ -244,3 +244,47 @@ func staticObserve(cmd *cobra.Command, resp any) error {
 	}
 	return nil
 }
+
+// markLiveRelease adds live: true to the release the deployment serves now
+// (false to the rest), in the table and the JSON, so each release reads with
+// its version and which one is live.
+func markLiveRelease(cmd *cobra.Command, resp any) error {
+	display := argsOf(cmd)
+	rows, _ := findRows(resp, "")
+	if len(display) == 0 || len(rows) == 0 {
+		return nil
+	}
+	c, _, err := buildClient()
+	if err != nil {
+		return nil
+	}
+	var dep struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := c.API.Get(cmd.Context(), "/deployments/"+url.PathEscape(display[0]), nil, &dep); err != nil {
+		return nil
+	}
+	// App Engine deployments report the live release; static ones only the
+	// live version, so fall back to the newest release of that version.
+	activeRelease, _ := dep.Data["active_release_id"].(string)
+	activeVersion, _ := dep.Data["active_version_id"].(string)
+	marked := false
+	for _, r := range rows {
+		m, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, _ := m["id"].(string)
+		vid, _ := m["deployment_version_id"].(string)
+		live := false
+		switch {
+		case activeRelease != "":
+			live = id == activeRelease
+		case activeVersion != "" && !marked:
+			live = vid == activeVersion
+		}
+		marked = marked || live
+		m["live"] = live
+	}
+	return nil
+}
