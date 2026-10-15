@@ -106,7 +106,8 @@ func deployOps() []Op {
 			Long:    "Lists the deployment's releases: each time a version was released to serve. 'miosa deploy versions' lists the uploaded versions and marks the live one.",
 			Example: "  miosa deploy releases my-app\n  miosa deploy versions my-app",
 			Method:  "GET", Path: "/deployments/{0}/releases", Args: []Arg{d},
-			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "STATE", Path: "state"}, {Head: "PORT", Path: "port"}, {Head: "READY", Path: "ready_at", Fmt: "age"}, {Head: "CREATED", Path: "created_at", Fmt: "age"}},
+			Cols:  []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "VERSION", Path: "deployment_version_id", Fmt: "short"}, {Head: "STATE", Path: "state"}, {Head: "PORT", Path: "port"}, {Head: "READY", Path: "ready_at", Fmt: "age"}, {Head: "CREATED", Path: "created_at", Fmt: "age"}, {Head: "LIVE", Path: "live"}},
+			After: markLiveRelease,
 		},
 		Op{
 			Use: "rollback <deployment>", Short: "Make an earlier version live again",
