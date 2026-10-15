@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"io/fs"
@@ -58,6 +60,11 @@ type deployFlags struct {
 	waitTimeout  time.Duration
 	yes          bool
 	noPromote    bool
+	forge        string // Forge repository (id, org/name or name)
+	project      string // project to link the Forge repository through
+	noAuto       bool   // Forge: do not build on every push to the branch
+	rootDir      string
+	force        bool // push even when nothing changed since the latest version
 }
 
 // bindDeploySourceFlags binds the flags that shape the deployment. The bare
@@ -73,6 +80,7 @@ func bindDeploySourceFlags(cmd *cobra.Command, f *deployFlags, createOnly bool) 
 	fs.BoolVar(&f.wait, "wait", false, "Wait until the deployment is live, then print its URL")
 	fs.DurationVar(&f.waitTimeout, "wait-timeout", 10*time.Minute, "How long --wait may take")
 	fs.BoolVar(&f.noPromote, "no-promote", false, "Upload the version without making it live; prints the version to promote later")
+	fs.BoolVar(&f.force, "force", false, "Upload even when the files match the latest version")
 	if createOnly {
 		fs.StringVar(&f.fromSandbox, "from-sandbox", "", "Publish this sandbox (name, id or 'current')")
 		fs.StringVar(&f.git, "git", "", "Deploy this git repository URL")
@@ -82,7 +90,11 @@ func bindDeploySourceFlags(cmd *cobra.Command, f *deployFlags, createOnly bool) 
 		fs.StringVar(&f.entrypoint, "entrypoint", "", "With --from-sandbox: the entry file for a static publish")
 		fs.StringVar(&f.deployType, "type", "", "Runtime to publish as: static, dynamic or docker_deploy (default: static, or dynamic with --run-command)")
 		fs.StringVar(&f.runCommand, "run-command", "", "Command the app starts with (makes the publish dynamic)")
-		fs.StringVar(&f.buildCommand, "build-command", "", "Build command (git source only)")
+		fs.StringVar(&f.buildCommand, "build-command", "", "Build command (git or Forge source)")
+		fs.StringVar(&f.forge, "forge", "", "Deploy this Forge repository (id, org/name or name); builds --branch and redeploys on every push")
+		fs.StringVar(&f.project, "project", "", "With --forge: the project to link the repository through (one repository per project)")
+		fs.BoolVar(&f.noAuto, "no-auto", false, "With --forge: do not build automatically on pushes to the branch")
+		fs.StringVar(&f.rootDir, "root-directory", "", "With --forge: the app's directory inside the repository")
 	}
 }
 
@@ -133,8 +145,10 @@ func newDeployPushCmd() *cobra.Command {
   miosa deploy push lunivate.com            # a hostname works too
 
 The deployment keeps its id, URL and domains; only a new version is released.
-This is what 'miosa deploy' does automatically once a folder is linked
-(.miosa/deployment.json is written on the first deploy).`,
+This is what 'miosa deploy' does automatically once a folder is linked: every
+deploy and push writes or refreshes .miosa/deployment.json in the folder (and in
+the project folder when --dir points inside it). A push whose files match the
+latest version uploads nothing; --force uploads anyway.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ff := *f
@@ -152,6 +166,7 @@ This is what 'miosa deploy' does automatically once a folder is linked
 	fs.BoolVar(&f.wait, "wait", false, "Wait until the new version is live, then print its URL")
 	fs.DurationVar(&f.waitTimeout, "wait-timeout", 10*time.Minute, "How long --wait may take")
 	fs.BoolVar(&f.noPromote, "no-promote", false, "Upload the version without making it live; prints the version to promote later")
+	fs.BoolVar(&f.force, "force", false, "Upload even when the files match the latest version")
 	return cmd
 }
 
@@ -172,16 +187,16 @@ func runDeployCreate(cmd *cobra.Command, args []string, flags *deployFlags) erro
 	// local upload source otherwise, so only count it as a source on its own.
 	localDir := f.dir != "" && f.fromSandbox == ""
 	sources := 0
-	for _, set := range []bool{f.fromSandbox != "", f.git != "", localDir} {
+	for _, set := range []bool{f.fromSandbox != "", f.git != "", localDir, f.forge != ""} {
 		if set {
 			sources++
 		}
 	}
 	switch {
 	case sources == 0:
-		return usagef("give a source: --from-sandbox <sandbox>, --git <url> or --dir <path> (see 'miosa deploy create --help')")
+		return usagef("give a source: --from-sandbox <sandbox>, --git <url>, --forge <repo> or --dir <path> (see 'miosa deploy create --help')")
 	case sources > 1:
-		return usagef("give exactly one source of --from-sandbox, --git or --dir")
+		return usagef("give exactly one source of --from-sandbox, --git, --forge or --dir")
 	}
 	if f.port != 0 && f.fromSandbox == "" {
 		return usagef("--port only applies to --from-sandbox")
@@ -212,10 +227,19 @@ func runDeployCreate(cmd *cobra.Command, args []string, flags *deployFlags) erro
 	switch {
 	case f.fromSandbox != "":
 		out, err = deployFromSandbox(cmd.Context(), c, p, &f, env)
+	case f.forge != "":
+		out, err = deployFromForge(cmd.Context(), c, p, &f, env)
 	case f.git != "":
 		out, err = deployFromGit(cmd.Context(), c, p, &f, env)
 	default:
 		out, err = deployFromDir(cmd.Context(), c, p, &f, env)
+	}
+	if nc, ok := err.(errNoChanges); ok {
+		if isJSON() {
+			return p.JSON(map[string]any{"status": "unchanged", "version_number": nc.version, "version_id": nc.id})
+		}
+		p.Line("No changes since version %d (%s) - nothing uploaded. Pass --force to push anyway.", nc.version, shortRef(nc.id))
+		return nil
 	}
 	if err != nil {
 		return die(err)
@@ -477,6 +501,14 @@ func deployFromDir(ctx context.Context, c *client.Client, p *output.Printer, f *
 		}
 		if err := c.API.Get(ctx, "/deployments/"+url.PathEscape(target), nil, &dep); err == nil {
 			linkedName, _ = dep.Data["name"].(string)
+		}
+	}
+
+	// An unchanged folder is not uploaded again: same files (path + sha256) as
+	// the deployment's latest version means a new version would be identical.
+	if !createNew && !f.force {
+		if n, vid, same := unchangedSinceLatest(ctx, c, target, root); same {
+			return nil, errNoChanges{version: n, id: vid}
 		}
 	}
 
@@ -798,6 +830,7 @@ uploads. <deployment> is a name, slug or id.
 	cmd.AddCommand(newDeployPushCmd())
 	cmd.AddCommand(newDeployPromoteCmd())
 	cmd.AddCommand(newDeployDomainUpdateCmd())
+	cmd.AddCommand(newDeployUpdateCmd())
 	cmd.AddCommand(newDeployGetCmd())
 	cmd.AddCommand(newDeployVersionsCmd())
 	cmd.AddCommand(newDeployDiffCmd())
@@ -996,4 +1029,139 @@ func projectFolderFor(root string) string {
 		return ""
 	}
 	return wd
+}
+
+// deployFromForge creates a deployment that builds a Forge repository branch
+// (repo_provider "forge"). With auto (the default) every push to the branch
+// builds and releases a new version.
+func deployFromForge(ctx context.Context, c *client.Client, p *output.Printer, f *deployFlags, env map[string]any) (*deployOutcome, error) {
+	if f.name == "" {
+		f.name = forgeRepoShortName(f.forge)
+	}
+	body := map[string]any{
+		"name":             f.name,
+		"repo_provider":    "forge",
+		"forge_repository": f.forge,
+		"auto_deploy":      !f.noAuto,
+	}
+	for k, v := range map[string]string{"branch": f.branch, "build_command": f.buildCommand, "root_directory": f.rootDir, "project_id": f.project} {
+		if v != "" {
+			body[k] = v
+		}
+	}
+	if len(env) > 0 {
+		body["env"] = env
+	}
+	if !isJSON() {
+		p.Line("Creating deployment %q from Forge repository %s...", f.name, f.forge)
+	}
+	var resp createDeployResponse
+	if err := c.API.Post(ctx, "/deployments", body, &resp); err != nil {
+		if ae, ok := asAPIError(err); ok && ae.Code == "PROJECT_LINKED_TO_OTHER_REPOSITORY" {
+			return nil, usagef("%s - pass --project <id> of a project with no repository ('miosa project list')", ae.Message)
+		}
+		return nil, err
+	}
+	out := &deployOutcome{
+		ID:     resp.Data.ID,
+		Name:   firstNonEmpty(resp.Data.Name, f.name),
+		Slug:   resp.Data.Slug,
+		State:  firstNonEmpty(resp.Data.State, "building"),
+		URL:    resp.Data.PublicURL,
+		Source: "forge",
+	}
+	if out.ID == "" {
+		return nil, fmt.Errorf("the server created the deployment but returned no id")
+	}
+	return out, nil
+}
+
+func forgeRepoShortName(ref string) string {
+	if i := strings.LastIndex(ref, "/"); i >= 0 {
+		return ref[i+1:]
+	}
+	return ref
+}
+
+type errNoChanges struct {
+	version int
+	id      string
+}
+
+func (e errNoChanges) Error() string { return fmt.Sprintf("no changes since version %d", e.version) }
+
+// unchangedSinceLatest compares the folder's files with the latest version's
+// manifest. Any error answers "changed", so a push is never skipped by mistake.
+func unchangedSinceLatest(ctx context.Context, c *client.Client, deployment, root string) (int, string, bool) {
+	var list struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := c.API.Get(ctx, "/deployments/"+url.PathEscape(deployment)+"/versions", nil, &list); err != nil || len(list.Data) == 0 {
+		return 0, "", false
+	}
+	latest := list.Data[0]
+	for _, v := range list.Data {
+		if n, _ := v["version_number"].(float64); n > latest["version_number"].(float64) {
+			latest = v
+		}
+	}
+	id, _ := latest["id"].(string)
+	var one struct {
+		Data struct {
+			ArtifactManifest *struct {
+				Files []manifestFile `json:"files"`
+			} `json:"artifact_manifest"`
+		} `json:"data"`
+	}
+	if id == "" || c.API.Get(ctx, "/deployments/"+url.PathEscape(deployment)+"/versions/"+url.PathEscape(id), nil, &one) != nil ||
+		one.Data.ArtifactManifest == nil || len(one.Data.ArtifactManifest.Files) == 0 {
+		return 0, "", false
+	}
+	local, err := localFileManifest(root)
+	if err != nil || len(local) != len(one.Data.ArtifactManifest.Files) {
+		return 0, "", false
+	}
+	for _, f := range one.Data.ArtifactManifest.Files {
+		if local[f.Path] != f.Sha {
+			return 0, "", false
+		}
+	}
+	n, _ := latest["version_number"].(float64)
+	return int(n), id, true
+}
+
+// localFileManifest hashes every regular file the upload would carry (same
+// exclusions as tarGzDir: .git and .miosa).
+func localFileManifest(root string) (map[string]string, error) {
+	out := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if path != root && (d.Name() == ".git" || d.Name() == deploymentLinkDir) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		h := sha256.New()
+		if _, err := io.Copy(h, f); err != nil {
+			return err
+		}
+		out[filepath.ToSlash(rel)] = hex.EncodeToString(h.Sum(nil))
+		return nil
+	})
+	return out, err
 }

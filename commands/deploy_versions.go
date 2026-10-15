@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"github.com/Miosa-osa/miosa-cli-go/internal/api"
 	"net/url"
 	"path/filepath"
 	"sort"
@@ -29,7 +30,7 @@ var deployVersionCols = []Col{
 // artifact hash, and marks the live one. Which version is live is a fact about
 // the deployment, so this reads it once as well as the versions.
 func newDeployVersionsCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "versions <deployment>",
 		Short: "List versions, with what each one ships and which is live",
 		Long: `List a deployment's versions.
@@ -44,6 +45,84 @@ big they are, the artifact sha256, and "live" on the version that is serving.
 			return runDeployVersions(cmd, args[0])
 		},
 	}
+	cmd.AddCommand(newDeployVersionsRmCmd())
+	return cmd
+}
+
+// newDeployVersionsRmCmd deletes one version. The live version and any version
+// a release points at are refused (here for the live one, by the API for both).
+func newDeployVersionsRmCmd() *cobra.Command {
+	var deployment, dir string
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "rm <version>",
+		Short: "Delete a version that is not live",
+		Long: `Deletes one version (number, short id or id) of the deployment named by
+--deployment, or of the deployment this folder is linked to. A version id on its
+own finds its deployment. The live version is refused, and so is any version the
+server still needs, such as the rollback target.`,
+		Example: "  miosa deploy versions rm 90a9dee1\n  miosa deploy versions rm 3 --deployment my-site --yes",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, _, err := buildClient()
+			if err != nil {
+				return die(err)
+			}
+			dep, err := deploymentForVersions(deployment, dir)
+			if err != nil {
+				owner, _, found := "", 0, false
+				if deployment == "" && dir == "" && versionRefShape.MatchString(args[0]) {
+					owner, _, found = findVersionOwner(cmd, c, args[0])
+				}
+				if !found {
+					return err
+				}
+				dep = owner
+			}
+			var d struct {
+				Data map[string]any `json:"data"`
+			}
+			if err := c.API.Get(cmd.Context(), "/deployments/"+url.PathEscape(dep), nil, &d); err != nil {
+				return die(fmt.Errorf("deployment %s: %w", dep, err))
+			}
+			var vs struct {
+				Data []map[string]any `json:"data"`
+			}
+			if err := c.API.Get(cmd.Context(), "/deployments/"+url.PathEscape(dep)+"/versions", nil, &vs); err != nil {
+				return die(fmt.Errorf("deployment %s: %w", dep, err))
+			}
+			v, err := matchVersion(vs.Data, args[0])
+			if err != nil {
+				return usagef("deployment %s: version %v", dep, err)
+			}
+			vid, _ := v["id"].(string)
+			if live, _ := d.Data["active_version_id"].(string); live == vid {
+				return usagef("version %s is live on %s - make another version live first ('miosa deploy rollback %s --to <version>')", shortID(vid), dep, dep)
+			}
+			if !yes {
+				if err := confirmDestructive(cmd, fmt.Sprintf("Delete version %s of %s?", describeVersion(v), dep)); err != nil {
+					return err
+				}
+			}
+			key, kerr := newForgeIdempotencyKey()
+			if kerr != nil {
+				return die(kerr)
+			}
+			req := api.Request{Method: "DELETE", Path: "/deployments/" + url.PathEscape(dep) + "/versions/" + url.PathEscape(vid), IdempotencyKey: key}
+			if _, err := c.API.JSONAny(cmd.Context(), req); err != nil {
+				if ae, ok := asAPIError(err); ok && ae.Status == 409 {
+					return usagef("version %s of %s: %s", shortID(vid), dep, ae.Message)
+				}
+				return die(fmt.Errorf("version %s of %s: %w", shortID(vid), dep, err))
+			}
+			printerFor(cmd).Success("Deleted version %s of %s", describeVersion(v), dep)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&deployment, "deployment", "", "Deployment the version belongs to (default: the folder's linked deployment)")
+	cmd.Flags().StringVar(&dir, "dir", "", "Folder whose .miosa/deployment.json names the deployment")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Delete without asking")
+	return cmd
 }
 
 func runDeployVersions(cmd *cobra.Command, ref string) error {
