@@ -103,6 +103,33 @@ func asAPIError(err error) (*api.Error, bool) {
 	return &api.Error{Status: m.StatusCode, Code: m.Code, Message: m.Message, RequestID: m.RequestID, Body: m.Body}, true
 }
 
+// stringList reads a list of strings out of an error's details object. The
+// server's JSON decodes to []any; the resolver builds the same 409 locally
+// with a []string, and both have to name their candidates.
+func stringList(v any) []string {
+	switch items := v.(type) {
+	case []any:
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+
+	case []string:
+		out := make([]string, 0, len(items))
+		for _, s := range items {
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+
+	return nil
+}
+
 // friendlyMessage renders an error for a person: the server's message, its
 // code and request id, and a hint for the common failures.
 func friendlyMessage(err error) string {
@@ -114,6 +141,19 @@ func friendlyMessage(err error) string {
 	}
 	if ae, ok := asAPIError(err); ok {
 		msg := contextPrefix(err) + ae.Error()
+		// A 4xx from the API names the field it refused; lead with it so the
+		// caller sees which one without reading the sentence.
+		if ae.Field != "" && !strings.Contains(ae.Message, ae.Field) {
+			msg = contextPrefix(err) + ae.Field + ": " + ae.Error()
+		}
+		// A name or hostname that matches more than one deployment is refused
+		// with the candidates; name them instead of making the caller guess.
+		if strings.EqualFold(ae.Code, "AMBIGUOUS_DEPLOYMENT") {
+			if ids := stringList(ae.Details["matches"]); len(ids) > 0 {
+				return "more than one deployment matches - pass one of these ids: " +
+					strings.Join(ids, ", ") + requestSuffix(ae)
+			}
+		}
 		if strings.EqualFold(ae.Code, "INVALID_ID") && (ae.Message == "" || strings.HasPrefix(ae.Message, "request failed with status")) {
 			return "not a valid id, and no sandbox has that name - 'miosa list' shows names and ids" + requestSuffix(ae)
 		}
@@ -153,15 +193,35 @@ func friendlyMessage(err error) string {
 // contextPrefix returns the text a caller wrapped around the API error
 // ("key validation failed: "), so context survives the friendly rendering.
 func contextPrefix(err error) string {
-	for e := err; e != nil; e = errors.Unwrap(e) {
+	// A *Failure renders the friendly message, so its Error() already contains
+	// the leaf's sentence: trimming against that would leave the leaf's text
+	// behind and the caller would print the sentence twice. Take the text from
+	// the raw error underneath any Failure instead.
+	raw := rawError(err)
+	for e := raw; e != nil; e = errors.Unwrap(e) {
 		if _, leaf := e.(*api.Error); leaf {
-			return strings.TrimSuffix(err.Error(), e.Error())
+			return strings.TrimSuffix(raw.Error(), e.Error())
 		}
 		if isSDKLeaf(e) {
-			return strings.TrimSuffix(err.Error(), e.Error())
+			return strings.TrimSuffix(raw.Error(), e.Error())
 		}
 	}
 	return ""
+}
+
+// rawError unwraps *Failure, whose Error() is the friendly rendering of the
+// error it carries rather than the error's own text.
+func rawError(err error) error {
+	for {
+		f, ok := err.(*Failure)
+		if !ok {
+			return err
+		}
+		if f.Err == nil {
+			return err
+		}
+		err = f.Err
+	}
 }
 
 func isSDKLeaf(e error) bool {

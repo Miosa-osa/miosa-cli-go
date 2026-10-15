@@ -29,6 +29,11 @@ func newComputerCreateCmd() *cobra.Command {
 		Short: "Create a computer",
 		Long: `Provision a MIOSA computer (a persistent desktop machine).
 
+--template picks the computer template; it defaults to miosa-desktop, the
+desktop machine image. The API requires a template on this route (it answers
+400 template_type is required without one), so the default is sent, not left
+to the server.
+
 --env picks the environment (repositories, secrets, connections) the computer
 starts from; without it your default environment is used. --no-env passes
 nothing of yours. --setup-file runs a script (UTF-8, up to 64KB) in the
@@ -79,7 +84,7 @@ Examples:
 		},
 	}
 	cmd.Flags().StringVar(&size, "size", "small", "Computer size: xs, small, medium, large, or xl")
-	cmd.Flags().StringVar(&template, "template", "", "Computer template type (default: server default)")
+	cmd.Flags().StringVar(&template, "template", "miosa-desktop", "Computer template type (miosa-desktop by default)")
 	envFlags.bind(cmd, "computer")
 	return cmd
 }

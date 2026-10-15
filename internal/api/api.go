@@ -71,6 +71,8 @@ type Error struct {
 	Code      string
 	Message   string
 	RequestID string
+	// Field is the request field a 4xx refused, when the API named one.
+	Field     string
 	Retryable bool
 	// RetryAfter is the server-suggested delay, if any.
 	RetryAfter time.Duration
@@ -119,6 +121,7 @@ func ParseError(resp *http.Response) *Error {
 		case map[string]any:
 			e.Code, _ = v["code"].(string)
 			e.Message, _ = v["message"].(string)
+			e.Field, _ = v["field"].(string)
 			if m, ok := v["details"].(map[string]any); ok {
 				e.Details = m
 			}

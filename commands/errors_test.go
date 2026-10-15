@@ -78,12 +78,33 @@ func TestErrorHints(t *testing.T) {
 		{&api.Error{Status: 403, Message: "nope"}, "scope or role"},
 		{&api.Error{Status: 429, Message: "slow", RetryAfter: 3e9}, "retry in 3s"},
 		{&api.Error{Status: 400, Code: "INVALID_ID"}, "no sandbox has that name"},
+		{&api.Error{Status: 400, Code: "INVALID_PARAM", Field: "env", Message: "must be a key-value map"},
+			"env: must be a key-value map"},
+		{&api.Error{Status: 409, Code: "AMBIGUOUS_DEPLOYMENT", Message: "More than one deployment matches; use its id",
+			Details: map[string]any{"matches": []any{"aaaaaaaa-0000-0000-0000-000000000001", "bbbbbbbb-0000-0000-0000-000000000002"}}},
+			"aaaaaaaa-0000-0000-0000-000000000001"},
 	}
 	for _, tc := range cases {
 		if got := commands.ErrorText(tc.err, false); !strings.Contains(got, tc.want) {
 			t.Errorf("%v: %q lacks %q", tc.err, got, tc.want)
 		}
 	}
+	// The resolver builds the same 409 in-process with a []string, not the
+	// []any a JSON body decodes to; both list their candidates.
+	{
+		got := commands.ErrorText(&api.Error{
+			Status:  409,
+			Code:    "AMBIGUOUS_DEPLOYMENT",
+			Message: `more than one deployment matches "shared"; pass its id`,
+			Details: map[string]any{"matches": []string{"aaaa-1111", "bbbb-2222"}},
+		}, false)
+		for _, want := range []string{"aaaa-1111", "bbbb-2222"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("local ambiguous error %q lacks %q", got, want)
+			}
+		}
+	}
+
 	// A server-supplied scope message needs no extra hint.
 	if got := commands.ErrorText(&api.Error{Status: 403, Message: "requires the 'agents:read' scope"}, false); strings.Contains(got, "may lack") {
 		t.Errorf("redundant hint: %q", got)

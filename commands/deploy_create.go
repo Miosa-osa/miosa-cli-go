@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,6 +41,7 @@ const webhookPath = "/api/v1/integrations/github/webhook"
 // deployFlags are the flags shared by 'deploy' and 'deploy create'.
 type deployFlags struct {
 	name         string
+	deployment   string // push to this existing deployment instead of creating
 	fromSandbox  string
 	git          string
 	dir          string
@@ -55,6 +57,7 @@ type deployFlags struct {
 	wait         bool
 	waitTimeout  time.Duration
 	yes          bool
+	noPromote    bool
 }
 
 // bindDeploySourceFlags binds the flags that shape the deployment. The bare
@@ -66,8 +69,10 @@ func bindDeploySourceFlags(cmd *cobra.Command, f *deployFlags, createOnly bool) 
 	fs.StringVar(&f.branch, "branch", "", "Git branch to build (default: the current one)")
 	fs.StringArrayVar(&f.env, "env", nil, "Environment variable KEY=VALUE (repeatable)")
 	fs.StringVar(&f.domain, "domain", "", "Custom domain to attach (then add the DNS record it shows)")
+	fs.StringVar(&f.deployment, "deployment", "", "Push a new version to this existing deployment (id, name or hostname)")
 	fs.BoolVar(&f.wait, "wait", false, "Wait until the deployment is live, then print its URL")
 	fs.DurationVar(&f.waitTimeout, "wait-timeout", 10*time.Minute, "How long --wait may take")
+	fs.BoolVar(&f.noPromote, "no-promote", false, "Upload the version without making it live; prints the version to promote later")
 	if createOnly {
 		fs.StringVar(&f.fromSandbox, "from-sandbox", "", "Publish this sandbox (name, id or 'current')")
 		fs.StringVar(&f.git, "git", "", "Deploy this git repository URL")
@@ -117,6 +122,39 @@ record to add. --wait blocks until the deployment is live and prints its URL.`,
 	return cmd
 }
 
+func newDeployPushCmd() *cobra.Command {
+	f := &deployFlags{}
+	cmd := &cobra.Command{
+		Use:   "push <deployment>",
+		Short: "Upload a new version to an existing deployment",
+		Long: `Push a new version of a local directory to an existing deployment.
+
+  miosa deploy push my-site --dir ./dist
+  miosa deploy push lunivate.com            # a hostname works too
+
+The deployment keeps its id, URL and domains; only a new version is released.
+This is what 'miosa deploy' does automatically once a folder is linked
+(.miosa/deployment.json is written on the first deploy).`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ff := *f
+			ff.deployment = args[0]
+			ff.name = ""
+			if ff.dir == "" {
+				ff.dir = "."
+			}
+			return runDeployCreate(cmd, nil, &ff)
+		},
+	}
+	fs := cmd.Flags()
+	fs.StringVar(&f.dir, "dir", "", "Local directory to upload (default: the current directory)")
+	fs.StringArrayVar(&f.env, "env", nil, "Environment variable KEY=VALUE (repeatable)")
+	fs.BoolVar(&f.wait, "wait", false, "Wait until the new version is live, then print its URL")
+	fs.DurationVar(&f.waitTimeout, "wait-timeout", 10*time.Minute, "How long --wait may take")
+	fs.BoolVar(&f.noPromote, "no-promote", false, "Upload the version without making it live; prints the version to promote later")
+	return cmd
+}
+
 // runDeployCreate chooses the source, runs the matching API flow and renders
 // the result. It works on a copy of the flags: the flag struct is bound to the
 // command for the life of the process, so mutating it would leak between runs.
@@ -150,6 +188,9 @@ func runDeployCreate(cmd *cobra.Command, args []string, flags *deployFlags) erro
 	}
 	if f.buildCommand != "" && f.fromSandbox != "" {
 		return usagef("--build-command does not apply to --from-sandbox")
+	}
+	if f.noPromote && (f.fromSandbox != "" || f.git != "") {
+		return usagef("--no-promote only applies to a local upload (--dir, or no source in a folder)")
 	}
 
 	env, err := deployEnvMap(f.env)
@@ -214,6 +255,13 @@ type deployOutcome struct {
 	Source        string
 	Domain        string
 	WebhookSecret string
+	// VersionID and Promoted are set by the upload path only: a version pushed
+	// with --no-promote is uploaded but not serving.
+	VersionID string
+	Promoted  *bool
+	// Existing is true when this run pushed to a deployment that was already
+	// there (a linked folder, or --deployment) instead of creating one.
+	Existing bool
 }
 
 // deployResponse is the deployment object the API returns inside "data".
@@ -391,12 +439,34 @@ func deployFromDir(ctx context.Context, c *client.Client, p *output.Printer, f *
 		return nil, usagef("--dir %s is %s packaged, over the 100 MiB upload limit", f.dir, humanBytes(float64(len(archive))))
 	}
 
-	// 1. Create the upload-backed deployment and open a session.
-	var session dropSessionResponse
-	if err := c.API.Post(ctx, "/deployments/drop/sessions", map[string]any{"name": f.name}, &session); err != nil {
-		return nil, err
+	// 1. Open an upload session. When this folder is already linked to a
+	// deployment (or --deployment names one), push a new VERSION to that
+	// deployment; otherwise create one and remember it.
+	target := f.deployment
+	linkedName := ""
+	if target == "" {
+		if link, ok := readDeploymentLink(root); ok {
+			target = link.DeploymentID
+			linkedName = link.Name
+		}
 	}
-	sid, depID := session.Data.SessionID, session.Data.DeploymentID
+	createNew := target == ""
+
+	var sid, depID string
+	if createNew {
+		var session dropSessionResponse
+		if err := c.API.Post(ctx, "/deployments/drop/sessions", map[string]any{"name": f.name}, &session); err != nil {
+			return nil, err
+		}
+		sid, depID = session.Data.SessionID, session.Data.DeploymentID
+	} else {
+		depID = target
+		var session dropSessionResponse
+		if err := c.API.Post(ctx, "/deployments/"+url.PathEscape(target)+"/drop/sessions", nil, &session); err != nil {
+			return nil, err
+		}
+		sid = session.Data.SessionID
+	}
 	if sid == "" || depID == "" {
 		return nil, fmt.Errorf("the server opened no upload session")
 	}
@@ -423,23 +493,44 @@ func deployFromDir(ctx context.Context, c *client.Client, p *output.Printer, f *
 		resp.Body.Close()
 	}
 
-	// 3. Complete: assemble, publish and promote.
+	// 3. Complete: assemble, publish, and promote unless --no-promote asked for
+	//    a version that is not live yet.
+	promote := !f.noPromote
 	var done dropCompleteResponse
 	completePath := fmt.Sprintf("/deployments/%s/drop/sessions/%s/complete", depID, sid)
-	if err := c.API.Post(ctx, completePath, map[string]any{"promote": true}, &done); err != nil {
+	if err := c.API.Post(ctx, completePath, map[string]any{"promote": promote}, &done); err != nil {
 		return nil, err
 	}
+	promoted := done.Data.Promoted || promote
+	// The name printed is the deployment this run went to: the one the folder
+	// is linked to, or the reference the caller gave. The folder name is only
+	// a default for a deployment being created.
+	name := f.name
+	if !createNew {
+		name = firstNonEmpty(linkedName, target, f.name)
+	}
 	out := &deployOutcome{
-		ID:     firstNonEmpty(done.Data.DeploymentID, depID),
-		Name:   f.name,
-		State:  "running",
-		URL:    done.Data.PublicURL,
-		Source: "upload",
+		ID:        firstNonEmpty(done.Data.DeploymentID, depID),
+		Name:      name,
+		State:     "running",
+		URL:       done.Data.PublicURL,
+		Source:    "upload",
+		VersionID: done.Data.VersionID,
+		Promoted:  &promoted,
+		Existing:  !createNew,
+	}
+	if !promoted {
+		out.State = "uploaded"
 	}
 	if len(env) > 0 {
 		if err := setDeploymentEnv(ctx, c, out.ID, env); err != nil {
 			return nil, err
 		}
+	}
+	if createNew {
+		// Remember the deployment so the next 'miosa deploy' in this folder
+		// pushes a new version instead of creating a duplicate.
+		_ = writeDeploymentLink(root, deploymentLink{DeploymentID: out.ID, Name: f.name})
 	}
 	return out, nil
 }
@@ -519,7 +610,7 @@ func tarGzDir(root string) ([]byte, error) {
 		if rel == "." {
 			return nil
 		}
-		if d.IsDir() && filepath.Base(path) == ".git" {
+		if d.IsDir() && (filepath.Base(path) == ".git" || filepath.Base(path) == deploymentLinkDir) {
 			return fs.SkipDir
 		}
 		info, err := d.Info()
@@ -569,6 +660,12 @@ func renderDeploy(p *output.Printer, out *deployOutcome) error {
 			"state":  out.State,
 			"source": out.Source,
 		}
+		if out.VersionID != "" {
+			m["version_id"] = out.VersionID
+		}
+		if out.Promoted != nil {
+			m["promoted"] = *out.Promoted
+		}
 		if out.Slug != "" {
 			m["slug"] = out.Slug
 		}
@@ -584,7 +681,14 @@ func renderDeploy(p *output.Printer, out *deployOutcome) error {
 		}
 		return p.JSON(m)
 	}
-	p.Success("Created deployment %q (%s)", out.Name, out.ID)
+	if out.Promoted != nil && !*out.Promoted {
+		return renderUnpromotedUpload(p, out)
+	}
+	if out.Existing {
+		p.Success("Deployed %q (%s)", out.Name, out.ID)
+	} else {
+		p.Success("Created deployment %q (%s)", out.Name, out.ID)
+	}
 	rows := [][2]string{{"State", out.State}, {"Source", out.Source}}
 	if out.Slug != "" {
 		rows = append(rows, [2]string{"Slug", out.Slug})
@@ -604,6 +708,32 @@ func renderDeploy(p *output.Printer, out *deployOutcome) error {
 		p.Line("  Secret:       %s", out.WebhookSecret)
 	}
 	return nil
+}
+
+// renderUnpromotedUpload renders a version that was uploaded but deliberately
+// left off the air: the site still serves the previous version, and the id to
+// promote is the one thing the caller needs.
+func renderUnpromotedUpload(p *output.Printer, out *deployOutcome) error {
+	p.Success("Uploaded version %s of %q (not live)", shortRef(out.VersionID), out.Name)
+	rows := [][2]string{
+		{"Deployment", out.ID},
+		{"Version", out.VersionID},
+	}
+	if out.URL != "" {
+		rows = append(rows, [2]string{"Still serving", out.URL})
+	}
+	p.Fields(rows)
+	p.Line("")
+	p.Line("Make it live with: miosa deploy promote %s", out.VersionID)
+	return nil
+}
+
+// shortRef is the 8-character form a person reads and can type back.
+func shortRef(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 // ─── bare 'miosa deploy': deploy the current directory ────────────────────────
@@ -632,6 +762,11 @@ uploads. <deployment> is a name, slug or id.
 		return runDeployCurrentDir(cmd, args, f)
 	}
 	cmd.AddCommand(newDeployCreateCmd())
+	cmd.AddCommand(newDeployPushCmd())
+	cmd.AddCommand(newDeployPromoteCmd())
+	cmd.AddCommand(newDeployGetCmd())
+	cmd.AddCommand(newDeployVersionsCmd())
+	cmd.AddCommand(newDeployDiffCmd())
 	return cmd
 }
 
@@ -649,6 +784,14 @@ func runDeployCurrentDir(cmd *cobra.Command, args []string, flags *deployFlags) 
 		}
 	} else {
 		f.dir = "."
+		// A folder already deployed is pushed to, not created: name it after
+		// the deployment it belongs to rather than after the folder, so the
+		// prompt and the result line name what actually changed.
+		if f.name == "" {
+			if link, ok := readDeploymentLink("."); ok && link.Name != "" {
+				f.name = link.Name
+			}
+		}
 	}
 	if f.name == "" {
 		if wd, err := os.Getwd(); err == nil {
