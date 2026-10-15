@@ -195,6 +195,8 @@ type Request struct {
 	Headers        map[string]string
 	// NoRetry disables retries for this call.
 	NoRetry bool
+	// Verbatim sends Path as given, without rewriting names to ids.
+	Verbatim bool
 }
 
 func (c *Client) url(path string, q url.Values) string {
@@ -293,11 +295,13 @@ func (c *Client) Stream(ctx context.Context, r Request) (*http.Response, error) 
 }
 
 func (c *Client) do(ctx context.Context, hc *http.Client, r Request) (*http.Response, error) {
-	path, err := c.RewritePath(ctx, r.Path)
-	if err != nil {
-		return nil, err
+	if !r.Verbatim {
+		path, err := c.RewritePath(ctx, r.Path)
+		if err != nil {
+			return nil, err
+		}
+		r.Path = path
 	}
-	r.Path = path
 	var payload []byte
 	var reader io.Reader
 	ctype := r.ContentType

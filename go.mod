@@ -2,6 +2,10 @@ module github.com/Miosa-osa/miosa-cli-go
 
 go 1.25.0
 
+// Releases build with exactly this toolchain (.goreleaser.yml asserts it):
+// 2.3.6 shipped on go1.26.2 after 2.3.4 used go1.27.2.
+toolchain go1.27.2
+
 replace github.com/Miosa-osa/miosa-go => ./internal/miosa-sdk
 
 require (

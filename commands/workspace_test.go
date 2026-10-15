@@ -99,27 +99,53 @@ func TestWorkspaceList_Success(t *testing.T) {
 	}
 }
 
-func TestWorkspaceDelete_Success(t *testing.T) {
-	deleted := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func workspaceDeleteServer(t *testing.T, deleted *bool) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/workspaces/") {
-			deleted = true
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/workspaces":
+			w.Write([]byte(`{"data":[{"id":"ws_001","name":"alpha","slug":"alpha"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/workspaces/ws_001":
+			w.Write([]byte(`{"data":{"id":"ws_001","name":"alpha","slug":"alpha"}}`))
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/workspaces/"):
+			*deleted = true
 			w.WriteHeader(http.StatusNoContent)
-			return
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
 		}
-		http.Error(w, "not found", http.StatusNotFound)
 	}))
+}
+
+// Off a terminal a workspace delete needs --yes: it used to delete at once.
+func TestWorkspaceDelete_RefusesWithoutYes(t *testing.T) {
+	deleted := false
+	srv := workspaceDeleteServer(t, &deleted)
 	defer srv.Close()
 	cleanup := setupEnv(t, srv)
 	defer cleanup()
 
-	_, err := run(t, "workspace", "delete", "ws_001")
+	_, err := run(t, "workspace", "delete", "alpha")
+	if err == nil || !strings.Contains(err.Error(), "--yes") || !strings.Contains(err.Error(), "alpha") {
+		t.Fatalf("must refuse without --yes and name the workspace: %v", err)
+	}
+	if deleted {
+		t.Fatal("nothing may be deleted without confirmation")
+	}
+}
+
+func TestWorkspaceDelete_WithYes(t *testing.T) {
+	deleted := false
+	srv := workspaceDeleteServer(t, &deleted)
+	defer srv.Close()
+	cleanup := setupEnv(t, srv)
+	defer cleanup()
+
+	out, err := run(t, "workspace", "delete", "alpha", "--yes")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !deleted {
-		t.Error("expected workspace delete endpoint to be called")
+	if !deleted || !strings.Contains(out, "alpha") {
+		t.Errorf("expected the delete and a line naming the workspace, got %q", out)
 	}
 }
 

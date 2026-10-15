@@ -155,7 +155,7 @@ func friendlyMessage(err error) string {
 			}
 		}
 		if strings.EqualFold(ae.Code, "INVALID_ID") && (ae.Message == "" || strings.HasPrefix(ae.Message, "request failed with status")) {
-			return "not a valid id, and no sandbox has that name - 'miosa list' shows names and ids" + requestSuffix(ae)
+			return contextPrefix(err) + "not a valid id, and nothing has that name - 'miosa list' shows sandboxes, 'miosa deploy list' deployments" + requestSuffix(ae)
 		}
 		switch ae.Status {
 		case 401:

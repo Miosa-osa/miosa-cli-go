@@ -58,6 +58,13 @@ func deployDiffAPI(t *testing.T) *fakeAPI {
 	t.Helper()
 	return newFakeAPI(t, func(c call) (int, string) {
 		switch c.Path {
+		case "/deployments/d3/versions":
+			return 200, `{"data":[{"id":"v1","version_number":1},{"id":"v2","version_number":2},` +
+				`{"id":"v3","version_number":3},{"id":"90a9dee1-2222-4222-8222-222222222222","version_number":4}]}`
+		case "/deployments/d3/versions/90a9dee1-2222-4222-8222-222222222222":
+			return 200, `{"data":{"id":"90a9dee1-2222-4222-8222-222222222222","kind":"static","artifact_sha256":"dd",` +
+				`"artifact_manifest":{"file_count":1,"total_bytes":12,"files":[` +
+				`{"path":"index.html","sha256":"1111","size":12}]}}}`
 		case "/deployments/d3/versions/v1":
 			return 200, `{"data":{"id":"v1","kind":"static","artifact_sha256":"aa",` +
 				`"artifact_manifest":{"file_count":2,"total_bytes":30,"files":[` +
@@ -114,5 +121,22 @@ func TestDeployDiffWithoutAManifestFallsBackToHashes(t *testing.T) {
 	}
 	if !strings.Contains(out, "no file manifest") {
 		t.Fatalf("a version without a manifest should say so: %q", out)
+	}
+}
+
+// The help's own example uses short ids; they resolve against the versions.
+func TestDeployDiffTakesShortVersionIDsAndNumbers(t *testing.T) {
+	deployDiffAPI(t)
+
+	out, err := run(t, "deploy", "diff", "90a9dee1", "1", "--deployment", "d3")
+	if err != nil {
+		t.Fatalf("deploy diff with a short id and a number: %v (out=%q)", err, out)
+	}
+	if !strings.Contains(out, "+ old.js") {
+		t.Fatalf("want old.js added going from 90a9dee1 to v1: %q", out)
+	}
+	if _, err := run(t, "deploy", "diff", "ffff0000", "1", "--deployment", "d3"); err == nil ||
+		!strings.Contains(err.Error(), "version") || !strings.Contains(err.Error(), "ffff0000") {
+		t.Fatalf("an unknown version must be named as a version: %v", err)
 	}
 }

@@ -77,7 +77,7 @@ func TestErrorHints(t *testing.T) {
 		{&api.Error{Status: 402, Message: "no credits"}, "billing"},
 		{&api.Error{Status: 403, Message: "nope"}, "scope or role"},
 		{&api.Error{Status: 429, Message: "slow", RetryAfter: 3e9}, "retry in 3s"},
-		{&api.Error{Status: 400, Code: "INVALID_ID"}, "no sandbox has that name"},
+		{&api.Error{Status: 400, Code: "INVALID_ID"}, "nothing has that name"},
 		{&api.Error{Status: 400, Code: "INVALID_PARAM", Field: "env", Message: "must be a key-value map"},
 			"env: must be a key-value map"},
 		{&api.Error{Status: 409, Code: "AMBIGUOUS_DEPLOYMENT", Message: "More than one deployment matches; use its id",

@@ -80,7 +80,7 @@ func TestUnknownNameGetsAnActionableError(t *testing.T) {
 		"POST /sandboxes/nope/exec": resp{400, `{"error":{"code":"INVALID_ID"}}`},
 	})
 	_, err := run(t, "exec", "nope", "--", "echo", "hi")
-	if err == nil || !strings.Contains(err.Error(), "no sandbox has that name") {
+	if err == nil || !strings.Contains(err.Error(), "nothing has that name") {
 		t.Fatalf("err = %v", err)
 	}
 	if commands.ExitCode(err) != commands.ExitConflict {
