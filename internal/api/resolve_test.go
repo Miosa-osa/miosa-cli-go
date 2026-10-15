@@ -112,3 +112,34 @@ func TestUnknownAgentNameIsNotFound(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A computer resolves by the name a person types and by the short id the CLI
+// prints, both through the one list route.
+func TestResolveComputerByNameAndShortID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/computers") {
+			w.Write([]byte(`{"total":1,"computers":[{"id":"78aa09c5-d7a4-450f-b765-7b4b4ce96c8a","name":"my-desktop"}]}`))
+			return
+		}
+		w.WriteHeader(404)
+		w.Write([]byte(`{"error":{"code":"NOT_FOUND"}}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "k")
+	ctx := context.Background()
+
+	for _, ref := range []string{"my-desktop", "78aa09c5", "78AA09C5"} {
+		id, err := c.ResolveComputer(ctx, ref)
+		if err != nil {
+			t.Fatalf("ResolveComputer(%q): %v", ref, err)
+		}
+		if id != "78aa09c5-d7a4-450f-b765-7b4b4ce96c8a" {
+			t.Errorf("ResolveComputer(%q) = %q", ref, id)
+		}
+	}
+
+	// A reference that names nothing is left for the server to judge.
+	if id, _ := c.ResolveComputer(ctx, "nope"); id != "nope" {
+		t.Errorf("unknown ref should pass through, got %q", id)
+	}
+}

@@ -27,6 +27,31 @@ var deployCols = []Col{
 	{Head: "URL", Path: "public_url"}, {Head: "SOURCE", Path: "source_type"}, {Head: "UPDATED", Path: "updated_at", Fmt: "age"},
 }
 
+// moveTargetFromArgsOrFlag lets the target be a second argument or --to. Both
+// is only an error when they disagree, so a script that passes the flag and a
+// person who types the argument both work.
+func moveTargetFromArgsOrFlag(args []string, body map[string]any) (map[string]any, error) {
+	positional := ""
+	if len(args) > 1 {
+		positional = strings.TrimSpace(args[1])
+	}
+	flagged, _ := body["to"].(string)
+	flagged = strings.TrimSpace(flagged)
+
+	switch {
+	case positional != "" && flagged != "" && positional != flagged:
+		return nil, usagef("the target is given twice and they differ: %q as an argument, %q with --to", positional, flagged)
+
+	case positional != "":
+		body["to"] = positional
+
+	case flagged == "":
+		return nil, usagef("give the deployment to move the domain to: miosa deploy domain-move <domain> <target> (or --to <target>)")
+	}
+
+	return body, nil
+}
+
 var deployDetail = []Col{
 	{Head: "Name", Path: "name"}, {Head: "Id", Path: "id"}, {Head: "State", Path: "state"}, {Head: "URL", Path: "public_url"},
 	{Head: "Source", Path: "source_type"}, {Head: "Repo", Path: "repo_url"}, {Head: "Branch", Path: "branch"},
@@ -165,14 +190,17 @@ missing and exits non-zero. <domain-id> may be the hostname when using --wait.`,
 			Before: waitDomainBefore,
 		},
 		Op{
-			Use: "domain-move <domain>", Short: "Move a custom domain to another deployment (no DNS change)",
+			Use: "domain-move <domain> [target]", Short: "Move a custom domain to another deployment (no DNS change)",
 			Long: `Repoints a domain you already verified at a different deployment. The
 verification, TLS and redirect settings move with it, so you change no DNS
 record and verify nothing again; the new deployment serves it within seconds.
-<domain> is the hostname; --to is the target deployment (id, slug or name).`,
-			Example: "  miosa deploy domain-move lunivate.com --to lunivate-site-v2",
-			Method:  "POST", Path: "/domains/{0}/move", Args: []Arg{idArg("domain")},
-			Flags: []Flag{{Name: "to", Usage: "Deployment to move the domain to (id, slug or name)", Field: "to", Required: true}},
+
+<domain> is the hostname. The target deployment (id, slug or name) is the second
+argument, or --to; give it one way or the other, not both.`,
+			Example: "  miosa deploy domain-move lunivate.com lunivate-site-v2\n  miosa deploy domain-move lunivate.com --to lunivate-site-v2",
+			Method:  "POST", Path: "/domains/{0}/move", Args: []Arg{idArg("domain"), {Name: "to", Optional: true}},
+			Flags: []Flag{{Name: "to", Usage: "Deployment to move the domain to (id, slug or name)", Field: "to"}},
+			Body:  moveTargetFromArgsOrFlag,
 			Done:  "Moved {0}",
 		},
 		Op{

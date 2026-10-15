@@ -2,12 +2,16 @@ package commands
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	miosa "github.com/Miosa-osa/miosa-go"
+
+	"github.com/Miosa-osa/miosa-cli-go/internal/api"
+	"github.com/Miosa-osa/miosa-cli-go/internal/client"
 )
 
 func newExecCmd() *cobra.Command {
@@ -90,22 +94,75 @@ func runInSandbox(cmd *cobra.Command, nameOrID string, in miosa.CommandInput, ti
 		return die(fmt.Errorf("no command specified - use: miosa exec [name|id] -- <cmd> [args...]"))
 	}
 
-	res, err := c.SDK.Commands.Run(cmd.Context(), lookupComputerID(nameOrID), in)
-	if err != nil {
-		return die(err)
+	target, isComputer := resolveExecTarget(cmd, c, nameOrID)
+
+	var stdout, stderr string
+	var exitCode int
+
+	if isComputer {
+		// A computer runs commands at its own route; the sandbox route answers
+		// 404 for a computer id.
+		var res struct {
+			ExitCode int    `json:"exit_code"`
+			Stdout   string `json:"stdout"`
+			Stderr   string `json:"stderr"`
+			Output   string `json:"output"`
+		}
+		body := map[string]any{"command": in.Command}
+		if in.Cwd != "" {
+			body["cwd"] = in.Cwd
+		}
+		if in.TimeoutSeconds > 0 {
+			body["timeout"] = in.TimeoutSeconds
+		}
+		if err := c.API.Post(cmd.Context(), "/computers/"+url.PathEscape(target)+"/exec", body, &res); err != nil {
+			return die(err)
+		}
+		exitCode, stdout, stderr = res.ExitCode, res.Stdout, res.Stderr
+		if stdout == "" {
+			stdout = res.Output
+		}
+	} else {
+		res, err := c.SDK.Commands.Run(cmd.Context(), lookupComputerID(target), in)
+		if err != nil {
+			return die(err)
+		}
+		exitCode, stdout, stderr = res.ExitCode, res.Stdout, res.Stderr
+		if stdout == "" {
+			stdout = res.Output
+		}
 	}
-	out := res.Stdout
-	if out == "" {
-		out = res.Output
+
+	fmt.Fprint(cmd.OutOrStdout(), stdout)
+	if stderr != "" {
+		fmt.Fprint(cmd.ErrOrStderr(), stderr)
 	}
-	fmt.Fprint(cmd.OutOrStdout(), out)
-	if res.Stderr != "" {
-		fmt.Fprint(cmd.ErrOrStderr(), res.Stderr)
-	}
-	if res.ExitCode != 0 {
-		return &ExitError{Code: res.ExitCode}
+	if exitCode != 0 {
+		return &ExitError{Code: exitCode}
 	}
 	return nil
+}
+
+// resolveExecTarget says which machine a reference names and so which route
+// runs its commands: a sandbox name wins where both exist, because exec began
+// as a sandbox command; then a computer name, a computer's short id, or a
+// computer's full id. A reference neither knows is left to the sandbox route,
+// which answers for it as it always did.
+func resolveExecTarget(cmd *cobra.Command, c *client.Client, ref string) (string, bool) {
+	if api.IsUUID(ref) {
+		if c.API.Get(cmd.Context(), "/computers/"+url.PathEscape(ref), nil, nil) == nil {
+			return ref, true
+		}
+		return ref, false
+	}
+
+	if id, err := c.API.ResolveSandbox(cmd.Context(), ref); err == nil && id != ref {
+		return id, false
+	}
+	if id, err := c.API.ResolveComputer(cmd.Context(), ref); err == nil && id != ref {
+		return id, true
+	}
+	return ref, false
 }
 
 // execRequestTimeout is the HTTP timeout for a command: the command's own

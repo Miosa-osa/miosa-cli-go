@@ -463,16 +463,26 @@ func TestExecRetriesWhileStarting(t *testing.T) {
 }
 
 func TestExecDoesNotRetryOtherErrors(t *testing.T) {
-	calls := 0
+	// Only the exec call itself counts: resolving which machine "sb1" names
+	// costs a lookup or two, and that is not a retry.
+	execCalls := 0
 	newFakeAPI(t, func(c call) (int, string) {
-		calls++
-		return 422, `{"error":{"code":"INVALID","message":"bad"}}`
+		switch {
+		case strings.Contains(c.Path, "/exec"):
+			execCalls++
+			return 422, `{"error":{"code":"INVALID","message":"bad"}}`
+		case strings.Contains(c.Path, "/sandboxes"):
+			return 200, `{"data":{"id":"sb1","name":"sb1"}}`
+		case strings.Contains(c.Path, "/computers"):
+			return 200, `{"total":0,"computers":[]}`
+		}
+		return 404, `{"error":{"code":"NOT_FOUND"}}`
 	})
 	if _, err := run(t, "exec", "sb1", "--", "true"); err == nil {
 		t.Fatal("want error")
 	}
-	if calls != 1 {
-		t.Fatalf("a validation error must not be retried, calls=%d", calls)
+	if execCalls != 1 {
+		t.Fatalf("a validation error must not be retried, exec calls=%d", execCalls)
 	}
 }
 

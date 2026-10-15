@@ -50,6 +50,7 @@ func TestPlatformCommandsSendTheRightRequests(t *testing.T) {
 		{args: []string{"deploy", "domain-add", "my-app", "app.example.com"}, method: "POST", path: "/deployments/" + depID + "/domains", reply: `{"data":{"id":"d1"}}`, body: map[string]any{"hostname": "app.example.com"}},
 		{args: []string{"deploy", "domain-verify", "my-app", "d1"}, method: "POST", path: "/deployments/" + depID + "/domains/d1/verify", reply: `{}`},
 		{args: []string{"deploy", "domain-move", "app.example.com", "--to", "other-app"}, method: "POST", path: "/domains/app.example.com/move", reply: `{"moved":true}`, body: map[string]any{"to": "other-app"}, wantOut: "Moved app.example.com"},
+		{args: []string{"deploy", "domain-move", "app.example.com", "other-app"}, method: "POST", path: "/domains/app.example.com/move", reply: `{"moved":true}`, body: map[string]any{"to": "other-app"}, wantOut: "Moved app.example.com"},
 		{args: []string{"deploy", "domain-rm", "my-app", "d1", "-y"}, method: "DELETE", path: "/deployments/" + depID + "/domains/d1", reply: `{}`, wantOut: "Detached", needsYes: true},
 		// databases
 		{args: []string{"db", "list"}, method: "GET", path: "/databases", reply: list(`{"id":"380330d8-e346-4a0f-950f-000000000000","name":"app-db","engine":"postgresql","state":"running","memory_mb":1024}`), wantOut: "postgresql"},

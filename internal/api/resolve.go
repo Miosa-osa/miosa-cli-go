@@ -127,18 +127,41 @@ func (c *Client) ResolveComputer(ctx context.Context, ref string) (string, error
 		}
 		return "", err
 	}
-	for _, comp := range append(out.Data, out.Computers...) {
+
+	computers := append(out.Data, out.Computers...)
+
+	// A name first: it is what a person types.
+	for _, comp := range computers {
 		if comp.Name == ref {
-			r.mu.Lock()
-			if r.cache == nil {
-				r.cache = map[string]string{}
-			}
-			r.cache[key] = comp.ID
-			r.mu.Unlock()
-			return comp.ID, nil
+			return c.rememberComputer(r, key, comp.ID), nil
 		}
 	}
+
+	// Then the short id the CLI prints (the first 8 characters of the id), as
+	// long as exactly one computer matches it - two would be a guess.
+	short := strings.ToLower(ref)
+	var byID []string
+	for _, comp := range computers {
+		if strings.HasPrefix(strings.ToLower(comp.ID), short) {
+			byID = append(byID, comp.ID)
+		}
+	}
+	if len(byID) == 1 {
+		return c.rememberComputer(r, key, byID[0]), nil
+	}
+
 	return ref, nil // unknown: let the server answer
+}
+
+// rememberComputer caches a resolved id and returns it.
+func (c *Client) rememberComputer(r *Resolver, key, id string) string {
+	r.mu.Lock()
+	if r.cache == nil {
+		r.cache = map[string]string{}
+	}
+	r.cache[key] = id
+	r.mu.Unlock()
+	return id
 }
 
 // agentLiterals are /agents/<segment> routes that are not agent ids.
