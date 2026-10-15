@@ -281,6 +281,9 @@ func (c *Client) resolveNamed(ctx context.Context, res namedResource, ref string
 	}
 	switch len(matches) {
 	case 0:
+		if res.collection == "deployments" {
+			return c.resolveDeploymentRef(ctx, r, key, ref)
+		}
 		return ref, nil
 	case 1:
 		r.mu.Lock()
@@ -406,4 +409,39 @@ func (c *Client) RewritePath(ctx context.Context, path string) (string, error) {
 		return "", err
 	}
 	return prefix + id + tail, nil
+}
+
+// resolveDeploymentRef asks the deployment lookup, which also accepts a short
+// id and a hostname, for a reference that is no deployment's name or slug.
+// Most deployment routes take only the id, so without this `deploy domains
+// 7699e13d` and `deploy domains example.com` were refused while the name
+// worked. A reference the lookup does not know is a typed 404 that names it.
+func (c *Client) resolveDeploymentRef(ctx context.Context, r *Resolver, key, ref string) (string, error) {
+	var one struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	err := c.JSON(ctx, Request{Method: http.MethodGet, Path: "/deployments/" + url.PathEscape(ref), Verbatim: true}, &one)
+	if err != nil {
+		var ae *Error
+		if errors.As(err, &ae) && (ae.Status == http.StatusNotFound || ae.Status == http.StatusBadRequest) {
+			return "", &Error{Status: http.StatusNotFound, Code: "NOT_FOUND",
+				Message: fmt.Sprintf("no deployment matches %q - use its name, short id, hostname or id (see 'miosa deploy list')", ref)}
+		}
+		if errors.As(err, &ae) {
+			return ref, nil
+		}
+		return "", err
+	}
+	if one.Data.ID == "" {
+		return ref, nil
+	}
+	r.mu.Lock()
+	if r.cache == nil {
+		r.cache = map[string]string{}
+	}
+	r.cache[key] = one.Data.ID
+	r.mu.Unlock()
+	return one.Data.ID, nil
 }

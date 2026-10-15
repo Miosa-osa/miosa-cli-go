@@ -21,9 +21,10 @@ function refusesUpdate(argv) {
   return UPDATE_COMMANDS.has(argv[0]) && !argv.some((a) => a === "--check" || a === "-h" || a === "--help");
 }
 
-// npm 11+ can skip install scripts and users can pass --ignore-scripts, so the
-// postinstall download may never have run. Do the same checksum-verified
-// download once, on first use.
+// The platform package (an optionalDependency) carries the binary. When it did
+// not arrive (--omit=optional, a mirror without it) do the checksum-verified
+// download once, on first use. There is no install script: npm 11+ warns about
+// every package that has one and tells users to rerun with --allow-scripts.
 async function locateBinary() {
   try {
     return resolveBinary();

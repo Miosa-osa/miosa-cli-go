@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -68,68 +69,112 @@ func deployOps() []Op {
 	return []Op{
 		Op{
 			Use: "list", Aliases: []string{"ls"}, Short: "List deployments",
-			Method: "GET", Path: "/deployments", Cols: deployCols,
+			Long:    "Lists your deployments with their state and URL. Any of the name, short id, hostname or id shown here works as <deployment> in the other commands.",
+			Example: "  miosa deploy list\n  miosa deploy ls --workspace-id <id> -n 20",
+			Method:  "GET", Path: "/deployments", Cols: deployCols,
 			Flags: []Flag{{Name: "workspace-id", Usage: "Only this workspace", Field: "workspace_id"}, {Name: "limit", Short: "n", Type: "int", Usage: "How many"}},
 		},
 		Op{
 			Use: "logs <deployment>", Short: "Show the running app's log",
-			Method: "GET", Path: "/deployments/{0}/logs", Args: []Arg{d}, Lines: "data.lines",
+			Long:    "Prints the most recent lines the deployment's process wrote. Static sites (uploaded files) run no process, so they have no runtime log.",
+			Example: "  miosa deploy logs my-app\n  miosa deploy logs my-app -n 200",
+			After:   staticEmptyNotice("static deployments have no runtime logs: they serve uploaded files and run no process"),
+			Method:  "GET", Path: "/deployments/{0}/logs", Args: []Arg{d}, Lines: "data.lines",
 			Flags: []Flag{{Name: "lines", Short: "n", Type: "int", Usage: "Number of lines"}},
 		},
 		Op{
 			Use: "requests <deployment>", Short: "Show recent HTTP requests",
-			Method: "GET", Path: "/deployments/{0}/request-logs", Args: []Arg{d}, ListKey: "logs",
+			Long:    "Lists recent HTTP requests the deployment served: time, method, path, status and duration. Requests to static sites are not logged yet; this says so instead of showing an empty table.",
+			Example: "  miosa deploy requests my-app\n  miosa deploy requests my-app --json",
+			After:   staticEmptyNotice("requests to static deployments are not logged yet, so this list is empty even when the site has traffic"),
+			Method:  "GET", Path: "/deployments/{0}/request-logs", Args: []Arg{d}, ListKey: "logs",
 			Cols: []Col{{Head: "TIME", Path: "timestamp", Fmt: "age"}, {Head: "METHOD", Path: "method"}, {Head: "PATH", Path: "path"}, {Head: "STATUS", Path: "status"}, {Head: "MS", Path: "duration_ms"}},
 		},
 		Op{
 			Use: "observe <deployment>", Aliases: []string{"metrics"}, Short: "Invocations, errors and latency",
-			Method: "GET", Path: "/deployments/{0}/observability", Args: []Arg{d},
+			Long:    "Summarizes the deployment's traffic: invocations, errors, error rate, p50/p95 latency and cold starts. Latency is not measured for static sites and shows n/a.",
+			Example: "  miosa deploy observe my-app\n  miosa deploy observe my-app --json",
+			After:   staticObserve,
+			Method:  "GET", Path: "/deployments/{0}/observability", Args: []Arg{d},
 			Detail: []Col{
-				{Head: "Invocations", Path: "summary.invocations"}, {Head: "Errors", Path: "summary.error_count"}, {Head: "Error rate", Path: "summary.error_rate"},
-				{Head: "p50 (ms)", Path: "summary.duration_ms.p50"}, {Head: "p95 (ms)", Path: "summary.duration_ms.p95"}, {Head: "Cold start rate", Path: "summary.cold_start_rate"},
+				{Head: "Invocations", Path: "summary.invocations"}, {Head: "Errors", Path: "summary.error_count"}, {Head: "Error rate", Path: "summary.error_rate", Fmt: "pct"},
+				{Head: "p50 (ms)", Path: "summary.duration_ms.p50"}, {Head: "p95 (ms)", Path: "summary.duration_ms.p95"}, {Head: "Cold start rate", Path: "summary.cold_start_rate", Fmt: "pct"},
 			},
 		},
 		Op{
 			Use: "releases <deployment>", Short: "List releases",
-			Method: "GET", Path: "/deployments/{0}/releases", Args: []Arg{d},
+			Long:    "Lists the deployment's releases: each time a version was released to serve. 'miosa deploy versions' lists the uploaded versions and marks the live one.",
+			Example: "  miosa deploy releases my-app\n  miosa deploy versions my-app",
+			Method:  "GET", Path: "/deployments/{0}/releases", Args: []Arg{d},
 			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "STATE", Path: "state"}, {Head: "PORT", Path: "port"}, {Head: "READY", Path: "ready_at", Fmt: "age"}, {Head: "CREATED", Path: "created_at", Fmt: "age"}},
 		},
 		Op{
-			Use: "rollback <deployment>", Short: "Return to an earlier version",
-			Method: "POST", Path: "/deployments/{0}/rollback", Args: []Arg{d}, Confirm: "Roll {0} back?", Done: "Rolled back {0}",
-			Flags: []Flag{{Name: "to", Usage: "Version id to return to (default: the previous one)", Field: "version_id"}},
+			Use: "rollback <deployment>", Short: "Make an earlier version live again",
+			Long: `Switches the live version back to the one you name with --to (a version
+number, short id or full id from 'miosa deploy versions'). Before asking for
+confirmation it prints the version live now and the exact version it will
+switch to. Without --to it lists the versions and changes nothing: it never
+guesses which one you meant.`,
+			Example: "  miosa deploy versions my-app\n  miosa deploy rollback my-app --to 67cf439d\n  miosa deploy rollback my-app --to 3 --yes",
+			Method:  "POST", Path: "/deployments/{0}/rollback", Args: []Arg{d}, Confirm: "Roll {0} back?", Done: "Rolled back {0}",
+			Flags:  []Flag{{Name: "to", Usage: "Version to make live: number, short id or id (see 'miosa deploy versions')", Field: "version_id"}},
+			Before: rollbackBefore,
+			// The API refuses a rollback without an Idempotency-Key (found live
+			// on 2.3.7's QA run: every CLI rollback had been refused).
+			Idempotent: true,
 		},
 		Op{
 			Use: "redeploy <deployment>", Short: "Build and release again from the same source",
-			Method: "POST", Path: "/deployments/{0}/redeploy", Args: []Arg{d}, Done: "Redeploying {0}",
+			Long:    "Rebuilds the deployment from its configured source (repository branch or sandbox) and releases the result. An uploaded static site has nothing to rebuild: push a new version with 'miosa deploy push' instead.",
+			Example: "  miosa deploy redeploy my-app",
+			Method:  "POST", Path: "/deployments/{0}/redeploy", Args: []Arg{d}, Done: "Redeploying {0}",
 		},
 		Op{
 			Use: "stop <deployment>", Short: "Stop a deployment",
-			Method: "POST", Path: "/deployments/{0}/stop", Args: []Arg{d}, Confirm: "Stop deployment {0}? It stops serving traffic.", Done: "Stopped {0}",
+			Long:    "Stops serving traffic. The deployment, its versions and domains are kept; 'miosa deploy redeploy' or a new push brings it back.",
+			Example: "  miosa deploy stop my-app\n  miosa deploy stop my-app --yes",
+			Method:  "POST", Path: "/deployments/{0}/stop", Args: []Arg{d}, Confirm: "Stop deployment {0}? It stops serving traffic.", Done: "Stopped {0}",
 		},
 		Op{
 			Use: "rm <deployment>", Aliases: []string{"delete"}, Short: "Delete a deployment",
-			Method: "DELETE", Path: "/deployments/{0}", Args: []Arg{d}, Confirm: "Permanently delete deployment {0}?", Done: "Deleted {0}",
+			Long: `Deletes the deployment, its versions and its URLs. Custom domains attached
+to it stop serving, so rm lists them and refuses while any are attached: move
+them first with 'miosa deploy domain-move <domain> <other-deployment>', or pass
+--with-domains to delete the deployment and detach them anyway.`,
+			Example: "  miosa deploy rm old-site\n  miosa deploy domain-move example.com new-site && miosa deploy rm old-site",
+			Method:  "DELETE", Path: "/deployments/{0}", Args: []Arg{d}, Confirm: "Permanently delete deployment {0}?", Done: "Deleted {0}",
+			Flags:  []Flag{{Name: "with-domains", Type: "bool", Usage: "Delete even though custom domains are attached (they go offline)", Field: "with_domains"}},
+			Query:  func(_ []string, q url.Values) error { q.Del("with_domains"); return nil },
+			Before: rmBefore,
 		},
 		Op{
 			Use: "builds <deployment>", Short: "List builds",
-			Method: "GET", Path: "/deployments/{0}/builds", Args: []Arg{d}, ListKey: "data",
+			Long:    "Lists the builds of a repository or sandbox deployment. Uploaded static sites are not built, so they have none.",
+			Example: "  miosa deploy builds my-app",
+			After:   staticEmptyNotice("uploaded sites have no builds: the files are served as uploaded"),
+			Method:  "GET", Path: "/deployments/{0}/builds", Args: []Arg{d}, ListKey: "data",
 			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "STATE", Path: "state"}, {Head: "CREATED", Path: "inserted_at", Fmt: "age"}},
 		},
 		Op{
 			Use: "env <deployment>", Short: "List the deployment's environment variable names",
-			Method: "GET", Path: "/deployments/{0}/env", Args: []Arg{d}, ListKey: "env_vars",
+			Long:    "Lists the names of the deployment's environment variables and when each changed. Values are encrypted at rest and never printed.",
+			Example: "  miosa deploy env my-app",
+			Method:  "GET", Path: "/deployments/{0}/env", Args: []Arg{d}, ListKey: "env_vars",
 			Cols: []Col{{Head: "NAME", Path: "name"}, {Head: "UPDATED", Path: "updated_at", Fmt: "age"}},
 		},
 		Op{
 			Use: "env-set <deployment>", Short: "Set the deployment's environment variables (values are encrypted at rest)",
-			Method: "POST", Path: "/deployments/{0}/env", Args: []Arg{d},
+			Long:    "Sets one or more environment variables. They apply to the next release: run 'miosa deploy redeploy' (or push a new version) to use them.",
+			Example: "  miosa deploy env-set my-app --set DATABASE_URL=postgres://... --set FEATURE=on",
+			Method:  "POST", Path: "/deployments/{0}/env", Args: []Arg{d},
 			Flags: []Flag{{Name: "set", Usage: "Environment variable KEY=VALUE (repeatable)", Type: "kv", Field: "env", Required: true}},
 			Done:  "Updated the environment of {0}",
 		},
 		Op{
 			Use: "domains <deployment>", Short: "List custom domains",
-			Method: "GET", Path: "/deployments/{0}/domains", Args: []Arg{d},
+			Long:    "Lists the custom domains attached to the deployment, with their DNS verification and serving status.",
+			Example: "  miosa deploy domains my-app\n  miosa deploy domains 7699e13d\n  miosa deploy domains example.com",
+			Method:  "GET", Path: "/deployments/{0}/domains", Args: []Arg{d},
 			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "HOSTNAME", Path: "hostname"}, {Head: "STATUS", Path: "status"}, {Head: "VERIFIED", Path: "verified"}},
 		},
 		Op{
@@ -205,7 +250,9 @@ argument, or --to; give it one way or the other, not both.`,
 		},
 		Op{
 			Use: "domain-rm <deployment> <domain-id>", Short: "Detach a custom domain",
-			Method: "DELETE", Path: "/deployments/{0}/domains/{1}", Args: []Arg{d, idArg("domain")}, Confirm: "Detach domain {1}?", Done: "Detached {1}",
+			Long:    "Detaches the domain: it stops serving this deployment. To serve it from another deployment without touching DNS, use 'miosa deploy domain-move' instead. <domain-id> is the id from 'miosa deploy domains'.",
+			Example: "  miosa deploy domains my-app\n  miosa deploy domain-rm my-app 3f2a91c0",
+			Method:  "DELETE", Path: "/deployments/{0}/domains/{1}", Args: []Arg{d, idArg("domain")}, Confirm: "Detach domain {1}?", Done: "Detached {1}",
 		},
 	}
 }

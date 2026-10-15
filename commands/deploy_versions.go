@@ -160,6 +160,22 @@ func runDeployDiff(cmd *cobra.Command, fromRef, toRef, deployment, dir string) e
 		return die(err)
 	}
 
+	// Version refs may be a number, a short id or the id: resolve both against
+	// the deployment's versions so the help's own short-id example works.
+	var vs struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := c.API.Get(cmd.Context(), "/deployments/"+url.PathEscape(deployment)+"/versions", nil, &vs); err != nil {
+		return die(fmt.Errorf("deployment %s: %w", deployment, err))
+	}
+	for _, ref := range []*string{&fromRef, &toRef} {
+		v, err := matchVersion(vs.Data, *ref)
+		if err != nil {
+			return usagef("deployment %s: version %v", deployment, err)
+		}
+		*ref, _ = v["id"].(string)
+	}
+
 	from, err := fetchVersionManifest(cmd, c, deployment, fromRef)
 	if err != nil {
 		return die(err)

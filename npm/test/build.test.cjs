@@ -131,3 +131,14 @@ test("postinstall fallback surfaces HTTP failures", async () => {
     /404/,
   );
 });
+
+// A clean `npm i -g @miosa/cli` must print no install-scripts warning: npm 11+
+// warns about any package with an install script. The binary comes from the
+// optional platform package, or the launcher's first-run download.
+test("the @miosa/cli package declares no install scripts", () => {
+  const pkg = require("../cli/package.json");
+  for (const hook of ["preinstall", "install", "postinstall"]) {
+    assert.ok(!(pkg.scripts && pkg.scripts[hook]), `@miosa/cli must not declare a ${hook} script`);
+  }
+  assert.ok(Object.keys(pkg.optionalDependencies || {}).length >= 5, "the platform packages stay optionalDependencies");
+});

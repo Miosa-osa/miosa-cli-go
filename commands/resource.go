@@ -417,13 +417,12 @@ func setPath(m map[string]any, path string, v any) {
 }
 
 func (o Op) run(cmd *cobra.Command, args []string, yes bool) error {
-	req, err := o.buildRequest(cmd, args)
-	if err != nil {
-		return usagef("%v", err)
-	}
-	if o.Confirm != "" && !yes {
-		if err := confirmDestructive(cmd, expand(o.Confirm, o.pathArgs(args))); err != nil {
-			return err
+	display := o.pathArgs(args)
+	// Validate the usage before signing in; --file - reads standard input,
+	// which can be read only once, so that body is checked when it is built.
+	if !o.FileBody {
+		if _, err := o.buildRequest(cmd, args); err != nil {
+			return usagef("%v", err)
 		}
 	}
 	var c *api.Client
@@ -440,6 +439,7 @@ func (o Op) run(cmd *cobra.Command, args []string, yes bool) error {
 		}
 		c = bc.API
 	}
+	cmd.SetContext(withDisplayArgs(cmd.Context(), display))
 	if o.Before != nil {
 		if err := o.Before(cmd, c); err != nil {
 			if errors.Is(err, errRequestHandled) {
@@ -448,9 +448,20 @@ func (o Op) run(cmd *cobra.Command, args []string, yes bool) error {
 			return err
 		}
 	}
+	// Built after Before: a hook may settle a flag (a short version id becomes
+	// the full one) and the request must carry what the hook printed.
+	req, err := o.buildRequest(cmd, args)
+	if err != nil {
+		return usagef("%v", err)
+	}
+	if o.Confirm != "" && !yes {
+		if err := confirmDestructive(cmd, expand(o.Confirm, display)); err != nil {
+			return err
+		}
+	}
 	resp, err := c.JSONAny(cmd.Context(), req)
 	if err != nil {
-		return die(err)
+		return die(o.notFoundContext(err, display))
 	}
 	if o.After != nil {
 		if err := o.After(cmd, resp); err != nil {
@@ -483,6 +494,25 @@ func confirmDestructive(cmd *cobra.Command, what string) error {
 		return die(fmt.Errorf("canceled"))
 	}
 	return usagef("%s - pass --yes to confirm", what)
+}
+
+// confirmByTypedName asks the person to type the resource's name (or slug) on
+// a terminal and refuses off one: a delete never happens on a stray "y".
+func confirmByTypedName(cmd *cobra.Command, what string, names ...string) error {
+	in := cmd.InOrStdin()
+	f, isFile := in.(*os.File)
+	if !isFile || !term.IsTerminal(int(f.Fd())) {
+		return usagef("%s - pass --yes to confirm", what)
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "%s Type %q to confirm: ", what, names[0])
+	line, _ := bufio.NewReader(in).ReadString('\n')
+	got := strings.TrimSpace(line)
+	for _, n := range names {
+		if n != "" && got == n {
+			return nil
+		}
+	}
+	return die(fmt.Errorf("canceled: the name did not match"))
 }
 
 func (o Op) render(cmd *cobra.Command, args []string, resp any) error {
@@ -660,6 +690,11 @@ func formatValue(v any, format string) string {
 	case "clip":
 		if s, ok := v.(string); ok {
 			return clipText(s, 60)
+		}
+	case "pct":
+		// A rate in [0,1] as a percentage: 0.0123 -> "1.2%".
+		if n, ok := toFloat(v); ok {
+			return strconv.FormatFloat(n*100, 'f', 1, 64) + "%"
 		}
 	}
 	switch t := v.(type) {

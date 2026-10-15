@@ -370,6 +370,11 @@ func deployFromGit(ctx context.Context, c *client.Client, p *output.Printer, f *
 	if len(env) > 0 {
 		body["env"] = env
 	}
+	if id, name, found, err := existingDeploymentByName(ctx, c, f.name); err != nil {
+		return nil, err
+	} else if found {
+		return nil, usagef("deployment %q (%s) already exists - rebuild it with 'miosa deploy redeploy %s', or pass a different name for a new deployment", name, shortRef(id), name)
+	}
 	if !isJSON() {
 		p.Line("Creating deployment %q from %s...", f.name, f.git)
 	}
@@ -451,6 +456,18 @@ func deployFromDir(ctx context.Context, c *client.Client, p *output.Printer, f *
 		}
 	}
 	createNew := target == ""
+	// An unlinked folder whose name matches an existing deployment is that
+	// deployment: push a version to it, never create a second one beside it.
+	if createNew && f.name != "" {
+		if id, name, found, err := existingDeploymentByName(ctx, c, f.name); err != nil {
+			return nil, err
+		} else if found {
+			target, linkedName, createNew = id, name, false
+			if !isJSON() {
+				p.Line("Deployment %q (%s) already exists: pushing a new version to it and linking this folder.", name, shortRef(id))
+			}
+		}
+	}
 
 	var sid, depID string
 	if createNew {
@@ -527,11 +544,10 @@ func deployFromDir(ctx context.Context, c *client.Client, p *output.Printer, f *
 			return nil, err
 		}
 	}
-	if createNew {
-		// Remember the deployment so the next 'miosa deploy' in this folder
-		// pushes a new version instead of creating a duplicate.
-		_ = writeDeploymentLink(root, deploymentLink{DeploymentID: out.ID, Name: f.name})
-	}
+	// Remember (or refresh) the deployment so the next 'miosa deploy' in this
+	// folder pushes a new version instead of creating a duplicate. Written on
+	// every push too, so folders deployed before the link existed get one.
+	_ = writeDeploymentLink(root, deploymentLink{DeploymentID: out.ID, Name: firstNonEmpty(out.Name, linkedName, f.name)})
 	return out, nil
 }
 
@@ -799,7 +815,19 @@ func runDeployCurrentDir(cmd *cobra.Command, args []string, flags *deployFlags) 
 		}
 	}
 	if !f.yes {
-		if err := confirmDestructive(cmd, fmt.Sprintf("Deploy the current directory as %q?", orDefault(f.name, "this directory"))); err != nil {
+		prompt := fmt.Sprintf("Deploy the current directory as a new deployment %q?", orDefault(f.name, "this directory"))
+		if f.git == "" && f.deployment == "" && f.name != "" {
+			if _, linked := readDeploymentLink("."); !linked {
+				if c, _, err := buildClient(); err == nil {
+					if id, name, found, _ := existingDeploymentByName(cmd.Context(), c, f.name); found {
+						prompt = fmt.Sprintf("Deployment %q (%s) already exists. Push this directory as a new version of it and link this folder?", name, shortRef(id))
+					}
+				}
+			} else {
+				prompt = fmt.Sprintf("Push the current directory as a new version of %q?", f.name)
+			}
+		}
+		if err := confirmDestructive(cmd, prompt); err != nil {
 			return err
 		}
 	}
@@ -850,4 +878,29 @@ func normalizeGitURL(u string) string {
 		u = "https://github.com/" + rest
 	}
 	return strings.TrimSuffix(u, ".git")
+}
+
+// existingDeploymentByName reports the deployment whose name (or slug) is
+// exactly name. The lookup route also accepts short ids and hostnames, so a
+// hit counts only when the returned name or slug is the one asked for.
+func existingDeploymentByName(ctx context.Context, c *client.Client, name string) (id, found string, ok bool, err error) {
+	var resp struct {
+		Data map[string]any `json:"data"`
+	}
+	if gerr := c.API.Get(ctx, "/deployments/"+url.PathEscape(name), nil, &resp); gerr != nil {
+		if ae, isAPI := asAPIError(gerr); isAPI && (ae.Status == 404 || ae.Status == 400) {
+			return "", "", false, nil
+		}
+		if ae, isAPI := asAPIError(gerr); isAPI && strings.EqualFold(ae.Code, "AMBIGUOUS_DEPLOYMENT") {
+			return "", "", false, fmt.Errorf("more than one deployment is named %q - pass --deployment <id>: %w", name, gerr)
+		}
+		return "", "", false, gerr
+	}
+	gotName, _ := resp.Data["name"].(string)
+	gotSlug, _ := resp.Data["slug"].(string)
+	if !strings.EqualFold(gotName, name) && !strings.EqualFold(gotSlug, name) {
+		return "", "", false, nil
+	}
+	id, _ = resp.Data["id"].(string)
+	return id, firstNonEmpty(gotName, gotSlug, name), id != "", nil
 }

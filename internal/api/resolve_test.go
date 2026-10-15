@@ -26,6 +26,9 @@ func TestRewritePath(t *testing.T) {
 			w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"My App","slug":"my-app"},` +
 				`{"id":"22222222-2222-2222-2222-222222222222","name":"Dup App","slug":"dup-app"},` +
 				`{"id":"33333333-3333-3333-3333-333333333333","name":"Dup App","slug":"dup-app"}]}`))
+		case "/deployments/8ba07e95", "/deployments/www.example.com":
+			// The single lookup accepts a short id and a hostname.
+			w.Write([]byte(`{"data":{"id":"` + id1 + `","name":"My App"}}`))
 		case "/workspaces":
 			w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"Acme","slug":"acme"}]}`))
 		case "/agents":
@@ -68,7 +71,8 @@ func TestRewritePath(t *testing.T) {
 		{"/deployments/my-app/logs", "/deployments/" + id1 + "/logs"},
 		{"/deployments/My App", "/deployments/" + id1},
 		{"/deployments/drop/sessions", "/deployments/drop/sessions"},
-		{"/deployments/nope", "/deployments/nope"},
+		{"/deployments/8ba07e95/domains", "/deployments/" + id1 + "/domains"},
+		{"/deployments/www.example.com/domains", "/deployments/" + id1 + "/domains"},
 		{"/workspaces/acme/stats?x=1", "/workspaces/" + id1 + "/stats?x=1"},
 		{"/workflows/runs/abc", "/workflows/runs/abc"},
 		{"/sandboxes/unknown-name/exec", "/sandboxes/unknown-name/exec"}, // 404 by name: left for the server to judge
@@ -77,6 +81,16 @@ func TestRewritePath(t *testing.T) {
 		got, err := c.RewritePath(ctx, tc.in)
 		if err != nil || got != tc.want {
 			t.Errorf("RewritePath(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
+		}
+	}
+	// A deployment reference nothing knows is a 404 that names it, not a
+	// BAD_REQUEST from a route that only takes ids.
+	if _, err := c.RewritePath(ctx, "/deployments/nope/domains"); err == nil {
+		t.Error("an unknown deployment reference must be an error")
+	} else {
+		var ae *Error
+		if !errors.As(err, &ae) || ae.Status != http.StatusNotFound || !strings.Contains(ae.Message, `no deployment matches "nope"`) {
+			t.Errorf("unknown deployment err = %#v", err)
 		}
 	}
 	// A name two deployments share is refused with both ids, not guessed.
