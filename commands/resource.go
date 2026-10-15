@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -110,10 +111,17 @@ type Op struct {
 	// Before runs after the client is built and before the request is sent; an
 	// error stops the command. Used for server-side preview gates.
 	Before func(cmd *cobra.Command, c *api.Client) error
+	// After runs on the decoded response before it is rendered. An error stops the
+	// command (the request has already been made).
+	After func(cmd *cobra.Command, resp any) error
 	// Idempotent adds --idempotency-key and sends an Idempotency-Key header (a
 	// generated one when the flag is not given), for routes that require it.
 	Idempotent bool
 }
+
+// errRequestHandled, returned by Op.Before, means the hook already did the
+// whole job: the declared request is not sent and the command succeeds.
+var errRequestHandled = errors.New("request handled by the command")
 
 // routeAnnotation records the API route a declarative command calls; the
 // generated API map reads it.
@@ -434,12 +442,20 @@ func (o Op) run(cmd *cobra.Command, args []string, yes bool) error {
 	}
 	if o.Before != nil {
 		if err := o.Before(cmd, c); err != nil {
+			if errors.Is(err, errRequestHandled) {
+				return nil
+			}
 			return err
 		}
 	}
 	resp, err := c.JSONAny(cmd.Context(), req)
 	if err != nil {
 		return die(err)
+	}
+	if o.After != nil {
+		if err := o.After(cmd, resp); err != nil {
+			return err
+		}
 	}
 	return o.render(cmd, o.pathArgs(args), resp)
 }
@@ -636,6 +652,10 @@ func formatValue(v any, format string) string {
 	case "hours":
 		if n, ok := toFloat(v); ok {
 			return strconv.FormatFloat(n/3600, 'f', 1, 64)
+		}
+	case "sha":
+		if s, ok := v.(string); ok && len(s) > 12 {
+			return s[:12]
 		}
 	case "clip":
 		if s, ok := v.(string); ok {

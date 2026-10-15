@@ -37,7 +37,6 @@ func TestPlatformCommandsSendTheRightRequests(t *testing.T) {
 		{args: []string{"deploy", "logs", "my-app", "-n", "5"}, method: "GET", path: "/deployments/" + depID + "/logs", reply: `{"data":{"lines":["listening on 3000"]}}`, query: map[string]string{"lines": "5"}, wantOut: "listening on 3000"},
 		{args: []string{"deploy", "requests", "my-app"}, method: "GET", path: "/deployments/" + depID + "/request-logs", reply: `{"logs":[{"method":"GET","path":"/","status":200,"duration_ms":4}]}`, wantOut: "200"},
 		{args: []string{"deploy", "observe", "my-app"}, method: "GET", path: "/deployments/" + depID + "/observability", reply: `{"summary":{"invocations":330,"error_count":0,"duration_ms":{"p50":3,"p95":9}}}`, wantOut: "330"},
-		{args: []string{"deploy", "versions", "my-app"}, method: "GET", path: "/deployments/" + depID + "/versions", reply: list(`{"id":"160feacd-0f49-4717-bb09-fff668f8ccc6","version_number":3,"state":"ready"}`), wantOut: "160feacd"},
 		{args: []string{"deploy", "releases", "my-app"}, method: "GET", path: "/deployments/" + depID + "/releases", reply: list(`{"id":"e63d6a94-304c-41e4-a028-ef37b2a3d906","state":"ready","port":8080}`), wantOut: "8080"},
 		{args: []string{"deploy", "promote", "my-app", "rel-1"}, method: "POST", path: "/deployments/" + depID + "/releases/rel-1/promote", reply: `{}`, wantOut: "Promoted release rel-1"},
 		{args: []string{"deploy", "redeploy", "my-app"}, method: "POST", path: "/deployments/" + depID + "/redeploy", reply: `{}`, wantOut: "Redeploying my-app"},
@@ -50,6 +49,7 @@ func TestPlatformCommandsSendTheRightRequests(t *testing.T) {
 		{args: []string{"deploy", "domains", "my-app"}, method: "GET", path: "/deployments/" + depID + "/domains", reply: list(`{"id":"d1d1d1d1-0000-0000-0000-000000000000","hostname":"app.example.com","status":"pending"}`), wantOut: "app.example.com"},
 		{args: []string{"deploy", "domain-add", "my-app", "app.example.com"}, method: "POST", path: "/deployments/" + depID + "/domains", reply: `{"data":{"id":"d1"}}`, body: map[string]any{"hostname": "app.example.com"}},
 		{args: []string{"deploy", "domain-verify", "my-app", "d1"}, method: "POST", path: "/deployments/" + depID + "/domains/d1/verify", reply: `{}`},
+		{args: []string{"deploy", "domain-move", "app.example.com", "--to", "other-app"}, method: "POST", path: "/domains/app.example.com/move", reply: `{"moved":true}`, body: map[string]any{"to": "other-app"}, wantOut: "Moved app.example.com"},
 		{args: []string{"deploy", "domain-rm", "my-app", "d1", "-y"}, method: "DELETE", path: "/deployments/" + depID + "/domains/d1", reply: `{}`, wantOut: "Detached", needsYes: true},
 		// databases
 		{args: []string{"db", "list"}, method: "GET", path: "/databases", reply: list(`{"id":"380330d8-e346-4a0f-950f-000000000000","name":"app-db","engine":"postgresql","state":"running","memory_mb":1024}`), wantOut: "postgresql"},

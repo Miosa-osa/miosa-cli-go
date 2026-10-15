@@ -47,10 +47,6 @@ func deployOps() []Op {
 			Flags: []Flag{{Name: "workspace-id", Usage: "Only this workspace", Field: "workspace_id"}, {Name: "limit", Short: "n", Type: "int", Usage: "How many"}},
 		},
 		Op{
-			Use: "get <deployment>", Aliases: []string{"show"}, Short: "Show a deployment",
-			Method: "GET", Path: "/deployments/{0}", Args: []Arg{d}, Detail: deployDetail,
-		},
-		Op{
 			Use: "logs <deployment>", Short: "Show the running app's log",
 			Method: "GET", Path: "/deployments/{0}/logs", Args: []Arg{d}, Lines: "data.lines",
 			Flags: []Flag{{Name: "lines", Short: "n", Type: "int", Usage: "Number of lines"}},
@@ -69,18 +65,9 @@ func deployOps() []Op {
 			},
 		},
 		Op{
-			Use: "versions <deployment>", Short: "List versions",
-			Method: "GET", Path: "/deployments/{0}/versions", Args: []Arg{d},
-			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "STATE", Path: "state"}, {Head: "SOURCE", Path: "metadata.publish_source"}, {Head: "CREATED", Path: "created_at", Fmt: "age"}},
-		},
-		Op{
 			Use: "releases <deployment>", Short: "List releases",
 			Method: "GET", Path: "/deployments/{0}/releases", Args: []Arg{d},
 			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "STATE", Path: "state"}, {Head: "PORT", Path: "port"}, {Head: "READY", Path: "ready_at", Fmt: "age"}, {Head: "CREATED", Path: "created_at", Fmt: "age"}},
-		},
-		Op{
-			Use: "promote <deployment> <release>", Short: "Make a release the live one",
-			Method: "POST", Path: "/deployments/{0}/releases/{1}/promote", Args: []Arg{d, idArg("release")}, Done: "Promoted release {1}",
 		},
 		Op{
 			Use: "rollback <deployment>", Short: "Return to an earlier version",
@@ -122,15 +109,71 @@ func deployOps() []Op {
 		},
 		Op{
 			Use: "domain-add <deployment> <hostname>", Short: "Attach a custom domain (then add the DNS record it shows)",
-			Method: "POST", Path: "/deployments/{0}/domains", Args: []Arg{d, idArg("hostname")},
+			Long: `Attaches the hostname and prints the DNS records to add. --dns chooses what
+to do with them:
+
+  --dns zone        print them as DNS zone-file lines to paste (BIND syntax)
+  --dns cloudflare  create them in your Cloudflare zone, using the value of
+                    CLOUDFLARE_API_TOKEN (needs Zone:Read and DNS:Edit). It is
+                    used by this command only and is never sent to MIOSA.
+
+--redirect-to H makes this host answer with a permanent redirect to H, keeping
+the path and query. H must be this name with or without "www." and must also be
+attached to the deployment and verified, or nothing is redirected.
+
+Registrars without a records API (Namecheap's replaces a whole zone and needs an
+allow-listed IP) are not automated: use --dns zone and paste the lines.`,
+			Example: "  miosa deploy domain-add my-app www.example.com --dns cloudflare\n  miosa deploy domain-add my-app www.example.com --redirect-to example.com",
+			Method:  "POST", Path: "/deployments/{0}/domains", Args: []Arg{d, idArg("hostname")},
+			Flags: []Flag{
+				{Name: "dns", Usage: "What to do with the DNS records: zone | cloudflare", Enum: []string{"zone", "cloudflare"}},
+				{Name: "redirect-to", Usage: "Redirect this host to the other form of the same name (www.example.com -> example.com or the reverse)", Field: "redirect_to"},
+			},
 			Body: func(args []string, body map[string]any) (map[string]any, error) {
+				delete(body, "dns") // client-side only
 				body["hostname"] = args[1]
+				if target, _ := body["redirect_to"].(string); target != "" {
+					policy, err := redirectPolicyFor(args[1], target)
+					if err != nil {
+						return nil, err
+					}
+					body["redirect_policy"] = policy
+				}
+				delete(body, "redirect_to")
 				return body, nil
 			},
+			After: domainAddDNS,
 		},
 		Op{
-			Use: "domain-verify <deployment> <domain-id>", Short: "Check a domain's DNS",
-			Method: "POST", Path: "/deployments/{0}/domains/{1}/verify", Args: []Arg{d, idArg("domain")},
+			Use: "domain-verify <deployment> <domain-id>", Short: "Check a domain's DNS (--wait: until it is live)",
+			Long: `Checks the domain's DNS once. With --wait it keeps checking every 10 seconds
+until DNS and the TLS certificate are right and the site answers, then prints
+"live https://...". On every check that fails it prints the exact record: type,
+name, what is expected and what was observed. On timeout it prints what is still
+missing and exits non-zero. <domain-id> may be the hostname when using --wait.`,
+			Example: "  miosa deploy domain-verify my-app www.example.com --wait --timeout 15m",
+			Method:  "POST", Path: "/deployments/{0}/domains/{1}/verify", Args: []Arg{d, idArg("domain")},
+			Flags: []Flag{
+				{Name: "wait", Type: "bool", Usage: "Wait until the domain is live (DNS + TLS + serving)"},
+				{Name: "timeout", Default: "10m", Usage: "With --wait, give up after this long (for example 15m)"},
+			},
+			Body: func(args []string, body map[string]any) (map[string]any, error) {
+				delete(body, "wait") // client-side only
+				delete(body, "timeout")
+				return body, nil
+			},
+			Before: waitDomainBefore,
+		},
+		Op{
+			Use: "domain-move <domain>", Short: "Move a custom domain to another deployment (no DNS change)",
+			Long: `Repoints a domain you already verified at a different deployment. The
+verification, TLS and redirect settings move with it, so you change no DNS
+record and verify nothing again; the new deployment serves it within seconds.
+<domain> is the hostname; --to is the target deployment (id, slug or name).`,
+			Example: "  miosa deploy domain-move lunivate.com --to lunivate-site-v2",
+			Method:  "POST", Path: "/domains/{0}/move", Args: []Arg{idArg("domain")},
+			Flags: []Flag{{Name: "to", Usage: "Deployment to move the domain to (id, slug or name)", Field: "to", Required: true}},
+			Done:  "Moved {0}",
 		},
 		Op{
 			Use: "domain-rm <deployment> <domain-id>", Short: "Detach a custom domain",

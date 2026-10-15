@@ -248,18 +248,33 @@ func (c *Client) resolveNamed(ctx context.Context, res namedResource, ref string
 		}
 		return "", err
 	}
+	// A name shared by two members is refused with the candidates, never
+	// guessed: the same shape the API answers with for an ambiguous reference.
+	var matches []string
 	for _, row := range out.Data {
 		if row.Slug == ref || row.Name == ref {
-			r.mu.Lock()
-			if r.cache == nil {
-				r.cache = map[string]string{}
-			}
-			r.cache[key] = row.ID
-			r.mu.Unlock()
-			return row.ID, nil
+			matches = append(matches, row.ID)
 		}
 	}
-	return ref, nil
+	switch len(matches) {
+	case 0:
+		return ref, nil
+	case 1:
+		r.mu.Lock()
+		if r.cache == nil {
+			r.cache = map[string]string{}
+		}
+		r.cache[key] = matches[0]
+		r.mu.Unlock()
+		return matches[0], nil
+	default:
+		return "", &Error{
+			Status:  http.StatusConflict,
+			Code:    "AMBIGUOUS_DEPLOYMENT",
+			Message: fmt.Sprintf("more than one %s matches %q; pass its id", res.label, ref),
+			Details: map[string]any{"matches": matches},
+		}
+	}
 }
 
 // ResolveWorkspace returns the id of a workspace given its slug, name or id.

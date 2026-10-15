@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,7 +23,9 @@ func TestRewritePath(t *testing.T) {
 		case "/computers":
 			w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"desk"},{"id":"22222222-2222-2222-2222-222222222222","name":"other"}]}`))
 		case "/deployments":
-			w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"My App","slug":"my-app"}]}`))
+			w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"My App","slug":"my-app"},` +
+				`{"id":"22222222-2222-2222-2222-222222222222","name":"Dup App","slug":"dup-app"},` +
+				`{"id":"33333333-3333-3333-3333-333333333333","name":"Dup App","slug":"dup-app"}]}`))
 		case "/workspaces":
 			w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"Acme","slug":"acme"}]}`))
 		case "/agents":
@@ -76,6 +79,18 @@ func TestRewritePath(t *testing.T) {
 			t.Errorf("RewritePath(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
 		}
 	}
+	// A name two deployments share is refused with both ids, not guessed.
+	if _, err := c.RewritePath(ctx, "/deployments/dup-app"); err == nil {
+		t.Error("an ambiguous deployment name must be an error")
+	} else {
+		var ae *Error
+		if !errors.As(err, &ae) || ae.Code != "AMBIGUOUS_DEPLOYMENT" || ae.Status != http.StatusConflict {
+			t.Errorf("ambiguous name err = %#v", err)
+		} else if ids, _ := ae.Details["matches"].([]string); len(ids) != 2 {
+			t.Errorf("matches = %#v", ae.Details["matches"])
+		}
+	}
+
 	before := atomic.LoadInt32(&lookups)
 	if _, err := c.RewritePath(ctx, "/sandboxes/my-box/exec"); err != nil {
 		t.Fatal(err)
