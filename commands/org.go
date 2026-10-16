@@ -29,7 +29,7 @@ func init() {
 func newOrgCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "org",
-		Short: "Which organization pays for new machines, and its members and limits",
+		Short: "The organization you work in, who pays for new machines, members and limits",
 		Long: `Show and choose the organization that pays for new sandboxes and computers.
 
   miosa org                       who pays right now
@@ -38,6 +38,8 @@ func newOrgCmd() *cobra.Command {
   miosa org bill --clear          bill the organization your key belongs to again
   miosa --bill-to acme create my-box  bill one create to acme without changing the setting
   miosa --org acme deploy list        work in acme; refused (exit 3) if this key does not act in acme
+  miosa org use acme              work in acme from now on (a key that covers several orgs)
+  miosa org select                change which organizations this terminal may work in
   miosa org members               members of the organization your key belongs to
   miosa org invite dana@example.com
   miosa org caps                  per-member spend and concurrency caps
@@ -58,6 +60,8 @@ one are locked to that organization and cannot bill another.`,
 			RunE:    runOrgList,
 		},
 		newOrgBillCmd(),
+		newOrgUseCmd(),
+		newOrgSelectCmd(),
 		&cobra.Command{
 			Use:   "members",
 			Short: "List the members of the organization your key belongs to",

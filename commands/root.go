@@ -60,8 +60,8 @@ Exit codes: 0 ok, 1 error, 2 usage, 3 not signed in or forbidden, 4 not found,
 5 conflict or invalid input, 6 rate limited, 7 server or network error. A command
 that ran remotely (exec, ssh) exits with the remote command's status.
 
-Environment: MIOSA_API_KEY, MIOSA_BASE_URL, MIOSA_PROFILE, MIOSA_OUTPUT,
-MIOSA_RETRIES, MIOSA_NO_UPDATE_NOTICE.
+Environment: MIOSA_API_KEY, MIOSA_BASE_URL, MIOSA_PROFILE, MIOSA_ORG,
+MIOSA_BILL_TO, MIOSA_OUTPUT, MIOSA_RETRIES, MIOSA_NO_UPDATE_NOTICE.
 
 Docs: https://miosa.ai/docs/cli`,
 	SilenceUsage:  true,
@@ -131,6 +131,7 @@ func ResetForTest() {
 	_ = pf.Set("org", "")
 	_ = pf.Set("bill-to", "")
 	actingOrgChecked = false
+	whereItLandsShown = false
 	_ = pf.Set("retries", "0")
 	// Reset local flags on all subcommands so flag values don't leak between tests.
 	resetCommandFlags(rootCmd)

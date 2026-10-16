@@ -23,6 +23,7 @@ func newListCmd() *cobra.Command {
 		limit       int
 		page        int
 		all         bool
+		allOrgs     bool
 		errored     bool
 		quietIDs    bool
 	)
@@ -44,6 +45,13 @@ with --errored or --state error.
   miosa list -q                      # ids only, one per line`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if allOrgs {
+				c, _, err := buildClient()
+				if err != nil {
+					return die(err)
+				}
+				return listAllOrgs(cmd, c.API, "/sandboxes", []string{"NAME", "ID", "STATUS", "TEMPLATE", "CREATED"}, []string{"name", "id", "state", "template_id", "created_at"})
+			}
 			return runList(cmd, listOptions{
 				workspace: workspace, workspaceID: workspaceID, state: state, template: template, search: search,
 				tags: tags, limit: limit, page: page, all: all, errored: errored, ids: quietIDs,
@@ -51,6 +59,7 @@ with --errored or --state error.
 		},
 	}
 
+	cmd.Flags().BoolVar(&allOrgs, "all-orgs", false, "List every organization your sign-in covers, with an ORG column")
 	cmd.Flags().StringVar(&workspace, "workspace", "", "Filter by workspace slug")
 	cmd.Flags().StringVar(&workspaceID, "workspace-id", "", "Filter by workspace id (server side)")
 	cmd.Flags().StringVar(&state, "state", "", "Only this state, for example running or paused")

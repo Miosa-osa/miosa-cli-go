@@ -71,7 +71,7 @@ func deployOps() []Op {
 			Use: "list", Aliases: []string{"ls"}, Short: "List deployments",
 			Long:    "Lists your deployments with their state and URL. Any of the name, short id, hostname or id shown here works as <deployment> in the other commands.",
 			Example: "  miosa deploy list\n  miosa deploy ls --workspace-id <id> -n 20",
-			Method:  "GET", Path: "/deployments", Cols: deployCols,
+			Method:  "GET", Path: "/deployments", Cols: deployCols, AllOrgs: true,
 			Flags: []Flag{{Name: "workspace-id", Usage: "Only this workspace", Field: "workspace_id"}, {Name: "limit", Short: "n", Type: "int", Usage: "How many"}},
 		},
 		Op{
@@ -179,21 +179,24 @@ them first with 'miosa deploy domain-move <domain> <other-deployment>', or pass
 			Long:    "Lists the names of the deployment's environment variables and when each changed. Values are encrypted at rest and never printed.",
 			Example: "  miosa deploy env my-app",
 			Method:  "GET", Path: "/deployments/{0}/env", Args: []Arg{d}, ListKey: "env_vars",
-			Cols: []Col{{Head: "NAME", Path: "name"}, {Head: "UPDATED", Path: "updated_at", Fmt: "age"}},
+			Flags: []Flag{environmentFlag()}, Before: environmentSupported,
+			Cols: []Col{{Head: "NAME", Path: "name"}, {Head: "ENVIRONMENT", Path: "environment"}, {Head: "UPDATED", Path: "updated_at", Fmt: "age"}},
 		},
 		Op{
 			Use: "env-set <deployment>", Short: "Set the deployment's environment variables (values are encrypted at rest)",
 			Long:    "Sets one or more environment variables. They apply to the next release: run 'miosa deploy redeploy' (or push a new version) to use them.",
 			Example: "  miosa deploy env-set my-app --set DATABASE_URL=postgres://... --set FEATURE=on",
 			Method:  "POST", Path: "/deployments/{0}/env", Args: []Arg{d},
-			Flags: []Flag{{Name: "set", Usage: "Environment variable KEY=VALUE (repeatable)", Type: "kv", Field: "env", Required: true}},
-			Done:  "Updated the environment of {0}",
+			Flags:  []Flag{{Name: "set", Usage: "Environment variable KEY=VALUE (repeatable)", Type: "kv", Field: "env", Required: true}, environmentFlag()},
+			Before: environmentSupported,
+			Done:   "Updated the environment of {0}",
 		},
 		Op{
 			Use: "env-rm <deployment> <name>", Aliases: []string{"env-unset"}, Short: "Remove environment variables (comma-separated names)",
 			Long:    "Removes the named variables. Like env-set, the change applies to the next release: run 'miosa deploy redeploy' (or push a new version) to use it. A name that is not set is reported, not an error.",
 			Example: "  miosa deploy env-rm my-app DEBUG\n  miosa deploy env-rm my-app OLD_TOKEN,LEGACY_URL",
 			Method:  "DELETE", Path: "/deployments/{0}/env/{1}", Args: []Arg{d, {Name: "name"}},
+			Flags: []Flag{environmentFlag()}, Before: environmentSupported,
 			Human: renderEnvRemoval,
 		},
 		Op{
@@ -295,7 +298,7 @@ func dbCmd() *cobra.Command {
 	return group("db", "Managed databases",
 		`Databases run on MIOSA and bill while running. <database> is a name or id.
 'connection' prints the connection secret: treat the output like a password.`, []string{"database", "databases"},
-		Op{Use: "list", Aliases: []string{"ls"}, Short: "List databases", Method: "GET", Path: "/databases", Cols: dbCols},
+		Op{Use: "list", Aliases: []string{"ls"}, Short: "List databases", Method: "GET", Path: "/databases", Cols: dbCols, AllOrgs: true},
 		Op{
 			Use: "get <database>", Aliases: []string{"show"}, Short: "Show a database", Method: "GET", Path: "/databases/{0}", Args: []Arg{d},
 			Detail: []Col{{Head: "Name", Path: "name"}, {Head: "Id", Path: "id"}, {Head: "Engine", Path: "engine"}, {Head: "State", Path: "state"}, {Head: "Host", Path: "host"}, {Head: "Port", Path: "port"}, {Head: "Memory (MB)", Path: "memory_mb"}, {Head: "Error", Path: "last_error"}},

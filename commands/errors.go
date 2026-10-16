@@ -91,6 +91,12 @@ func asAPIError(err error) (*api.Error, bool) {
 	if errors.As(err, &ae) {
 		return ae, true
 	}
+	// The REST client's own error (org/bill-to calls, the --org guard). Unmapped,
+	// a NOT_A_MEMBER refusal exited 1 instead of 3.
+	var ce *client.APIError
+	if errors.As(err, &ce) {
+		return &api.Error{Status: ce.Status, Code: ce.Code, Message: ce.Message}, true
+	}
 	var base *miosa.MiosaError
 	var ra *miosa.RateLimitError
 	switch {

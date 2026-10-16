@@ -174,3 +174,27 @@ func writeJSON(t *testing.T, path string, doc map[string]any) {
 		t.Fatal(err)
 	}
 }
+
+// A session token expires in 15 minutes; a client config keeps its token for
+// months. Installing from a session must write a minted API key instead.
+func TestMCPInstallFromASessionWritesAMintedKey(t *testing.T) {
+	f := fakeRoutes(t, map[string]any{
+		"POST /api-keys": `{"data":{"id":"k-mcp","key":"msk_u_mcp_minted"}}`,
+	})
+	t.Setenv("MIOSA_API_KEY", "eyJhbGciOiJIUzI1NiJ9.session.sig")
+	out, err := run(t, "mcp", "install")
+	if err != nil {
+		t.Fatalf("install: %v\n%s", err, out)
+	}
+	headers := readJSON(t, filepath.Join(os.Getenv("HOME"), ".claude.json"))["mcpServers"].(map[string]any)["miosa"].(map[string]any)["headers"].(map[string]any)
+	if headers["Authorization"] != "Bearer msk_u_mcp_minted" {
+		t.Fatalf("the config holds %v, want the minted key", headers["Authorization"])
+	}
+	mint := f.find("POST", "/api-keys")
+	if len(mint) != 1 || mint[0].Body["preset"] != "cli" {
+		t.Fatalf("mint = %+v", mint)
+	}
+	if strings.Contains(out, "msk_u_mcp_minted") || !strings.Contains(out, "minted an API key for MCP") {
+		t.Fatalf("out = %s", out)
+	}
+}

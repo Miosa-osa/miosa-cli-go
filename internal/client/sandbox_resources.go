@@ -1,6 +1,9 @@
 package client
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // This file is the CLI's view of sandbox resource read and live resize:
 // GET/PATCH /sandboxes/:id/resources. It talks to the typed API client so a
@@ -27,24 +30,67 @@ type SandboxResourceState struct {
 type SandboxResizeInput struct {
 	CPUCount *int `json:"cpu_count,omitempty"`
 	MemoryMB *int `json:"memory_mb,omitempty"`
+	// Restart lets the server recreate the sandbox from its disk at the new
+	// size when a change cannot apply live. The new sandbox has a new id and
+	// the source stays paused.
+	Restart bool `json:"restart,omitempty"`
 }
 
 // SandboxResizeOutcome is the body of a successful resize. applied_live and
 // requires_restart describe the in-place (200) case; restarted marks the
 // recreation (202) case, which also carries mode, new_sandbox and
-// source_sandbox.
+// source_sandbox. Resources is the shape the sandbox has now, so after a
+// requires_restart answer it is the OLD shape: nothing was changed.
 type SandboxResizeOutcome struct {
-	ID              string                  `json:"id"`
-	AppliedLive     bool                    `json:"applied_live"`
-	RequiresRestart bool                    `json:"requires_restart"`
-	Changes         map[string]any          `json:"changes"`
-	Resources       SandboxResourceGeometry `json:"resources"`
-	Capabilities    map[string]any          `json:"capabilities"`
-	Billing         map[string]any          `json:"billing,omitempty"`
-	Restarted       bool                    `json:"restarted"`
-	Mode            string                  `json:"mode,omitempty"`
-	NewSandbox      string                  `json:"new_sandbox,omitempty"`
-	SourceSandbox   string                  `json:"source_sandbox,omitempty"`
+	ID              string                         `json:"id"`
+	AppliedLive     bool                           `json:"applied_live"`
+	RequiresRestart bool                           `json:"requires_restart"`
+	Changes         map[string]SandboxResizeChange `json:"changes"`
+	Resources       SandboxResourceGeometry        `json:"resources"`
+	Capabilities    map[string]any                 `json:"capabilities"`
+	Billing         map[string]any                 `json:"billing,omitempty"`
+	Restarted       bool                           `json:"restarted"`
+	Mode            string                         `json:"mode,omitempty"`
+	NewSandbox      *SandboxRef                    `json:"new_sandbox,omitempty"`
+	SourceSandbox   *SandboxRef                    `json:"source_sandbox,omitempty"`
+}
+
+// SandboxResizeChange is what happened to one dimension (cpu, memory_mb):
+// status is applied_live, requires_restart, unsupported, unchanged or
+// recreated, and reason says why when it was not applied.
+type SandboxResizeChange struct {
+	From   int    `json:"from,omitempty"`
+	To     int    `json:"to,omitempty"`
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// UnmarshalJSON also accepts a bare status string.
+func (c *SandboxResizeChange) UnmarshalJSON(b []byte) error {
+	var status string
+	if json.Unmarshal(b, &status) == nil {
+		*c = SandboxResizeChange{Status: status}
+		return nil
+	}
+	type plain SandboxResizeChange
+	return json.Unmarshal(b, (*plain)(c))
+}
+
+// SandboxRef names a sandbox in a resize answer: {"id", "state"}.
+type SandboxRef struct {
+	ID    string `json:"id"`
+	State string `json:"state,omitempty"`
+}
+
+// UnmarshalJSON also accepts a bare id string.
+func (r *SandboxRef) UnmarshalJSON(b []byte) error {
+	var id string
+	if json.Unmarshal(b, &id) == nil {
+		*r = SandboxRef{ID: id}
+		return nil
+	}
+	type plain SandboxRef
+	return json.Unmarshal(b, (*plain)(r))
 }
 
 // SandboxResources reads a sandbox's vCPU and memory and what it can change

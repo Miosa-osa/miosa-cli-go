@@ -64,7 +64,7 @@ Regenerate with `make docs`.
 - [`miosa member`](#miosa-member) - People in your organization
 - [`miosa notifications`](#miosa-notifications) - Your notifications
 - [`miosa open`](#miosa-open) - Open the web console (or print its URL)
-- [`miosa org`](#miosa-org) - Which organization pays for new machines, and its members and limits
+- [`miosa org`](#miosa-org) - The organization you work in, who pays for new machines, members and limits
 - [`miosa pause`](#miosa-pause) - Pause a sandbox (it keeps its disk and memory state)
 - [`miosa policy`](#miosa-policy) - Show or change a computer's network policy
 - [`miosa ports`](#miosa-ports) - List the ports listening inside a sandbox
@@ -2483,10 +2483,14 @@ Aliases: `show`.
 List databases.
 
 ```
-miosa db list
+miosa db list [flags]
 ```
 
 Aliases: `ls`.
+
+Flags:
+
+- `--all-orgs` - List every organization your sign-in covers, with an ORG column.
 
 #### `miosa db logs`
 
@@ -2859,11 +2863,15 @@ miosa deploy domains my-app
 List the deployment's environment variable names.
 
 ```
-miosa deploy env <deployment>
+miosa deploy env <deployment> [flags]
 ```
 
 Lists the names of the deployment's environment variables and when each changed.
 Values are encrypted at rest and never printed.
+
+Flags:
+
+- `-e, --environment string` - Environment: production (default), preview or development (production|preview|development).
 
 Examples:
 
@@ -2871,12 +2879,43 @@ Examples:
 miosa deploy env my-app
 ```
 
+#### `miosa deploy env-pull`
+
+Write the deployment's environment variables to a local .env file.
+
+```
+miosa deploy env-pull <deployment> [flags]
+```
+
+Downloads the deployment's environment variable values into a dotenv file
+(default .env.local, written with mode 0600) so the app runs locally with the
+same configuration.
+Only an owner or admin of the organization can, signed in
+as themselves ('miosa login'); machine, CI and sandbox keys are refused, and
+the server audits every variable name pulled.
+
+The values go to the file only: the command prints names, never values.
+An
+existing file is kept unless you pass --force.
+
+Flags:
+
+- `--file string` - File to write. (default `.env.local`)
+- `--force` - Overwrite the file if it exists.
+
+Examples:
+
+```
+miosa deploy env-pull my-app
+  miosa deploy env-pull my-app --file .env --force
+```
+
 #### `miosa deploy env-rm`
 
 Remove environment variables (comma-separated names).
 
 ```
-miosa deploy env-rm <deployment> <name>
+miosa deploy env-rm <deployment> <name> [flags]
 ```
 
 Removes the named variables.
@@ -2884,6 +2923,10 @@ Like env-set, the change applies to the next release: run 'miosa deploy redeploy
 A name that is not set is reported, not an error.
 
 Aliases: `env-unset`.
+
+Flags:
+
+- `-e, --environment string` - Environment: production (default), preview or development (production|preview|development).
 
 Examples:
 
@@ -2905,6 +2948,7 @@ They apply to the next release: run 'miosa deploy redeploy' (or push a new versi
 
 Flags:
 
+- `-e, --environment string` - Environment: production (default), preview or development (production|preview|development).
 - `--set stringArray` - Environment variable KEY=VALUE (repeatable).
 
 Examples:
@@ -2950,6 +2994,7 @@ Aliases: `ls`.
 
 Flags:
 
+- `--all-orgs` - List every organization your sign-in covers, with an ORG column.
 - `-n, --limit int` - How many.
 - `--workspace-id string` - Only this workspace.
 
@@ -4997,10 +5042,14 @@ miosa forge repo delete platform --yes
 List repositories in the current organization.
 
 ```
-miosa forge repo list
+miosa forge repo list [flags]
 ```
 
 Aliases: `ls`.
+
+Flags:
+
+- `--all-orgs` - List every organization your sign-in covers, with an ORG column.
 
 Examples:
 
@@ -6657,6 +6706,7 @@ Aliases: `ls`.
 Flags:
 
 - `--all` - Follow every page.
+- `--all-orgs` - List every organization your sign-in covers, with an ORG column.
 - `--errored` - Include sandboxes in the error state.
 - `--ids` - Print only ids, one per line.
 - `--limit int` - Page size, 1-100 (default 50).
@@ -6680,8 +6730,11 @@ Sign in and store an API key for this machine.
 
 With no flags on a terminal, login opens your browser, shows a short code to
 confirm there, and stores the key MIOSA issues for this CLI.
-The key is bound to
-the organization you approve; sign in again with --profile NAME to keep several.
+On that page you
+choose which of your organizations this terminal may work in (all of them, or
+some) and which one it starts in; one key covers them all.
+Switch with
+'miosa org use <org>', change the set with 'miosa org select'.
 
 For scripts and CI, pass an existing key without putting it in the process
 arguments:
@@ -6694,6 +6747,8 @@ or skip login and export MIOSA_API_KEY.
 
 ```
   miosa login                       # browser sign-in
+  miosa login --all-orgs            # every organization pre-selected
+  miosa login --org osa --org acme  # these organizations pre-selected
   miosa login --no-browser          # print the URL instead of opening it
   miosa login --with-key            # paste a key (input hidden)
   miosa login --profile work        # store as a separate profile
@@ -6701,9 +6756,11 @@ or skip login and export MIOSA_API_KEY.
 
 Flags:
 
+- `--all-orgs` - Pre-select every organization on the approval page.
 - `--device` - Use the browser flow even when stdin is not a terminal.
 - `--key-stdin` - Read the API key from standard input.
 - `--no-browser` - Print the sign-in URL instead of opening a browser.
+- `--org stringArray` - Pre-select this organization on the approval page (repeatable).
 - `--with-key` - Paste an API key instead of using the browser.
 
 ### `miosa logout`
@@ -7118,7 +7175,7 @@ Flags:
 
 ### `miosa org`
 
-Which organization pays for new machines, and its members and limits.
+The organization you work in, who pays for new machines, members and limits.
 
 ```
 miosa org
@@ -7133,6 +7190,8 @@ Show and choose the organization that pays for new sandboxes and computers.
   miosa org bill --clear          bill the organization your key belongs to again
   miosa --bill-to acme create my-box  bill one create to acme without changing the setting
   miosa --org acme deploy list        work in acme; refused (exit 3) if this key does not act in acme
+  miosa org use acme              work in acme from now on (a key that covers several orgs)
+  miosa org select                change which organizations this terminal may work in
   miosa org members               members of the organization your key belongs to
   miosa org invite dana@example.com
   miosa org caps                  per-member spend and concurrency caps
@@ -7250,6 +7309,52 @@ List the members of the organization your key belongs to.
 
 ```
 miosa org members
+```
+
+#### `miosa org select`
+
+Change which organizations this terminal may work in (re-approve in the browser).
+
+```
+miosa org select [flags]
+```
+
+Opens the sign-in page with the organizations this key covers already ticked,
+so you can add or remove some and approve again.
+The new key replaces the old
+one; nothing else changes.
+
+Flags:
+
+- `--all` - Pre-select every organization.
+
+Examples:
+
+```
+miosa org select
+  miosa org select --all
+```
+
+#### `miosa org use`
+
+Work in this organization from now on (this profile).
+
+```
+miosa org use <org>
+```
+
+Sets the organization commands work in, like 'gh auth switch'.
+The key must
+cover it ('miosa org list' shows which do); --org and MIOSA_ORG still override
+it for one command.
+A key that covers one organization only cannot switch:
+sign in with 'miosa login --all-orgs' or add organizations with 'miosa org select'.
+
+Examples:
+
+```
+miosa org use osa
+  miosa org use commas && miosa deploy list
 ```
 
 ### `miosa pause`
@@ -8049,7 +8154,7 @@ without the controller cannot resize live at all.
 Change a sandbox's vCPU or memory.
 
 ```
-miosa sandbox resize [sandbox] --cpu <n> --memory <mb> [flags]
+miosa sandbox resize [sandbox] --cpu <n> --memory <mb> [--restart] [flags]
 ```
 
 Change the vCPU count and/or memory of a sandbox.
@@ -8057,13 +8162,24 @@ At least one of --cpu or
 --memory is required.
 
 The change is applied live where the runtime supports it (vCPU on a running
-Firecracker sandbox, up to its booted count); otherwise the sandbox needs a
-restart, or is recreated at the new size and gets a new id.
+Firecracker sandbox, up to its booted count; memory up to the live ceiling).
+A change that cannot apply live is NOT saved: the command says so and exits 5.
+Pass --restart to recreate the sandbox from its disk at the new size instead:
+the new sandbox gets a new id, running processes stop, files are kept, and the
+source stays paused until you destroy it.
 
 Flags:
 
 - `--cpu int` - New vCPU count (leave unset to keep it).
 - `--memory int` - New memory in MB (leave unset to keep it).
+- `--restart` - Recreate the sandbox at the new size when the change cannot apply live (new id).
+
+Examples:
+
+```
+miosa sandbox resize my-box --cpu 1
+  miosa sandbox resize my-box --memory 2048 --restart
+```
 
 #### `miosa sandbox resources`
 

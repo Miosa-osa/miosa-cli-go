@@ -52,7 +52,8 @@ func newForgeCmd() *cobra.Command {
 func forgeJSON(options *forgeOutputOptions) bool { return options.JSON || isJSON() }
 
 func newForgeRepoListCmd(outputOptions *forgeOutputOptions) *cobra.Command {
-	return &cobra.Command{
+	var allOrgs bool
+	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List repositories in the current organization",
@@ -61,6 +62,9 @@ func newForgeRepoListCmd(outputOptions *forgeOutputOptions) *cobra.Command {
 			client, _, err := buildClient()
 			if err != nil {
 				return forgeFail(cmd, outputOptions, err)
+			}
+			if allOrgs {
+				return listAllOrgs(cmd, client.API, "/forge/repositories", []string{"NAME", "SLUG", "VISIBILITY", "STATE", "ID"}, []string{"name", "slug", "visibility", "state", "id"})
 			}
 			repositories, err := client.SDK.Forge.List(cmd.Context())
 			if err != nil {
@@ -78,6 +82,8 @@ func newForgeRepoListCmd(outputOptions *forgeOutputOptions) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&allOrgs, "all-orgs", false, "List every organization your sign-in covers, with an ORG column")
+	return cmd
 }
 
 func newForgeRepoCreateCmd(outputOptions *forgeOutputOptions) *cobra.Command {
