@@ -2,6 +2,7 @@
 package commands
 
 import (
+	"context"
 	"io"
 	"os"
 	"strconv"
@@ -127,6 +128,9 @@ func ResetForTest() {
 	_ = pf.Set("timeout", "60")
 	_ = pf.Set("profile", "")
 	_ = pf.Set("json", "false")
+	_ = pf.Set("org", "")
+	_ = pf.Set("bill-to", "")
+	actingOrgChecked = false
 	_ = pf.Set("retries", "0")
 	// Reset local flags on all subcommands so flag values don't leak between tests.
 	resetCommandFlags(rootCmd)
@@ -199,6 +203,7 @@ func init() {
 		newDoctorCmd(),
 		newOpenCmd(),
 		newSandboxCmd(),
+		newAdminCmd(),
 	)
 }
 
@@ -218,6 +223,9 @@ func buildClientTimeout(d time.Duration) (*client.Client, config.Config, error) 
 	}
 	if err := c.MustAuthenticated(); err != nil {
 		return nil, cfg, err
+	}
+	if err := checkActingOrg(context.Background(), c); err != nil {
+		return nil, cfg, die(err)
 	}
 	return c, cfg, nil
 }

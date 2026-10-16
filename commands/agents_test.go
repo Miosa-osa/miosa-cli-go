@@ -215,6 +215,10 @@ func TestPromptJSONStreamsEventsThenTheRun(t *testing.T) {
 		}
 		last = v
 	}
+	// Stream events are bare lines; the final run is the one {"data": ...} result.
+	if d, ok := last["data"].(map[string]any); ok {
+		last = d
+	}
 	if len(kinds) < 1 || kinds[0] != "run.created" || last["run"] == nil || last["outputs"] == nil {
 		t.Fatalf("kinds=%v last=%v", kinds, last)
 	}

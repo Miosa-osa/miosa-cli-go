@@ -6,6 +6,8 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 
 | Command | Method | Route |
 |---|---|---|
+| `miosa admin slot-revocations list` | GET | `/admin/slot-producer-revocations` |
+| `miosa admin slot-revocations revoke` | POST | `/admin/slot-producer-revocations` |
 | `miosa agent approvals approve` | POST | `/actions/approvals/{0}/approve` |
 | `miosa agent approvals deny` | POST | `/actions/approvals/{0}/deny` |
 | `miosa agent approvals list` | GET | `/actions/approvals` |
@@ -106,10 +108,13 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa deploy domain-verify` | POST | `/deployments/{0}/domains/{1}/verify` |
 | `miosa deploy domains` | GET | `/deployments/{0}/domains` |
 | `miosa deploy env` | GET | `/deployments/{0}/env` |
+| `miosa deploy env-rm` | DELETE | `/deployments/{0}/env/{1}` |
 | `miosa deploy env-set` | POST | `/deployments/{0}/env` |
 | `miosa deploy list` | GET | `/deployments` |
 | `miosa deploy logs` | GET | `/deployments/{0}/logs` |
 | `miosa deploy observe` | GET | `/deployments/{0}/observability` |
+| `miosa deploy prove` | GET | `/deployments/{0}/proof` |
+| `miosa deploy purge-cache` | POST | `/deployments/{0}/purge-cache` |
 | `miosa deploy redeploy` | POST | `/deployments/{0}/redeploy` |
 | `miosa deploy releases` | GET | `/deployments/{0}/releases` |
 | `miosa deploy requests` | GET | `/deployments/{0}/request-logs` |

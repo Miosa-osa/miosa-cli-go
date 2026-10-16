@@ -60,9 +60,10 @@ func TestParseErrorShapes(t *testing.T) {
 }
 
 func TestJSONSendsAuthAndBody(t *testing.T) {
-	var gotAuth, gotCT, gotBody, gotUA, gotOrg string
+	var gotAuth, gotCT, gotBody, gotUA, gotOrg, gotClientID string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth, gotCT, gotUA, gotOrg = r.Header.Get("Authorization"), r.Header.Get("Content-Type"), r.Header.Get("User-Agent"), r.Header.Get("X-Miosa-Org")
+		gotClientID = r.Header.Get("X-Miosa-Client-Id")
 		b, _ := io.ReadAll(r.Body)
 		gotBody = string(b)
 		w.Write([]byte(`{"ok":true}`))
@@ -74,6 +75,9 @@ func TestJSONSendsAuthAndBody(t *testing.T) {
 	var out struct{ OK bool }
 	if err := c.Post(context.Background(), "/x", map[string]any{"a": 1}, &out); err != nil {
 		t.Fatal(err)
+	}
+	if gotClientID != "miosa-cli/1.2.3" {
+		t.Fatalf("X-Miosa-Client-Id = %q", gotClientID)
 	}
 	if !out.OK || gotAuth != "Bearer msk_u_test" || gotCT != "application/json" || gotBody != `{"a":1}` || gotUA != "miosa-cli/1.2.3" || gotOrg != "acme" {
 		t.Fatalf("auth=%q ct=%q body=%q ua=%q org=%q out=%+v", gotAuth, gotCT, gotBody, gotUA, gotOrg, out)

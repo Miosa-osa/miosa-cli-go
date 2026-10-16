@@ -189,6 +189,10 @@ func friendlyMessage(err error) string {
 		case 402:
 			return msg + " - add credits at https://miosa.ai/billing"
 		case 403:
+			// A refused --org already says which org the key acts in.
+			if strings.EqualFold(ae.Code, "ORG_MISMATCH") || strings.EqualFold(ae.Code, "NOT_A_MEMBER") {
+				return msg
+			}
 			if !strings.Contains(strings.ToLower(ae.Message), "scope") {
 				return msg + " - this key may lack the required scope or role"
 			}

@@ -86,11 +86,11 @@ func bindDeploySourceFlags(cmd *cobra.Command, f *deployFlags, createOnly bool) 
 		fs.StringVar(&f.git, "git", "", "Deploy this git repository URL")
 		fs.StringVar(&f.dir, "dir", "", "With --from-sandbox: the app's path inside the sandbox. On its own: a local directory to upload")
 		fs.StringVar(&f.image, "image", "", "App Engine container image (not exposed by the public API; see --type docker_deploy)")
-		fs.IntVar(&f.port, "port", 0, "With --from-sandbox: the port the app serves on")
+		fs.IntVar(&f.port, "port", 0, "The port the app serves on (--from-sandbox, or --dir with --run-command)")
 		fs.StringVar(&f.entrypoint, "entrypoint", "", "With --from-sandbox: the entry file for a static publish")
 		fs.StringVar(&f.deployType, "type", "", "Runtime to publish as: static, dynamic or docker_deploy (default: static, or dynamic with --run-command)")
 		fs.StringVar(&f.runCommand, "run-command", "", "Command the app starts with (makes the publish dynamic)")
-		fs.StringVar(&f.buildCommand, "build-command", "", "Build command (git or Forge source)")
+		fs.StringVar(&f.buildCommand, "build-command", "", "Build command (git or Forge source, or a --from-sandbox server publish)")
 		fs.StringVar(&f.forge, "forge", "", "Deploy this Forge repository (id, org/name or name); builds --branch and redeploys on every push")
 		fs.StringVar(&f.project, "project", "", "With --forge: the project to link the repository through (one repository per project)")
 		fs.BoolVar(&f.noAuto, "no-auto", false, "With --forge: do not build automatically on pushes to the branch")
@@ -110,7 +110,8 @@ Pick exactly one source:
 
   --from-sandbox <sandbox>   Publish a running sandbox's output.
   --git <url>                Connect a git repository and build it.
-  --dir <path>               Upload a local directory (built static output).
+  --dir <path>               Upload a local directory: built static output, or a
+                             server app with --run-command (and --port).
 
 With --from-sandbox, --dir is where the app lives inside the sandbox (default
 /workspace). On its own, --dir is a local directory to package and upload. A
@@ -131,6 +132,9 @@ record to add. --wait blocks until the deployment is live and prints its URL.`,
 		},
 	}
 	bindDeploySourceFlags(cmd, f, true)
+	// Scripts pass --yes to every changing command; create asks nothing it
+	// needs to skip today, but it must accept the flag instead of refusing.
+	cmd.Flags().BoolVarP(&f.yes, "yes", "y", false, "Do not ask for confirmation")
 	return cmd
 }
 
@@ -198,11 +202,22 @@ func runDeployCreate(cmd *cobra.Command, args []string, flags *deployFlags) erro
 	case sources > 1:
 		return usagef("give exactly one source of --from-sandbox, --git, --forge or --dir")
 	}
-	if f.port != 0 && f.fromSandbox == "" {
-		return usagef("--port only applies to --from-sandbox")
+	// A local folder publishes as a server only with the command it starts
+	// with; --type dynamic alone used to reach the server and fail as
+	// PUBLISH_VALIDATION_FAILED (customer write-up #4).
+	if localDir && f.deployType == "dynamic" && f.runCommand == "" {
+		return usagef("--type dynamic with --dir needs --run-command, the command the app starts with")
 	}
-	if f.buildCommand != "" && f.fromSandbox != "" {
-		return usagef("--build-command does not apply to --from-sandbox")
+	if localDir && f.deployType == "docker_deploy" {
+		return usagef("--type docker_deploy publishes from a sandbox: use --from-sandbox <sandbox>")
+	}
+	if f.port != 0 && f.fromSandbox == "" && (f.dir == "" || f.runCommand == "") {
+		return usagef("--port only applies to --from-sandbox, or to --dir with --run-command")
+	}
+	// A sandbox publish only builds when it runs a server; a static publish
+	// ships the folder as it is.
+	if f.buildCommand != "" && f.fromSandbox != "" && f.runCommand == "" && f.deployType != "dynamic" {
+		return usagef("--build-command with --from-sandbox needs --run-command or --type dynamic (a static publish ships the folder as it is)")
 	}
 	if f.noPromote && (f.fromSandbox != "" || f.git != "") {
 		return usagef("--no-promote only applies to a local upload (--dir, or no source in a folder)")
@@ -331,6 +346,9 @@ func deployFromSandbox(ctx context.Context, c *client.Client, p *output.Printer,
 	if f.runCommand != "" {
 		body["run_command"] = f.runCommand
 	}
+	if f.buildCommand != "" {
+		body["build_command"] = f.buildCommand
+	}
 	if f.domain != "" {
 		body["domain"] = f.domain
 	}
@@ -438,10 +456,13 @@ type dropSessionResponse struct {
 
 type dropCompleteResponse struct {
 	Data struct {
-		VersionID    string `json:"version_id"`
-		DeploymentID string `json:"deployment_id"`
-		PublicURL    string `json:"public_url"`
-		Promoted     bool   `json:"promoted"`
+		VersionID    string   `json:"version_id"`
+		DeploymentID string   `json:"deployment_id"`
+		PublicURL    string   `json:"public_url"`
+		Promoted     bool     `json:"promoted"`
+		Kind         string   `json:"kind"`
+		State        string   `json:"state"`
+		SkippedPaths []string `json:"skipped_paths"`
 	} `json:"data"`
 }
 
@@ -460,10 +481,11 @@ func deployFromDir(ctx context.Context, c *client.Client, p *output.Printer, f *
 	if f.name == "" {
 		f.name = filepath.Base(root)
 	}
-	archive, err := tarGzDir(root)
+	archive, skipped, err := tarGzDir(root)
 	if err != nil {
 		return nil, err
 	}
+	warnSkipped(os.Stderr, skipped)
 	if len(archive) > dropSessionMaxBytes {
 		return nil, usagef("--dir %s is %s packaged, over the 100 MiB upload limit", f.dir, humanBytes(float64(len(archive))))
 	}
@@ -558,8 +580,20 @@ func deployFromDir(ctx context.Context, c *client.Client, p *output.Printer, f *
 	promote := !f.noPromote
 	var done dropCompleteResponse
 	completePath := fmt.Sprintf("/deployments/%s/drop/sessions/%s/complete", depID, sid)
-	if err := c.API.Post(ctx, completePath, map[string]any{"promote": promote}, &done); err != nil {
+	completeBody := map[string]any{"promote": promote}
+	// A server app: the upload is published as a dynamic release that runs
+	// this command (the server answers 202 and starts its runtime).
+	if f.runCommand != "" {
+		completeBody["start_command"] = f.runCommand
+		if f.port != 0 {
+			completeBody["port"] = f.port
+		}
+	}
+	if err := c.API.Post(ctx, completePath, completeBody, &done); err != nil {
 		return nil, err
+	}
+	if len(done.Data.SkippedPaths) > 0 && !isJSON() {
+		p.Line("Not uploaded (keys and secret files are never published): %s", strings.Join(done.Data.SkippedPaths, ", "))
 	}
 	promoted := done.Data.Promoted || promote
 	// The name printed is the deployment this run went to: the one the folder
@@ -581,6 +615,9 @@ func deployFromDir(ctx context.Context, c *client.Client, p *output.Printer, f *
 	}
 	if !promoted {
 		out.State = "uploaded"
+	}
+	if done.Data.Kind == "dynamic" {
+		out.State = firstNonEmpty(done.Data.State, "building")
 	}
 	if len(env) > 0 {
 		if err := setDeploymentEnv(ctx, c, out.ID, env); err != nil {
@@ -657,12 +694,18 @@ func deployEnvMap(pairs []string) (map[string]any, error) {
 	return m, nil
 }
 
-// tarGzDir packages a directory into a gzip-compressed tar, skipping .git.
-// The Drop route detects the gzip magic and unpacks it server-side.
-func tarGzDir(root string) ([]byte, error) {
+// tarGzDir packages a directory into a gzip-compressed tar, leaving out .git,
+// secrets and whatever .miosaignore lists (upload_excludes.go). The Drop route
+// detects the gzip magic and unpacks it server-side.
+func tarGzDir(root string) ([]byte, []skippedPath, error) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
+	filter, err := newUploadFilter(root)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading %s: %w", miosaIgnoreFile, err)
+	}
+	var skipped []skippedPath
 
 	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -675,8 +718,12 @@ func tarGzDir(root string) ([]byte, error) {
 		if rel == "." {
 			return nil
 		}
-		if d.IsDir() && (filepath.Base(path) == ".git" || filepath.Base(path) == deploymentLinkDir) {
-			return fs.SkipDir
+		if skip, why := filter.skip(filepath.ToSlash(rel), d.IsDir()); skip {
+			skipped = append(skipped, skippedPath{Path: filepath.ToSlash(rel), Why: why, Dir: d.IsDir()})
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		info, err := d.Info()
 		if err != nil {
@@ -705,15 +752,31 @@ func tarGzDir(root string) ([]byte, error) {
 		return err
 	})
 	if walkErr != nil {
-		return nil, fmt.Errorf("packaging %s: %w", root, walkErr)
+		return nil, nil, fmt.Errorf("packaging %s: %w", root, walkErr)
 	}
 	if err := tw.Close(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := gz.Close(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return buf.Bytes(), nil
+	return buf.Bytes(), skipped, nil
+}
+
+// warnSkipped names each path an upload left out, except the ones nobody
+// wants published (git metadata, CLI state, macOS files).
+func warnSkipped(w io.Writer, skipped []skippedPath) {
+	for _, s := range skipped {
+		switch s.Why {
+		case "git metadata", "MIOSA CLI state", "macOS metadata", "upload rules":
+			continue
+		}
+		name := s.Path
+		if s.Dir {
+			name += "/"
+		}
+		fmt.Fprintf(w, "miosa: not uploading %s (%s); add !%s to %s to upload it\n", name, s.Why, s.Path, miosaIgnoreFile)
+	}
 }
 
 // renderDeploy prints the outcome as fields or JSON.
@@ -1044,7 +1107,12 @@ func deployFromForge(ctx context.Context, c *client.Client, p *output.Printer, f
 		"forge_repository": f.forge,
 		"auto_deploy":      !f.noAuto,
 	}
-	for k, v := range map[string]string{"branch": f.branch, "build_command": f.buildCommand, "root_directory": f.rootDir, "project_id": f.project} {
+	if f.deployType != "" && f.deployType != "static" && f.deployType != "dynamic" {
+		return nil, usagef("--type with --forge is static or dynamic")
+	}
+	// --type and --run-command used to be dropped here, so a repository with
+	// a build script still came up dynamic under --type static.
+	for k, v := range map[string]string{"branch": f.branch, "build_command": f.buildCommand, "root_directory": f.rootDir, "project_id": f.project, "deployment_type": f.deployType, "run_command": f.runCommand} {
 		if v != "" {
 			body[k] = v
 		}

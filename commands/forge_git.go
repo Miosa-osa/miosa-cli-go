@@ -16,7 +16,8 @@ const defaultForgeGitHost = "forge.miosa.ai"
 
 // newForgeAuthCmd is `miosa forge auth`: git credentials for Forge over HTTPS,
 // the same shape as `gh auth setup-git`. Git asks the helper for a password and
-// gets this CLI's MIOSA API key; nothing is written to disk by the helper.
+// gets this CLI's MIOSA API key, or, when the CLI signed in with a session
+// token, a Forge-only key minted with it (forge_git_key.go).
 func newForgeAuthCmd() *cobra.Command {
 	auth := &cobra.Command{Use: "auth", Short: "Use your MIOSA API key for Forge git (clone, push and pull over HTTPS)"}
 	var host string
@@ -30,11 +31,18 @@ your API key when it talks to Forge. After it, plain git works against Forge:
   git push
 
 The password git receives is the API key this CLI is signed in with
-('miosa login'); nothing is stored by git.`,
+('miosa login'). A CLI signed in with a browser session token instead gets a
+Forge-only key (forge:read, forge:write) minted once with that session and
+kept in this profile; 'miosa logout' forgets it. Nothing is stored by git.`,
 		Example: "  miosa forge auth setup-git\n  miosa forge repo clone my-repo",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if _, _, err := buildClient(); err != nil {
+			c, _, err := buildClient()
+			if err != nil {
+				return die(err)
+			}
+			_, minted, err := forgeGitKey(cmd.Context(), c)
+			if err != nil {
 				return die(err)
 			}
 			helper, onPath := persistentHelperCommand()
@@ -51,6 +59,9 @@ The password git receives is the API key this CLI is signed in with
 			}
 			p := printerFor(cmd)
 			p.Success("git now uses your MIOSA login for https://%s", host)
+			if minted {
+				p.Line("This CLI is signed in with a session token, so it minted a Forge key for git (forge:read, forge:write) and kept it in this profile.")
+			}
 			if !onPath {
 				p.Line("'miosa' is not on your PATH, so git was given this binary's full path: %s", helper)
 				p.Line("Put miosa on your PATH and run 'miosa forge auth setup-git' again, or git auth breaks when this file moves.")
@@ -66,8 +77,8 @@ The password git receives is the API key this CLI is signed in with
 		Hidden: true,
 		Args:   cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if args[0] != "get" {
-				return nil // store/erase: nothing is kept
+			if args[0] != "get" && args[0] != "erase" {
+				return nil // store: nothing is kept
 			}
 			req := readCredentialRequest(cmd.InOrStdin())
 			if req["protocol"] != "https" || !isForgeHost(req["host"]) {
@@ -77,7 +88,17 @@ The password git receives is the API key this CLI is signed in with
 			if err != nil || c.Key == "" {
 				return nil // git falls through to its next helper / prompt
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "username=miosa\npassword=%s\n", c.Key)
+			if args[0] == "erase" {
+				forgetForgeGitKey(cmd.Context(), c, req["password"])
+				return nil
+			}
+			key, _, err := forgeGitKey(cmd.Context(), c)
+			if err != nil {
+				// git shows the helper's stderr; it then tries its next helper.
+				fmt.Fprintf(cmd.ErrOrStderr(), "miosa: %s\n", friendlyMessage(err))
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "username=miosa\npassword=%s\n", key)
 			return nil
 		},
 	}

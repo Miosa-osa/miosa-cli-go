@@ -55,7 +55,7 @@ func TestTarGzDirSkipsGitAndKeepsTree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	raw, err := tarGzDir(dir)
+	raw, _, err := tarGzDir(dir)
 	if err != nil {
 		t.Fatalf("tarGzDir: %v", err)
 	}

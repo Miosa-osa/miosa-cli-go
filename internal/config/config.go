@@ -36,6 +36,13 @@ type Config struct {
 	// Tenant is the organization slug the key belongs to. Informational: the
 	// key itself decides the tenant.
 	Tenant string `toml:"tenant,omitempty"`
+	// ForgeKey is the Forge-only API key git uses when this profile signs in
+	// with a session token (git needs an API key); ForgeKeyUser/ForgeKeyOrg
+	// name who minted it, so another session never gets it.
+	ForgeKey     string `toml:"forge_key,omitempty"`
+	ForgeKeyID   string `toml:"forge_key_id,omitempty"`
+	ForgeKeyUser string `toml:"forge_key_user,omitempty"`
+	ForgeKeyOrg  string `toml:"forge_key_org,omitempty"`
 }
 
 // File is the on-disk layout.
@@ -227,6 +234,7 @@ func Clear() error {
 		return nil
 	}
 	c.APIKey, c.CurrentSandbox = "", ""
+	c.ForgeKey, c.ForgeKeyID, c.ForgeKeyUser, c.ForgeKeyOrg = "", "", "", ""
 	f.Set(name, c)
 	return SaveFile(f)
 }

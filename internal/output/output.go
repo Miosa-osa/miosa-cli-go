@@ -38,11 +38,65 @@ func Default() *Printer {
 // Writer returns the underlying writer.
 func (p *Printer) Writer() io.Writer { return p.w }
 
-// JSON prints v as indented JSON unconditionally.
+// JSON prints v as indented JSON inside one {"data": ...} envelope (see
+// Envelope), unconditionally.
 func (p *Printer) JSON(v interface{}) error {
 	enc := json.NewEncoder(p.w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(v)
+	return enc.Encode(Envelope(v))
+}
+
+// Envelope gives every --json result one shape: an object with "data" (tester
+// item 14, 2026-10-16: deploy list, releases, builds and env repeated the rows
+// under a second key, observe and requests had no data, org list was a bare
+// array). Anything without "data" becomes the value of "data". Beside an
+// existing "data", "ok", copies of the data (deployments, builds, ...) and
+// counts equal to its length are dropped; other keys move into "data" when it
+// is an object, and stay beside it (pagination, for example) when it is a
+// list. An error body (an object with "error") is printed as it is.
+func Envelope(v interface{}) interface{} {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return v
+	}
+	var generic interface{}
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		return v
+	}
+	m, ok := generic.(map[string]interface{})
+	if !ok {
+		return map[string]interface{}{"data": generic}
+	}
+	if _, isError := m["error"]; isError {
+		return m
+	}
+	data, has := m["data"]
+	if !has {
+		return map[string]interface{}{"data": m}
+	}
+	dataJSON, _ := json.Marshal(data)
+	list, isList := data.([]interface{})
+	obj, isObj := data.(map[string]interface{})
+	out := map[string]interface{}{"data": data}
+	for k, val := range m {
+		if k == "data" || k == "ok" {
+			continue
+		}
+		if b, _ := json.Marshal(val); string(b) == string(dataJSON) {
+			continue // the same rows under a second key
+		}
+		if n, isNum := val.(float64); isNum && isList && (k == "total" || k == "count") && int(n) == len(list) {
+			continue
+		}
+		if isObj {
+			if _, taken := obj[k]; !taken {
+				obj[k] = val
+			}
+			continue
+		}
+		out[k] = val
+	}
+	return out
 }
 
 // JSONLine prints v as one compact JSON line (for streams).

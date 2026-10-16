@@ -223,7 +223,7 @@ func TestWhoami(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got map[string]any
-	if err := json.Unmarshal([]byte(jout), &got); err != nil || got["slug"] != "acme" || got["key"] == "msk_u_abcdefghijklmnop" {
+	if err := json.Unmarshal(dataJSON(jout), &got); err != nil || got["slug"] != "acme" || got["key"] == "msk_u_abcdefghijklmnop" {
 		t.Fatalf("json = %s (%v)", jout, err)
 	}
 }
@@ -250,7 +250,7 @@ func TestWhoamiUsesTheKeyEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got map[string]any
-	if err := json.Unmarshal([]byte(jout), &got); err != nil || got["auth"] == nil || got["user"] == nil {
+	if err := json.Unmarshal(dataJSON(jout), &got); err != nil || got["auth"] == nil || got["user"] == nil {
 		t.Fatalf("json = %s (%v)", jout, err)
 	}
 }
@@ -404,7 +404,7 @@ func TestDoctorReportsHealthyAndFailing(t *testing.T) {
 		OK     bool `json:"ok"`
 		Checks []struct{ Name, Status, Detail string }
 	}
-	if json.Unmarshal([]byte(out), &rep) != nil || rep.OK {
+	if json.Unmarshal(dataJSON(out), &rep) != nil || rep.OK {
 		t.Fatalf("report = %s", out)
 	}
 	found := false

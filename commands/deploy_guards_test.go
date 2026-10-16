@@ -3,6 +3,8 @@ package commands_test
 import (
 	"strings"
 	"testing"
+
+	"github.com/Miosa-osa/miosa-cli-go/commands"
 )
 
 const (
@@ -105,5 +107,29 @@ func TestDeployRollbackNamesLiveAndTargetAndSendsTheFullID(t *testing.T) {
 	// The live version is refused, not re-sent.
 	if _, err := run(t, "deploy", "rollback", "my-app", "--to", "67cf439d", "-y"); err == nil || !strings.Contains(err.Error(), "already live") {
 		t.Fatalf("rolling back to the live version must refuse: %v", err)
+	}
+}
+
+// A cli-preset key on servers before 2.3.11 lacked domains:read: rm must say
+// plainly that nothing was deleted and which scope is missing (exit 3).
+func TestDeployRmWithoutDomainsReadSaysNothingWasDeleted(t *testing.T) {
+	routes := guardRoutes("")
+	f := newFakeAPI(t, func(c call) (int, string) {
+		if c.is("GET", "/deployments/"+depID+"/domains") {
+			return 403, `{"error":{"code":"FORBIDDEN","message":"insufficient scope - this action requires the 'domains:read' scope."}}`
+		}
+		return routeReply(routes)(c)
+	})
+	_, err := run(t, "deploy", "rm", "my-app", "-y")
+	if err == nil || commands.ExitCode(err) != 3 {
+		t.Fatalf("err = %v (exit %d), want exit 3", err, commands.ExitCode(err))
+	}
+	for _, want := range []string{"NOT deleted", "domains:read", "miosa login"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error must mention %q: %v", want, err)
+		}
+	}
+	if len(f.find("DELETE", "/deployments/"+depID)) != 0 {
+		t.Fatal("nothing may be deleted")
 	}
 }

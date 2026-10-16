@@ -86,6 +86,20 @@ func deployOps() []Op {
 			Flags: []Flag{{Name: "lines", Short: "n", Type: "int", Usage: "Number of lines"}},
 		},
 		Op{
+			Use: "prove <deployment>", Aliases: []string{"proof"}, Short: "Check end to end that a deployment is live and serving",
+			Long:    "Asks the platform to prove the deployment: it exists, is running, has a public URL, and (for App Engine apps) its host and runtime answer. Exits 1 when any check fails, so a script or CI step can gate on it.",
+			Example: "  miosa deploy prove my-app\n  miosa deploy prove my-app --json",
+			Method:  "GET", Path: "/deployments/{0}/proof", Args: []Arg{d},
+			After: proveExitStatus, Human: renderProof,
+		},
+		Op{
+			Use: "purge-cache <deployment>", Aliases: []string{"cache-purge"}, Short: "Drop the edge cache of a static deployment",
+			Long:    "Drops every cached file of the deployment's versions, here and on every edge node. Promotes and rollbacks already serve new bytes (files are cached by content), so this is for forcing a refresh.",
+			Example: "  miosa deploy purge-cache my-site",
+			Method:  "POST", Path: "/deployments/{0}/purge-cache", Args: []Arg{d},
+			Detail: []Col{{Head: "Versions", Path: "versions"}, {Head: "Purged here", Path: "local_purged"}, {Head: "Edge nodes", Path: "nodes"}, {Head: "Purged on nodes", Path: "remote_purged"}},
+		},
+		Op{
 			Use: "requests <deployment>", Short: "Show recent HTTP requests",
 			Long:    "Lists recent HTTP requests the deployment served: time, method, path, status and duration. Requests to static sites are not logged yet; this says so instead of showing an empty table.",
 			Example: "  miosa deploy requests my-app\n  miosa deploy requests my-app --json",
@@ -174,6 +188,13 @@ them first with 'miosa deploy domain-move <domain> <other-deployment>', or pass
 			Method:  "POST", Path: "/deployments/{0}/env", Args: []Arg{d},
 			Flags: []Flag{{Name: "set", Usage: "Environment variable KEY=VALUE (repeatable)", Type: "kv", Field: "env", Required: true}},
 			Done:  "Updated the environment of {0}",
+		},
+		Op{
+			Use: "env-rm <deployment> <name>", Aliases: []string{"env-unset"}, Short: "Remove environment variables (comma-separated names)",
+			Long:    "Removes the named variables. Like env-set, the change applies to the next release: run 'miosa deploy redeploy' (or push a new version) to use it. A name that is not set is reported, not an error.",
+			Example: "  miosa deploy env-rm my-app DEBUG\n  miosa deploy env-rm my-app OLD_TOKEN,LEGACY_URL",
+			Method:  "DELETE", Path: "/deployments/{0}/env/{1}", Args: []Arg{d, {Name: "name"}},
+			Human: renderEnvRemoval,
 		},
 		Op{
 			Use: "domains <deployment>", Short: "List custom domains",

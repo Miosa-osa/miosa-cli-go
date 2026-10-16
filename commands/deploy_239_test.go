@@ -108,6 +108,15 @@ func TestDeployCreateForgeUpdateAndRedeployCommitSendTheRightBodies(t *testing.T
 	if c.Body["repo_provider"] != "forge" || c.Body["forge_repository"] != "acme/site" || c.Body["branch"] != "main" || c.Body["auto_deploy"] != true || c.Body["name"] != "site" {
 		t.Fatalf("create body = %+v", c.Body)
 	}
+	if out, err := run(t, "deploy", "create", "--forge", "acme/site", "--type", "static", "--root-directory", "public"); err != nil {
+		t.Fatalf("create --forge --type static: %v\n%s", err, out)
+	}
+	if c := f.find("POST", "/deployments")[1]; c.Body["deployment_type"] != "static" || c.Body["root_directory"] != "public" {
+		t.Fatalf("--type and --root-directory must be sent with --forge: %+v", c.Body)
+	}
+	if _, err := run(t, "deploy", "create", "--forge", "acme/site", "--type", "docker_deploy"); err == nil {
+		t.Fatal("--type docker_deploy with --forge must refuse")
+	}
 	if out, err := run(t, "deploy", "update", "my-app", "--forge", "acme/site", "--no-auto"); err != nil {
 		t.Fatalf("update: %v\n%s", err, out)
 	}

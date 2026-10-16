@@ -453,7 +453,7 @@ func TestSnapshotList_JSONOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	var rows []map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &rows); err != nil || len(rows) != 1 || rows[0]["id"] != "snap-1" {
+	if err := json.Unmarshal(dataJSON(out), &rows); err != nil || len(rows) != 1 || rows[0]["id"] != "snap-1" {
 		t.Errorf("json output = %q (%v)", out, err)
 	}
 }

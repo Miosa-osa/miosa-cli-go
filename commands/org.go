@@ -17,8 +17,10 @@ import (
 // The billing account here is the organization: a machine charges the
 // organization it is created under and keeps charging it for its whole life.
 // `miosa org bill` chooses that organization once for your account (the
-// console, the CLI and the API all follow it); the global --org flag (or
-// MIOSA_ORG) overrides it for a single command.
+// console, the CLI and the API all follow it); the global --bill-to flag (or
+// MIOSA_BILL_TO) overrides it for a single command. The global --org flag (or
+// MIOSA_ORG) names the organization a command works in, and is refused when
+// the key does not act in it.
 
 func init() {
 	rootCmd.AddCommand(newOrgCmd())
@@ -34,7 +36,8 @@ func newOrgCmd() *cobra.Command {
   miosa org list                  organizations you belong to
   miosa org bill acme             new machines bill acme, in the console, the CLI and the API
   miosa org bill --clear          bill the organization your key belongs to again
-  miosa --org acme create my-box  bill one create to acme without changing the setting
+  miosa --bill-to acme create my-box  bill one create to acme without changing the setting
+  miosa --org acme deploy list        work in acme; refused (exit 3) if this key does not act in acme
   miosa org members               members of the organization your key belongs to
   miosa org invite dana@example.com
   miosa org caps                  per-member spend and concurrency caps

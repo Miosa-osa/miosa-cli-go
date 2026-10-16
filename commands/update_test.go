@@ -74,7 +74,7 @@ func TestUpdateCheckReportsNewerRelease(t *testing.T) {
 	}
 	jout, _ := run(t, "update", "--check", "--json")
 	var st map[string]any
-	if json.Unmarshal([]byte(jout), &st) != nil || st["update_available"] != true || st["latest"] != "1.3.0" {
+	if json.Unmarshal(dataJSON(jout), &st) != nil || st["update_available"] != true || st["latest"] != "1.3.0" {
 		t.Fatalf("json = %s", jout)
 	}
 }

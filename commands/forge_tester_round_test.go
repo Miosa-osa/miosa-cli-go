@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/Miosa-osa/miosa-cli-go/commands"
+	"github.com/spf13/cobra"
 )
 
 func gitGlobal(t *testing.T, key string) string {
@@ -262,5 +263,40 @@ func TestDeployBuildsAndLogsShowTheBuildFailure(t *testing.T) {
 	out, err = run(t, "deploy", "logs", "app")
 	if err != nil || !strings.Contains(out, "Build b1234567 failed") || !strings.Contains(out, "BUILDER_UNREACHABLE: the builder connection closed") {
 		t.Fatalf("logs must name the failed build: err=%v\n%s", err, out)
+	}
+}
+
+// Tester item 15 (2026-10-16): every Forge command shows examples.
+func TestEveryForgeCommandHasExamples(t *testing.T) {
+	var walk func(c *cobra.Command)
+	missing := []string{}
+	walk = func(c *cobra.Command) {
+		for _, sub := range c.Commands() {
+			if sub.Hidden || sub.Name() == "help" {
+				continue
+			}
+			if len(sub.Commands()) == 0 && sub.Example == "" {
+				missing = append(missing, sub.CommandPath())
+			}
+			// An example may only use flags the command has.
+			for _, field := range strings.Fields(sub.Example) {
+				if !strings.HasPrefix(field, "--") {
+					continue
+				}
+				name := strings.SplitN(strings.TrimPrefix(field, "--"), "=", 2)[0]
+				if sub.Flags().Lookup(name) == nil && sub.InheritedFlags().Lookup(name) == nil {
+					missing = append(missing, sub.CommandPath()+" uses unknown --"+name)
+				}
+			}
+			walk(sub)
+		}
+	}
+	forge, _, err := commands.Root().Find([]string{"forge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	walk(forge)
+	if len(missing) > 0 {
+		t.Fatalf("Forge commands without examples: %v", missing)
 	}
 }

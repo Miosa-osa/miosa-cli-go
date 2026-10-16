@@ -263,7 +263,7 @@ func TestCreateCommand_JSONOutput(t *testing.T) {
 	}
 
 	var result map[string]interface{}
-	if jsonErr := json.Unmarshal([]byte(out), &result); jsonErr != nil {
+	if jsonErr := json.Unmarshal(dataJSON(out), &result); jsonErr != nil {
 		t.Fatalf("output is not valid JSON: %v\noutput: %s", jsonErr, out)
 	}
 	if result["id"] != "abc123" {
