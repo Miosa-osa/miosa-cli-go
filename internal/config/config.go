@@ -36,6 +36,14 @@ type Config struct {
 	// Tenant is the organization slug the key belongs to. Informational: the
 	// key itself decides the tenant.
 	Tenant string `toml:"tenant,omitempty"`
+	// ActiveOrg is the organization commands work in (`miosa org use`), when
+	// the key covers several. --org and MIOSA_ORG override it per command.
+	ActiveOrg string `toml:"active_org,omitempty"`
+	// Orgs are the slugs the key covers (from `miosa login`), start org
+	// first; OrgScope is "single", "listed" or "memberships". Informational:
+	// the server enforces what the key may do.
+	Orgs     []string `toml:"orgs,omitempty"`
+	OrgScope string   `toml:"org_scope,omitempty"`
 	// ForgeKey is the Forge-only API key git uses when this profile signs in
 	// with a session token (git needs an API key); ForgeKeyUser/ForgeKeyOrg
 	// name who minted it, so another session never gets it.

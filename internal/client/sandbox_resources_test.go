@@ -88,8 +88,40 @@ func TestResizeSandbox_Recreated202(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResizeSandbox: %v", err)
 	}
-	if !out.Restarted || out.NewSandbox != "new-id" || out.SourceSandbox != resizeSbx || out.Mode != "stop_start" {
+	if !out.Restarted || out.NewSandbox.ID != "new-id" || out.SourceSandbox.ID != resizeSbx || out.Mode != "stop_start" {
 		t.Fatalf("outcome = %+v", out)
+	}
+	if out.Changes["memory_mb"].Status != "recreated" {
+		t.Fatalf("changes = %+v", out.Changes)
+	}
+}
+
+// The body the live server sent for a restart resize on QA (2026-10-16):
+// new_sandbox/source_sandbox are objects and each change is an object.
+func TestResizeSandbox_Recreated202ServerShape(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["restart"] != true {
+			t.Errorf("restart = %v, want true", body["restart"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"id":"` + resizeSbx + `","mode":"recreate_from_disk","resources":{"cpu":2,"memory_mb":4096},"changes":{"memory_mb":{"reason":"below_booted_memory","status":"recreated","to":2048,"from":4096}},"restarted":true,"requires_restart":false,"applied_live":false,"new_sandbox":{"id":"47bf6291-f139-453c-a954-b2907d28641c","state":"provisioning"},"source_sandbox":{"id":"` + resizeSbx + `","state":"paused","retained":true}}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{API: api.New(srv.URL, "key")}
+	memory := 2048
+	out, err := c.ResizeSandbox(context.Background(), resizeSbx, SandboxResizeInput{MemoryMB: &memory, Restart: true})
+	if err != nil {
+		t.Fatalf("ResizeSandbox: %v", err)
+	}
+	if out.NewSandbox.ID != "47bf6291-f139-453c-a954-b2907d28641c" || out.SourceSandbox.State != "paused" {
+		t.Fatalf("outcome = %+v", out)
+	}
+	if ch := out.Changes["memory_mb"]; ch.Status != "recreated" || ch.From != 4096 || ch.To != 2048 {
+		t.Fatalf("memory change = %+v", ch)
 	}
 }
 

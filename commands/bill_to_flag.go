@@ -11,6 +11,7 @@ import (
 
 	"github.com/Miosa-osa/miosa-cli-go/internal/api"
 	"github.com/Miosa-osa/miosa-cli-go/internal/client"
+	"github.com/Miosa-osa/miosa-cli-go/internal/config"
 )
 
 // The global --org flag (or MIOSA_ORG) names the organization a command works
@@ -47,13 +48,31 @@ func init() {
 	cobra.OnInitialize(installOrgHeaders)
 }
 
-// effectiveOrgFlag is the organization named by --org, or MIOSA_ORG.
+// effectiveOrgFlag is the organization commands work in: --org, then
+// MIOSA_ORG, then the profile's active org (`miosa org use`).
 func effectiveOrgFlag() string {
-	if org := strings.TrimSpace(orgFlag); org != "" {
-		return org
-	}
-	return strings.TrimSpace(os.Getenv("MIOSA_ORG"))
+	org, _ := effectiveOrg()
+	return org
 }
+
+// effectiveOrg is effectiveOrgFlag with where it came from: "flag", "env",
+// "profile" or "" (the key's own org).
+func effectiveOrg() (string, string) {
+	if org := strings.TrimSpace(orgFlag); org != "" {
+		return org, "flag"
+	}
+	if org := strings.TrimSpace(os.Getenv("MIOSA_ORG")); org != "" {
+		return org, "env"
+	}
+	if cfg, err := config.Load(); err == nil && strings.TrimSpace(cfg.ActiveOrg) != "" {
+		return strings.TrimSpace(cfg.ActiveOrg), "profile"
+	}
+	return "", ""
+}
+
+// orgHeaderOff stops X-Miosa-Org while signing in: a new key decides its own
+// organizations.
+var orgHeaderOff bool
 
 // effectiveBillTo is the organization named by --bill-to, or MIOSA_BILL_TO.
 func effectiveBillTo() string {
@@ -63,29 +82,36 @@ func effectiveBillTo() string {
 	return strings.TrimSpace(os.Getenv("MIOSA_BILL_TO"))
 }
 
+// installOrgHeaders puts the org transport in place. The values are read on
+// each request, after --profile and the flags are applied.
 func installOrgHeaders() {
-	org, billTo := effectiveOrgFlag(), effectiveBillTo()
-	if org == "" && billTo == "" {
-		http.DefaultTransport = baseTransport
-		return
-	}
-	http.DefaultTransport = &orgTransport{base: baseTransport, org: org, billTo: billTo}
+	http.DefaultTransport = &orgTransport{base: baseTransport}
 }
 
 type orgTransport struct {
-	base   http.RoundTripper
-	org    string
-	billTo string
+	base http.RoundTripper
 }
 
 func (t *orgTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Say where a change lands before the first one is sent.
+	if req.Method != http.MethodGet && req.Method != http.MethodHead && !whereItLandsShown &&
+		!orgHeaderOff && !isJSON() && !strings.Contains(req.URL.Path, "/auth/") {
+		whereItLandsShown = true
+		if line := whereItLands(); line != "" {
+			fmt.Fprintln(rootCmd.ErrOrStderr(), line)
+		}
+	}
+	org, billTo := effectiveOrgFlag(), effectiveBillTo()
+	if (org == "" || orgHeaderOff) && billTo == "" {
+		return t.base.RoundTrip(req)
+	}
 	// RoundTrip must not modify the caller's request.
 	clone := req.Clone(req.Context())
-	if t.org != "" {
-		clone.Header.Set(orgHeader, t.org)
+	if org != "" && !orgHeaderOff {
+		clone.Header.Set(orgHeader, org)
 	}
-	if t.billTo != "" {
-		clone.Header.Set(billToHeader, t.billTo)
+	if billTo != "" {
+		clone.Header.Set(billToHeader, billTo)
 	}
 	return t.base.RoundTrip(clone)
 }

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -114,6 +115,9 @@ type Op struct {
 	// After runs on the decoded response before it is rendered. An error stops the
 	// command (the request has already been made).
 	After func(cmd *cobra.Command, resp any) error
+	// AllOrgs adds --all-orgs to a list: one request per organization the key
+	// covers, merged, with an ORG column.
+	AllOrgs bool
 	// OnError may rewrite a failed request's error (a plainer message, hints
 	// naming the next command). It gets the signed-in client for a follow-up read.
 	OnError func(cmd *cobra.Command, c *api.Client, args []string, err error) error
@@ -185,6 +189,9 @@ func (o Op) command(groupName string) *cobra.Command {
 	}
 	if o.FileBody {
 		flags.String("file", "", "Read the request body from a JSON file (- for standard input); flags override its fields")
+	}
+	if o.AllOrgs {
+		flags.Bool("all-orgs", false, "List every organization your sign-in covers, with an ORG column")
 	}
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		return o.run(cmd, args, yes)
@@ -476,6 +483,9 @@ func (o Op) run(cmd *cobra.Command, args []string, yes bool) error {
 			return err
 		}
 	}
+	if all, _ := cmd.Flags().GetBool("all-orgs"); o.AllOrgs && all {
+		return o.renderAllOrgs(cmd, c, req)
+	}
 	resp, err := c.JSONAny(cmd.Context(), req)
 	if err != nil {
 		if o.OnError != nil {
@@ -508,6 +518,20 @@ func confirmDestructive(cmd *cobra.Command, what string) error {
 	if isFile && term.IsTerminal(int(f.Fd())) {
 		fmt.Fprintf(cmd.ErrOrStderr(), "%s [y/N] ", what)
 		line, _ := bufio.NewReader(in).ReadString('\n')
+		if a := strings.ToLower(strings.TrimSpace(line)); a == "y" || a == "yes" {
+			return nil
+		}
+		return die(fmt.Errorf("canceled"))
+	}
+	return usagef("%s - pass --yes to confirm", what)
+}
+
+// confirmOnTerminal is confirmDestructive for code without a command at hand:
+// it asks on the process's terminal and otherwise asks for --yes.
+func confirmOnTerminal(what string) error {
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Fprintf(os.Stderr, "%s [y/N] ", what)
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 		if a := strings.ToLower(strings.TrimSpace(line)); a == "y" || a == "yes" {
 			return nil
 		}
@@ -826,4 +850,45 @@ func readBodyFile(cmd *cobra.Command, path string) ([]byte, error) {
 		return nil, fmt.Errorf("reading --file: %w", err)
 	}
 	return b, nil
+}
+
+// renderAllOrgs runs the list once per covered organization and prints one
+// table (or one {"data": [...]}) with each row's org.
+func (o Op) renderAllOrgs(cmd *cobra.Command, c *api.Client, req api.Request) error {
+	rows, err := fanOutOrgs(cmd, c, func(ctx context.Context) ([]any, error) {
+		resp, err := c.JSONAny(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		list, _ := findRows(stripAvatars(resp), o.ListKey)
+		return list, nil
+	})
+	if err != nil {
+		return die(err)
+	}
+	if o.Rows != nil {
+		rows = o.Rows(cmd, rows)
+	}
+	p := printerFor(cmd)
+	if isJSON() {
+		return p.JSON(map[string]any{"data": rows})
+	}
+	if len(rows) == 0 {
+		p.Line("No results.")
+		return nil
+	}
+	heads := []string{"ORG"}
+	for _, col := range o.Cols {
+		heads = append(heads, col.Head)
+	}
+	table := make([][]string, 0, len(rows))
+	for _, r := range rows {
+		line := []string{formatValue(lookupPath(r, "org"), "")}
+		for _, col := range o.Cols {
+			line = append(line, formatValue(lookupPath(r, col.Path), col.Fmt))
+		}
+		table = append(table, line)
+	}
+	p.Table(heads, table)
+	return nil
 }

@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/Miosa-osa/miosa-cli-go/internal/config"
@@ -29,7 +30,7 @@ func TestRoundtrip(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("roundtrip mismatch: got %+v, want %+v", got, want)
 	}
 }

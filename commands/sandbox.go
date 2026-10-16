@@ -3,11 +3,13 @@ package commands
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Miosa-osa/miosa-cli-go/internal/api"
 	"github.com/Miosa-osa/miosa-cli-go/internal/client"
+	"github.com/Miosa-osa/miosa-cli-go/internal/output"
 )
 
 // 'miosa sandbox' covers the sandbox resource contract that is not lifecycle:
@@ -94,15 +96,21 @@ func runSandboxResources(cmd *cobra.Command, args []string) error {
 
 func newSandboxResizeCmd() *cobra.Command {
 	var cpu, memory int
+	var restart bool
 	cmd := &cobra.Command{
-		Use:   "resize [sandbox] --cpu <n> --memory <mb>",
+		Use:   "resize [sandbox] --cpu <n> --memory <mb> [--restart]",
 		Short: "Change a sandbox's vCPU or memory",
 		Long: `Change the vCPU count and/or memory of a sandbox. At least one of --cpu or
 --memory is required.
 
 The change is applied live where the runtime supports it (vCPU on a running
-Firecracker sandbox, up to its booted count); otherwise the sandbox needs a
-restart, or is recreated at the new size and gets a new id.`,
+Firecracker sandbox, up to its booted count; memory up to the live ceiling).
+A change that cannot apply live is NOT saved: the command says so and exits 5.
+Pass --restart to recreate the sandbox from its disk at the new size instead:
+the new sandbox gets a new id, running processes stop, files are kept, and the
+source stays paused until you destroy it.`,
+		Example: `  miosa sandbox resize my-box --cpu 1
+  miosa sandbox resize my-box --memory 2048 --restart`,
 		Args:        cobra.MaximumNArgs(1),
 		Annotations: map[string]string{routeAnnotation: "PATCH /sandboxes/{0}/resources"},
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
@@ -112,15 +120,16 @@ restart, or is recreated at the new size and gets a new id.`,
 			return completeKind(cmd, "sandbox", toComplete)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSandboxResize(cmd, args, cpu, memory)
+			return runSandboxResize(cmd, args, cpu, memory, restart)
 		},
 	}
 	cmd.Flags().IntVar(&cpu, "cpu", 0, "New vCPU count (leave unset to keep it)")
 	cmd.Flags().IntVar(&memory, "memory", 0, "New memory in MB (leave unset to keep it)")
+	cmd.Flags().BoolVar(&restart, "restart", false, "Recreate the sandbox at the new size when the change cannot apply live (new id)")
 	return cmd
 }
 
-func runSandboxResize(cmd *cobra.Command, args []string, cpu, memory int) error {
+func runSandboxResize(cmd *cobra.Command, args []string, cpu, memory int, restart bool) error {
 	p := printerFor(cmd)
 	if cpu <= 0 && memory <= 0 {
 		return usagef("nothing to change: pass --cpu and/or --memory")
@@ -142,7 +151,7 @@ func runSandboxResize(cmd *cobra.Command, args []string, cpu, memory int) error 
 		return die(err)
 	}
 
-	in := client.SandboxResizeInput{}
+	in := client.SandboxResizeInput{Restart: restart}
 	if cpu > 0 {
 		in.CPUCount = &cpu
 	}
@@ -153,23 +162,89 @@ func runSandboxResize(cmd *cobra.Command, args []string, cpu, memory int) error 
 	if err != nil {
 		return resizeError(cmd, err)
 	}
+	notApplied := resizeNotApplied(out)
 
 	if isJSON() {
-		return p.JSON(out)
+		if err := p.JSON(out); err != nil {
+			return err
+		}
+	} else {
+		printResizeOutcome(p, out, notApplied)
 	}
-	switch {
-	case out.Restarted:
-		p.Success("sandbox recreated at the new size: %s (was %s)", out.NewSandbox, out.SourceSandbox)
-		p.Line("vCPU: %d, memory: %d MB", out.Resources.CPU, out.Resources.MemoryMB)
-	case out.AppliedLive:
-		p.Success("applied live: vCPU %d, memory %d MB", out.Resources.CPU, out.Resources.MemoryMB)
-	case out.RequiresRestart:
-		p.Line("Saved: restart the sandbox to apply the change (vCPU %d, memory %d MB)",
-			out.Resources.CPU, out.Resources.MemoryMB)
-	default:
-		p.Line("Done: vCPU %d, memory %d MB", out.Resources.CPU, out.Resources.MemoryMB)
+	if len(notApplied) > 0 {
+		return &ExitError{Code: ExitConflict}
 	}
 	return nil
+}
+
+// resizeNotApplied lists the dimensions the server did not change. The server
+// answers 200 for them and saves nothing, so they must never read as done.
+func resizeNotApplied(out *client.SandboxResizeOutcome) []string {
+	if out.Restarted {
+		return nil
+	}
+	var dims []string
+	for _, dim := range []string{"cpu", "memory_mb"} {
+		if ch, ok := out.Changes[dim]; ok {
+			switch ch.Status {
+			case "requires_restart", "unsupported":
+				dims = append(dims, dim)
+			}
+		}
+	}
+	if len(dims) == 0 && out.RequiresRestart {
+		dims = append(dims, "resources")
+	}
+	return dims
+}
+
+func printResizeOutcome(p *output.Printer, out *client.SandboxResizeOutcome, notApplied []string) {
+	if out.Restarted {
+		newID, sourceID := "", ""
+		if out.NewSandbox != nil {
+			newID = out.NewSandbox.ID
+		}
+		if out.SourceSandbox != nil {
+			sourceID = out.SourceSandbox.ID
+		}
+		p.Success("sandbox recreated at the new size: %s (was %s, now paused)", newID, sourceID)
+		for _, dim := range []string{"cpu", "memory_mb"} {
+			if ch, ok := out.Changes[dim]; ok && ch.To > 0 {
+				p.Line("%s: %d", resizeDimLabel(dim), ch.To)
+			}
+		}
+		p.Line("Destroy the source when you no longer need it: miosa sandbox destroy %s", sourceID)
+		return
+	}
+	for _, dim := range []string{"cpu", "memory_mb"} {
+		ch, ok := out.Changes[dim]
+		if !ok || ch.Status == "applied_live" || ch.Status == "unchanged" || ch.Status == "" {
+			continue
+		}
+		reason := ""
+		if ch.Reason != "" {
+			reason = " (" + strings.ReplaceAll(ch.Reason, "_", " ") + ")"
+		}
+		p.Line("%s %d -> %d NOT applied: %s%s", resizeDimLabel(dim), ch.From, ch.To,
+			strings.ReplaceAll(ch.Status, "_", " "), reason)
+	}
+	switch {
+	case len(notApplied) > 0:
+		p.Line("Now: vCPU %d, memory %d MB. Nothing else was saved; a plain restart will not apply it.",
+			out.Resources.CPU, out.Resources.MemoryMB)
+		p.Line("Rerun with --restart to recreate the sandbox at the new size (new id; processes stop, files are kept).")
+	case out.AppliedLive:
+		p.Success("applied live: vCPU %d, memory %d MB", out.Resources.CPU, out.Resources.MemoryMB)
+	default:
+		p.Line("Unchanged: vCPU %d, memory %d MB", out.Resources.CPU, out.Resources.MemoryMB)
+	}
+}
+
+func resizeDimLabel(dim string) string {
+	if dim == "memory_mb" {
+		return "memory MB"
+	}
+	return "vCPU"
 }
 
 // resizeError turns a resize refusal into a plain sentence (text mode), while
@@ -191,7 +266,7 @@ func resizeError(cmd *cobra.Command, err error) error {
 func resizeRefusalMessage(ae *api.Error) (string, bool) {
 	switch ae.Code {
 	case "RESIZE_REQUIRES_RESTART":
-		return "the change cannot be applied live: restart the sandbox and try again", true
+		return "the change cannot be applied live; rerun with --restart to recreate the sandbox at the new size", true
 	case "RESIZE_UNSUPPORTED":
 		return "this sandbox's runtime cannot resize resources live (SOMA, and hosts without the vCPU controller, cannot); recreate the sandbox at the new size instead", true
 	case "RESIZE_FAILED":
@@ -271,9 +346,9 @@ func describeMemoryLive(caps map[string]any) string {
 		return "yes"
 	}
 	if reason := capString(caps, "memory_reason"); reason != "" {
-		return "no - " + reason + " (a restart applies memory changes)"
+		return "no - " + reason + " (resize --restart recreates the sandbox at the new size)"
 	}
-	return "no - requires a restart"
+	return "no - resize --restart recreates the sandbox at the new size"
 }
 
 func capString(caps map[string]any, key string) string {

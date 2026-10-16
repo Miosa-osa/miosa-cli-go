@@ -3,6 +3,7 @@ package commands
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Miosa-osa/miosa-cli-go/internal/api"
+	"github.com/Miosa-osa/miosa-cli-go/internal/client"
 )
 
 func init() { rootCmd.AddCommand(newMCPCmd()) }
@@ -289,7 +291,11 @@ without writing anything.
 			if err != nil {
 				return die(err)
 			}
-			entry := spec.entry(mcpEndpoint(c.API, url), c.Key)
+			key, minted, err := mcpKey(cmd.Context(), c)
+			if err != nil {
+				return die(err)
+			}
+			entry := spec.entry(mcpEndpoint(c.API, url), key)
 			if err := installMCPServer(file, name, entry, !printOnly, force); err != nil {
 				return die(err)
 			}
@@ -299,6 +305,9 @@ without writing anything.
 				fmt.Fprintf(p.Writer(), "%s\n", body)
 				p.Line("Add this under \"mcpServers\" in %s.", file)
 				return nil
+			}
+			if minted {
+				p.Line("This CLI is signed in with a session token, which expires in minutes, so it minted an API key for MCP (cli preset).")
 			}
 			p.Success("Added MIOSA MCP as %q in %s", name, file)
 			p.Line("Restart %s to pick it up.", client)
@@ -312,6 +321,31 @@ without writing anything.
 	cmd.Flags().BoolVar(&printOnly, "print", false, "Print the config instead of writing it")
 	cmd.Flags().BoolVar(&force, "force", false, "Overwrite an existing entry of the same name")
 	return cmd
+}
+
+// mcpKey is the token a client config gets. A session token lives 15 minutes
+// and a client config keeps its token for months, so a CLI signed in with one
+// mints an API key (the cli preset) for MCP instead: a session token written
+// there answered 401 to every MCP call a quarter of an hour later (ClinicIQ,
+// 2026-10-16).
+func mcpKey(ctx context.Context, c *client.Client) (key string, minted bool, err error) {
+	if isAPIKey(c.Key) {
+		return c.Key, false, nil
+	}
+	host, _ := os.Hostname()
+	var resp struct {
+		Data struct {
+			Key string `json:"key"`
+		} `json:"data"`
+	}
+	body := map[string]any{"name": "MIOSA MCP on " + orDefault(host, "this computer"), "preset": "cli"}
+	if err := c.API.Post(ctx, "/api-keys", body, &resp); err != nil {
+		return "", false, fmt.Errorf("minting an API key for MCP: %w", err)
+	}
+	if !isAPIKey(resp.Data.Key) {
+		return "", false, fmt.Errorf("minting an API key for MCP: the server returned no key")
+	}
+	return resp.Data.Key, true, nil
 }
 
 // installMCPServer merges one server entry into a client's JSON config file.

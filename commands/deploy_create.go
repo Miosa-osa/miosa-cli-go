@@ -466,6 +466,25 @@ type dropCompleteResponse struct {
 	} `json:"data"`
 }
 
+// staleLink handles a folder linked to a deployment that is gone: with a name
+// to create, it confirms (or takes --yes) and creates a new deployment, whose
+// id then replaces the link; without one it explains instead of a bare 404.
+func staleLink(p *output.Printer, f *deployFlags, link deploymentLink) error {
+	what := fmt.Sprintf("This folder is linked to deployment %s, which no longer exists or isn't in this workspace.", orDefault(link.Name, shortRef(link.DeploymentID)))
+	if f.name == "" {
+		return &api.Error{Status: http.StatusNotFound, Code: "NOT_FOUND",
+			Message: what + " Pass a name to create a new one: 'miosa deploy create <name>', or delete " + filepath.Join(deploymentLinkDir, deploymentLinkName) + "."}
+	}
+	if !f.yes {
+		if err := confirmOnTerminal(what + fmt.Sprintf(" Create a new deployment %q and link this folder to it?", f.name)); err != nil {
+			return err
+		}
+	} else if !isJSON() {
+		p.Line("%s Creating %q and linking this folder to it.", what, f.name)
+	}
+	return nil
+}
+
 func deployFromDir(ctx context.Context, c *client.Client, p *output.Printer, f *deployFlags, env map[string]any) (*deployOutcome, error) {
 	root, err := filepath.Abs(f.dir)
 	if err != nil {
@@ -495,10 +514,12 @@ func deployFromDir(ctx context.Context, c *client.Client, p *output.Printer, f *
 	// deployment; otherwise create one and remember it.
 	target := f.deployment
 	linkedName := ""
+	var fromLink *deploymentLink
 	if target == "" {
 		if link, ok := readDeploymentLink(root); ok {
 			target = link.DeploymentID
 			linkedName = link.Name
+			fromLink = &link
 		}
 	}
 	createNew := target == ""
@@ -544,7 +565,17 @@ func deployFromDir(ctx context.Context, c *client.Client, p *output.Printer, f *
 	} else {
 		depID = target
 		var session dropSessionResponse
-		if err := c.API.Post(ctx, "/deployments/"+url.PathEscape(target)+"/drop/sessions", nil, &session); err != nil {
+		err := c.API.Post(ctx, "/deployments/"+url.PathEscape(target)+"/drop/sessions", nil, &session)
+		// The folder's link names a deployment that is gone: create the named
+		// one instead (after confirmation), and the link is rewritten below.
+		if fromLink != nil && api.IsStatus(err, http.StatusNotFound) {
+			if err := staleLink(p, f, *fromLink); err != nil {
+				return nil, err
+			}
+			err = c.API.Post(ctx, "/deployments/drop/sessions", map[string]any{"name": f.name}, &session)
+			depID, target, linkedName, createNew = session.Data.DeploymentID, session.Data.DeploymentID, f.name, true
+		}
+		if err != nil {
 			return nil, err
 		}
 		sid = session.Data.SessionID
@@ -897,6 +928,7 @@ uploads. <deployment> is a name, slug or id.
 	cmd.AddCommand(newDeployGetCmd())
 	cmd.AddCommand(newDeployVersionsCmd())
 	cmd.AddCommand(newDeployDiffCmd())
+	cmd.AddCommand(newDeployEnvPullCmd())
 	return cmd
 }
 

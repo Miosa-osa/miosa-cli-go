@@ -85,6 +85,11 @@ func Envelope(v interface{}) interface{} {
 		if b, _ := json.Marshal(val); string(b) == string(dataJSON) {
 			continue // the same rows under a second key
 		}
+		// The same rows under a second key, serialized slightly differently
+		// (deploy releases sends data and releases): one list is enough.
+		if other, isOtherList := val.([]interface{}); isOtherList && isList && len(other) == len(list) {
+			continue
+		}
 		if n, isNum := val.(float64); isNum && isList && (k == "total" || k == "count") && int(n) == len(list) {
 			continue
 		}

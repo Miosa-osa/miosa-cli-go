@@ -106,6 +106,83 @@ func TestSandboxResize_Recreated(t *testing.T) {
 	}
 }
 
+// The 200 body the live server sent on QA (2026-10-16) for --cpu 1 --memory 1024
+// on a sandbox booted at 2048: vCPU applied live, memory not applied and NOT
+// saved. CLI 2.3.10 printed "Saved: restart the sandbox to apply the change",
+// so ClinicIQ restarted and their memory never changed.
+const resizeRequiresRestartBody = `{"id":"` + sandboxResizeID + `","resources":{"cpu":1,"memory_mb":8192},"changes":{"cpu":{"reason":null,"status":"applied_live","to":1,"from":2},"memory_mb":{"reason":"below_booted_memory","status":"requires_restart","to":1024,"from":8192}},"requires_restart":true,"applied_live":false,"capabilities":{}}`
+
+func TestSandboxResize_NotAppliedIsAFailureNotSaved(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(resizeRequiresRestartBody))
+	}))
+	defer srv.Close()
+	cleanup := setupEnv(t, srv)
+	defer cleanup()
+
+	out, err := run(t, "sandbox", "resize", sandboxResizeID, "--cpu", "1", "--memory", "1024")
+	if commands.ExitCode(err) != commands.ExitConflict {
+		t.Fatalf("exit code = %d, want %d: a change that was not applied must fail", commands.ExitCode(err), commands.ExitConflict)
+	}
+	if strings.Contains(out, "Saved") {
+		t.Errorf("output %q must not claim the change was saved", out)
+	}
+	for _, want := range []string{"memory MB 8192 -> 1024 NOT applied", "below booted memory", "memory 8192 MB", "--restart"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output %q missing %q", out, want)
+		}
+	}
+}
+
+func TestSandboxResize_NotAppliedJSONStillFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(resizeRequiresRestartBody))
+	}))
+	defer srv.Close()
+	cleanup := setupEnv(t, srv)
+	defer cleanup()
+
+	out, err := run(t, "sandbox", "resize", sandboxResizeID, "--memory", "1024", "--json")
+	if commands.ExitCode(err) != commands.ExitConflict {
+		t.Fatalf("exit code = %d, want %d", commands.ExitCode(err), commands.ExitConflict)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(dataJSON(out), &result); err != nil {
+		t.Fatalf("output is not JSON: %v (%q)", err, out)
+	}
+	if result["requires_restart"] != true {
+		t.Errorf("requires_restart = %v, want true", result["requires_restart"])
+	}
+}
+
+func TestSandboxResize_RestartFlagSendsRestart(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"id":"` + sandboxResizeID + `","mode":"recreate_from_disk","resources":{"cpu":2,"memory_mb":4096},"changes":{"memory_mb":{"reason":"below_booted_memory","status":"recreated","to":2048,"from":4096}},"restarted":true,"requires_restart":false,"applied_live":false,"new_sandbox":{"id":"22222222-2222-2222-2222-222222222222","state":"provisioning"},"source_sandbox":{"id":"` + sandboxResizeID + `","state":"paused","retained":true}}`))
+	}))
+	defer srv.Close()
+	cleanup := setupEnv(t, srv)
+	defer cleanup()
+
+	out, err := run(t, "sandbox", "resize", sandboxResizeID, "--memory", "2048", "--restart")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotBody["restart"] != true {
+		t.Errorf("restart = %v, want true", gotBody["restart"])
+	}
+	for _, want := range []string{"22222222-2222-2222-2222-222222222222", "memory MB: 2048", "sandbox destroy " + sandboxResizeID} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output %q missing %q", out, want)
+		}
+	}
+}
+
 func TestSandboxResize_ConflictPrintsPlainSentence(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -123,8 +200,8 @@ func TestSandboxResize_ConflictPrintsPlainSentence(t *testing.T) {
 	if commands.ExitCode(err) != commands.ExitConflict {
 		t.Fatalf("exit code = %d, want %d (conflict)", commands.ExitCode(err), commands.ExitConflict)
 	}
-	if !strings.Contains(out, "restart the sandbox") {
-		t.Errorf("output %q should explain that a restart is needed", out)
+	if !strings.Contains(out, "--restart") {
+		t.Errorf("output %q should point at --restart", out)
 	}
 	if !strings.Contains(err.Error(), "RESIZE_REQUIRES_RESTART") {
 		t.Errorf("error %q should keep the server code", err.Error())
@@ -157,7 +234,7 @@ func TestSandboxResources_PrintsCapabilities(t *testing.T) {
 	if !strings.Contains(out, "up to 2 vCPU") {
 		t.Errorf("output %q missing live vCPU capability", out)
 	}
-	if !strings.Contains(out, "a restart applies memory changes") {
+	if !strings.Contains(out, "resize --restart recreates the sandbox") {
 		t.Errorf("output %q missing memory restart capability", out)
 	}
 }

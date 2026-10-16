@@ -27,7 +27,8 @@ func newLoginCmd() *cobra.Command {
 		withKey   bool
 		device    bool
 		noBrowser bool
-		tenant    string
+		orgs      []string
+		allOrgs   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "login",
@@ -35,8 +36,10 @@ func newLoginCmd() *cobra.Command {
 		Long: `Sign in and store an API key for this machine.
 
 With no flags on a terminal, login opens your browser, shows a short code to
-confirm there, and stores the key MIOSA issues for this CLI. The key is bound to
-the organization you approve; sign in again with --profile NAME to keep several.
+confirm there, and stores the key MIOSA issues for this CLI. On that page you
+choose which of your organizations this terminal may work in (all of them, or
+some) and which one it starts in; one key covers them all. Switch with
+'miosa org use <org>', change the set with 'miosa org select'.
 
 For scripts and CI, pass an existing key without putting it in the process
 arguments:
@@ -46,26 +49,32 @@ arguments:
 or skip login and export MIOSA_API_KEY.
 
   miosa login                       # browser sign-in
+  miosa login --all-orgs            # every organization pre-selected
+  miosa login --org osa --org acme  # these organizations pre-selected
   miosa login --no-browser          # print the URL instead of opening it
   miosa login --with-key            # paste a key (input hidden)
   miosa login --profile work        # store as a separate profile`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runLogin(cmd, loginOptions{keyStdin: keyStdin, withKey: withKey, device: device, noBrowser: noBrowser, tenant: tenant})
+			return runLogin(cmd, loginOptions{keyStdin: keyStdin, withKey: withKey, device: device, noBrowser: noBrowser, orgs: orgs, allOrgs: allOrgs})
 		},
 	}
 	cmd.Flags().BoolVar(&keyStdin, "key-stdin", false, "Read the API key from standard input")
 	cmd.Flags().BoolVar(&withKey, "with-key", false, "Paste an API key instead of using the browser")
 	cmd.Flags().BoolVar(&device, "device", false, "Use the browser flow even when stdin is not a terminal")
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "Print the sign-in URL instead of opening a browser")
-	cmd.Flags().StringVar(&tenant, "org", "", "Organization slug or id to sign in to (browser flow)")
-	_ = cmd.Flags().MarkHidden("org")
+	cmd.Flags().StringArrayVar(&orgs, "org", nil, "Pre-select this organization on the approval page (repeatable)")
+	cmd.Flags().BoolVar(&allOrgs, "all-orgs", false, "Pre-select every organization on the approval page")
 	return cmd
 }
 
 type loginOptions struct {
 	keyStdin, withKey, device, noBrowser bool
-	tenant                               string
+	// orgs and allOrgs pre-select organizations on the approval page;
+	// lockedOrg asks for exactly one (the page shows no list).
+	orgs      []string
+	allOrgs   bool
+	lockedOrg string
 }
 
 // sleepFn lets tests skip the poll interval.
@@ -101,6 +110,10 @@ func stdinIsTerminal(cmd *cobra.Command) bool {
 
 func runLogin(cmd *cobra.Command, o loginOptions) error {
 	p := printerFor(cmd)
+	// The new key decides its organizations: never send the old profile's
+	// active org while signing in.
+	orgHeaderOff = true
+	defer func() { orgHeaderOff = false }()
 
 	var key string
 	switch {
@@ -135,12 +148,13 @@ func runLogin(cmd *cobra.Command, o loginOptions) error {
 	ac.MaxRetries = 2
 
 	var tenantSlug string
+	var grant deviceToken
 	if key == "" {
-		k, slug, err := deviceLogin(cmd, ac, o)
+		tok, err := deviceLogin(cmd, ac, o)
 		if err != nil {
 			return die(err)
 		}
-		key, tenantSlug = k, slug
+		key, tenantSlug, grant = tok.APIKey, tok.Tenant.Slug, tok
 		ac.Key = key
 	} else if !strings.HasPrefix(key, "msk_") {
 		fmt.Fprintln(cmd.ErrOrStderr(), "warning: key does not start with 'msk_'; continuing")
@@ -160,14 +174,28 @@ func runLogin(cmd *cobra.Command, o loginOptions) error {
 		tenantSlug = me.Slug
 	}
 
-	if err := storeLogin(baseURL, key, tenantSlug); err != nil {
+	slugs := make([]string, 0, len(grant.Orgs))
+	for _, o := range grant.Orgs {
+		slugs = append(slugs, o.Slug)
+	}
+	if err := storeLogin(baseURL, key, tenantSlug, slugs, grant.Key.OrgScope); err != nil {
 		return die(fmt.Errorf("saving config: %w", err))
 	}
 	profile := profileLabel()
+	// A server without multi-organization sign-in ignores the request and
+	// answers with no orgs: say so instead of letting it pass silently.
+	if (o.allOrgs || len(o.orgs) > 0) && grant.Orgs == nil && key == grant.APIKey {
+		fmt.Fprintf(cmd.ErrOrStderr(), "miosa: this MIOSA server does not support signing in to several organizations yet; this sign-in covers %s only\n", orDash(me.Slug))
+	}
 	if isJSON() {
-		return p.JSON(map[string]any{"status": "authenticated", "profile": profile, "organization": me.Name, "slug": me.Slug})
+		return p.JSON(map[string]any{"status": "authenticated", "profile": profile, "organization": me.Name, "slug": me.Slug, "orgs": grant.Orgs})
 	}
 	path, _ := config.Path()
+	if len(grant.Orgs) > 1 {
+		p.Success("Signed in to %d organizations, starting in %s. Profile %q saved to %s", len(grant.Orgs), orDash(me.Slug), profile, path)
+		p.Line("Switch with 'miosa org use <org>'; see them all with 'miosa org list'.")
+		return nil
+	}
 	p.Success("Signed in to %s (%s). Profile %q saved to %s", orDash(me.Name), orDash(me.Slug), profile, path)
 	return nil
 }
@@ -189,7 +217,7 @@ func profileLabel() string {
 }
 
 // storeLogin writes the key into the selected profile, creating it if needed.
-func storeLogin(baseURL, key, tenant string) error {
+func storeLogin(baseURL, key, tenant string, orgs []string, scope string) error {
 	f, err := config.LoadFile()
 	if err != nil {
 		return err
@@ -198,6 +226,9 @@ func storeLogin(baseURL, key, tenant string) error {
 	cur, _ := f.Get(name)
 	cur.APIKey = key
 	cur.Tenant = tenant
+	cur.ActiveOrg = tenant
+	cur.Orgs = orgs
+	cur.OrgScope = scope
 	// Only a non-default URL is worth pinning to a named profile; the default
 	// profile always records it, as before.
 	if name == config.DefaultProfile || baseURL != config.DefaultBaseURL {
@@ -251,27 +282,48 @@ type deviceStart struct {
 
 type deviceToken struct {
 	APIKey string `json:"api_key"`
+	Key    struct {
+		OrgScope string `json:"org_scope"`
+	} `json:"key"`
 	Tenant struct {
 		ID   string `json:"id"`
 		Slug string `json:"slug"`
 		Name string `json:"name"`
 	} `json:"tenant"`
+	// Orgs are the organizations the key covers, start org first (servers
+	// since multi-org CLI access; older ones send none).
+	Orgs []struct {
+		ID   string `json:"id"`
+		Slug string `json:"slug"`
+		Name string `json:"name"`
+		Role string `json:"role"`
+	} `json:"orgs"`
 }
 
 // deviceLogin runs the browser flow: start a session, send the user to the
 // approval page, and poll until the key is issued exactly once.
-func deviceLogin(cmd *cobra.Command, ac *api.Client, o loginOptions) (key, tenantSlug string, err error) {
+func deviceLogin(cmd *cobra.Command, ac *api.Client, o loginOptions) (deviceToken, error) {
 	host, _ := os.Hostname()
-	body := map[string]any{"client_name": "MIOSA CLI on " + host}
-	if o.tenant != "" {
-		body["tenant"] = o.tenant
+	body := map[string]any{
+		"client_name": "MIOSA CLI on " + host,
+		"os":          runtime.GOOS,
+		"arch":        runtime.GOARCH,
+		"cli_version": cliVersion,
+	}
+	switch {
+	case o.lockedOrg != "":
+		body["tenant"] = o.lockedOrg
+	case o.allOrgs:
+		body["all_orgs"] = true
+	case len(o.orgs) > 0:
+		body["orgs"] = o.orgs
 	}
 	var st deviceStart
 	if err := ac.Post(cmd.Context(), "/auth/cli/start", body, &st); err != nil {
-		return "", "", fmt.Errorf("starting browser sign-in: %w", err)
+		return deviceToken{}, fmt.Errorf("starting browser sign-in: %w", err)
 	}
 	if st.DeviceCode == "" || st.UserCode == "" {
-		return "", "", errors.New("the server did not return a sign-in code")
+		return deviceToken{}, errors.New("the server did not return a sign-in code")
 	}
 	target := st.VerificationURIComplete
 	if target == "" {
@@ -302,15 +354,15 @@ func deviceLogin(cmd *cobra.Command, ac *api.Client, o loginOptions) (key, tenan
 	defer cancel()
 	for {
 		if err := sleepFn(ctx, interval); err != nil {
-			return "", "", errors.New("sign-in timed out; run 'miosa login' again")
+			return deviceToken{}, errors.New("sign-in timed out; run 'miosa login' again")
 		}
 		var tok deviceToken
 		err := ac.JSON(ctx, api.Request{Method: http.MethodPost, Path: "/auth/cli/token", Body: map[string]string{"device_code": st.DeviceCode}, NoRetry: true}, &tok)
 		if err == nil {
 			if tok.APIKey == "" {
-				return "", "", errors.New("the server approved the sign-in but returned no key")
+				return deviceToken{}, errors.New("the server approved the sign-in but returned no key")
 			}
-			return tok.APIKey, tok.Tenant.Slug, nil
+			return tok, nil
 		}
 		var ae *api.Error
 		if errors.As(err, &ae) {
@@ -321,18 +373,18 @@ func deviceLogin(cmd *cobra.Command, ac *api.Client, o loginOptions) (key, tenan
 				interval += 2 * time.Second
 				continue
 			case http.StatusGone:
-				return "", "", errors.New("the sign-in code expired; run 'miosa login' again")
+				return deviceToken{}, errors.New("the sign-in code expired; run 'miosa login' again")
 			case http.StatusForbidden:
-				return "", "", errors.New("sign-in was denied in the browser")
+				return deviceToken{}, errors.New("sign-in was denied in the browser")
 			case http.StatusConflict:
-				return "", "", errors.New("this sign-in code was already used; run 'miosa login' again")
+				return deviceToken{}, errors.New("this sign-in code was already used; run 'miosa login' again")
 			}
 		}
 		var te *api.TransportError
 		if errors.As(err, &te) {
 			continue // a flaky network must not abort the wait
 		}
-		return "", "", fmt.Errorf("sign-in failed: %w", err)
+		return deviceToken{}, fmt.Errorf("sign-in failed: %w", err)
 	}
 }
 
@@ -417,6 +469,16 @@ organization record, which has no user, workspace or scopes.`,
 				"profile": profileLabel(), "api_url": c.BaseURL, "key": maskKey(c.Key),
 				"default_workspace": cfg.DefaultWorkspace, "current_sandbox": cfg.CurrentSandbox,
 			}
+			activeOrg, activeFrom := effectiveOrg()
+			if activeOrg == "" {
+				activeOrg, activeFrom = fmt.Sprint(orNil(org["slug"])), "key"
+			}
+			info["active_org"] = activeOrg
+			info["active_org_source"] = activeFrom
+			if len(cfg.Orgs) > 0 {
+				info["orgs"] = cfg.Orgs
+				info["org_scope"] = cfg.OrgScope
+			}
 			if user != nil {
 				info["user"] = user
 			}
@@ -436,8 +498,12 @@ organization record, which has no user, workspace or scopes.`,
 			rows = append(rows,
 				[2]string{"Organization", fmt.Sprint(orNil(org["name"])) + " (" + fmt.Sprint(orNil(org["slug"])) + ")"},
 				[2]string{"Org id", fmt.Sprint(orNil(org["id"]))},
+				[2]string{"Working in", activeOrg + " (" + map[string]string{"flag": "--org", "env": "MIOSA_ORG", "profile": "miosa org use", "key": "the key's organization"}[activeFrom] + ")"},
 				[2]string{"Plan", fmt.Sprint(orNil(plan))},
 			)
+			if label := orgsLabel(cfg.Orgs, cfg.OrgScope); label != "" {
+				rows = append(rows, [2]string{"Covers", label})
+			}
 			if cur != nil {
 				rows = append(rows, [2]string{"Credits", creditsLabel(cur["credit_balance"])})
 			}
