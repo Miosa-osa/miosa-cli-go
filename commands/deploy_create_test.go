@@ -78,11 +78,11 @@ func TestDeployCreatePortOnlyForSandbox(t *testing.T) {
 	}
 }
 
-func TestDeployCreateBuildCommandOnlyForGit(t *testing.T) {
+func TestDeployCreateBuildCommandNeedsAServerForSandbox(t *testing.T) {
 	fakeRoutes(t, map[string]any{})
 	_, err := run(t, "deploy", "create", "--from-sandbox", "box-1", "--build-command", "npm run build")
-	if err == nil || !strings.Contains(err.Error(), "--build-command does not apply") {
-		t.Fatalf("expected a --build-command error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "needs --run-command or --type dynamic") {
+		t.Fatalf("expected a --build-command error for a static publish, got: %v", err)
 	}
 }
 
@@ -115,6 +115,9 @@ func TestDeployCreateFromSandbox(t *testing.T) {
 	}
 	if b["deployment_type"] != "dynamic" || b["domain"] != "app.example.com" {
 		t.Fatalf("type/domain not sent: %+v", b)
+	}
+	if _, ok := b["build_command"]; ok {
+		t.Fatalf("build_command is only sent when given: %+v", b)
 	}
 	// env is set after create for sandbox publishes.
 	envCall := f.find("POST", "/deployments/d1/env")
@@ -268,5 +271,18 @@ func TestDeployCreatePublishAlias(t *testing.T) {
 	deploySandboxAPI(t)
 	if _, err := run(t, "deploy", "publish", "my-app", "--from-sandbox", "box-1"); err != nil {
 		t.Fatalf("the publish alias should work: %v", err)
+	}
+}
+
+func TestDeployCreateFromSandboxSendsBuildCommandForAServer(t *testing.T) {
+	// Customer write-up #4 (2026-10-16): --build-command was refused with --from-sandbox.
+	f := deploySandboxAPI(t)
+	if out, err := run(t, "deploy", "create", "my-app", "--from-sandbox", "box-1", "--dir", "/home/user/app",
+		"--port", "3000", "--run-command", "npx next start -p 3000", "--build-command", "npm ci && npm run build"); err != nil {
+		t.Fatalf("deploy create: %v (out=%q)", err, out)
+	}
+	b := f.find("POST", "/sandboxes/sbx-1/deploy")[0].Body
+	if b["build_command"] != "npm ci && npm run build" || b["run_command"] != "npx next start -p 3000" {
+		t.Fatalf("build_command not sent: %+v", b)
 	}
 }

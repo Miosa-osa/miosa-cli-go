@@ -596,8 +596,8 @@ func (o Op) render(cmd *cobra.Command, args []string, resp any) error {
 			rows = append(rows, [2]string{c.Head, v})
 		}
 		if !shown && resp != nil {
-			// Nothing we know how to show: print what the server sent.
-			return p.JSON(resp)
+			// Nothing we know how to show: show what the server sent, readably.
+			return renderReadable(p, resp)
 		}
 		p.Fields(rows)
 	case o.Done != "":
@@ -605,7 +605,7 @@ func (o Op) render(cmd *cobra.Command, args []string, resp any) error {
 	case resp == nil:
 		p.Success("done")
 	default:
-		return p.JSON(resp)
+		return renderReadable(p, resp)
 	}
 	return nil
 }

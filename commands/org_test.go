@@ -70,8 +70,13 @@ func (f *orgFakeAPI) last(t *testing.T) recorded {
 func runOrg(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	t.Setenv("MIOSA_ORG", "")
+	t.Setenv("MIOSA_BILL_TO", "")
 	_ = commands.Root().PersistentFlags().Set("org", "")
-	t.Cleanup(func() { _ = commands.Root().PersistentFlags().Set("org", "") })
+	_ = commands.Root().PersistentFlags().Set("bill-to", "")
+	t.Cleanup(func() {
+		_ = commands.Root().PersistentFlags().Set("org", "")
+		_ = commands.Root().PersistentFlags().Set("bill-to", "")
+	})
 	return run(t, args...)
 }
 
@@ -132,7 +137,7 @@ func TestOrgListMarksWhoPaysAndTheKeyOrganization(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var options []map[string]any
-	if err := json.Unmarshal([]byte(jsonOut), &options); err != nil || len(options) != 2 {
+	if err := json.Unmarshal(dataJSON(jsonOut), &options); err != nil || len(options) != 2 {
 		t.Fatalf("json output = %q (%v)", jsonOut, err)
 	}
 }
@@ -195,7 +200,7 @@ func TestOrgBillShowsTheAPIRefusalWithItsCode(t *testing.T) {
 	}
 }
 
-func TestGlobalOrgFlagTravelsAsTheBillToHeader(t *testing.T) {
+func TestGlobalBillToFlagTravelsAsTheBillToHeader(t *testing.T) {
 	api := &orgFakeAPI{handler: func(r *http.Request, _ string) (int, string) {
 		return 200, `{"data":{"organization":{"id":"org-acme","name":"Acme","type":"company"},"can_start":true,
 			"credits":{"available_cents":899},"plan":{"name":"pro"},
@@ -206,7 +211,7 @@ func TestGlobalOrgFlagTravelsAsTheBillToHeader(t *testing.T) {
 	defer srv.Close()
 	defer setupEnv(t, srv)()
 
-	out, err := runOrg(t, "--org", "acme", "limits")
+	out, err := runOrg(t, "--bill-to", "acme", "limits")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -228,7 +233,7 @@ func TestGlobalOrgFlagTravelsAsTheBillToHeader(t *testing.T) {
 	}
 }
 
-func TestMiosaOrgEnvironmentVariableIsTheSameOverride(t *testing.T) {
+func TestMiosaBillToEnvironmentVariableIsTheSameOverride(t *testing.T) {
 	api := &orgFakeAPI{handler: func(r *http.Request, _ string) (int, string) {
 		return 200, `{"data":{"organization":{"name":"Acme"},"can_start":true,"credits":{"available_cents":1},"concurrency":{"limit":null,"running":0},"spend":{"mode":"unlimited"}}}`
 	}}
@@ -236,9 +241,9 @@ func TestMiosaOrgEnvironmentVariableIsTheSameOverride(t *testing.T) {
 	defer srv.Close()
 	defer setupEnv(t, srv)()
 
-	t.Setenv("MIOSA_ORG", "acme")
+	t.Setenv("MIOSA_BILL_TO", "acme")
 	commands.ResetForTest()
-	_ = commands.Root().PersistentFlags().Set("org", "")
+	_ = commands.Root().PersistentFlags().Set("bill-to", "")
 	root := commands.Root()
 	root.SetArgs([]string{"limits"})
 	if err := root.Execute(); err != nil {
@@ -397,7 +402,7 @@ func TestOrgCapsRefuseAnotherOrganizationThanTheKeys(t *testing.T) {
 	defer setupEnv(t, srv)()
 
 	_, err := runOrg(t, "--org", "acme", "org", "caps")
-	if err == nil || !strings.Contains(err.Error(), "this key belongs to") {
+	if err == nil || !strings.Contains(err.Error(), "this key acts in mine") || commands.ExitCode(err) != commands.ExitAuth {
 		t.Fatalf("error = %v", err)
 	}
 	// Naming the key's own organization is fine.
@@ -444,7 +449,7 @@ func TestOrgMembersAndInvite(t *testing.T) {
 
 // A create goes through the SDK, not the REST client the other commands use.
 // The override must reach it too, or `--org` would bill the wrong organization.
-func TestGlobalOrgFlagReachesTheCreateCall(t *testing.T) {
+func TestGlobalBillToFlagReachesTheCreateCall(t *testing.T) {
 	api := &orgFakeAPI{handler: func(r *http.Request, _ string) (int, string) {
 		if r.Method == http.MethodPost && r.URL.Path == "/sandboxes" {
 			return 201, string(fakeSandbox("abc123", "my-box"))
@@ -455,7 +460,7 @@ func TestGlobalOrgFlagReachesTheCreateCall(t *testing.T) {
 	defer srv.Close()
 	defer setupEnv(t, srv)()
 
-	if _, err := runOrg(t, "--org", "Acme", "create", "my-box", "--size", "small"); err != nil {
+	if _, err := runOrg(t, "--bill-to", "Acme", "create", "my-box", "--size", "small"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := api.last(t)
@@ -468,5 +473,47 @@ func TestGlobalOrgFlagReachesTheCreateCall(t *testing.T) {
 	}
 	if got := api.last(t); got.BillTo != "" {
 		t.Errorf("the override leaked into a later create: %+v", got)
+	}
+}
+
+// S3 (2026-10-16): `deploy list --org osa` listed the key's own organization's
+// deployments. --org now means "work in this org": another org is refused with
+// exit 3 before anything is read, and the header the server checks is sent.
+func TestOrgFlagRefusesAnOrganizationTheKeyDoesNotActIn(t *testing.T) {
+	api := &orgFakeAPI{handler: func(r *http.Request, _ string) (int, string) {
+		if r.URL.Path == "/bill-to" {
+			return 200, billToPinned
+		}
+		return 200, `{"data":[]}`
+	}}
+	srv := api.server(t)
+	defer srv.Close()
+	defer setupEnv(t, srv)()
+
+	_, err := runOrg(t, "--org", "acme", "deploy", "list")
+	if err == nil || commands.ExitCode(err) != commands.ExitAuth ||
+		!strings.Contains(err.Error(), "this key acts in mine; you are not working in acme") {
+		t.Fatalf("want exit 3 and the mismatch message, got %v (exit %d)", err, commands.ExitCode(err))
+	}
+	if got := api.last(t); got.Path != "/bill-to" {
+		t.Fatalf("nothing but the check may be sent, last request %+v", got)
+	}
+
+	_, err = runOrg(t, "--org", "nobody", "deploy", "list")
+	if err == nil || commands.ExitCode(err) != commands.ExitAuth || !strings.Contains(err.Error(), "you are not a member of nobody") {
+		t.Fatalf("want NOT_A_MEMBER exit 3, got %v", err)
+	}
+
+	t.Setenv("MIOSA_ORG", "acme")
+	commands.ResetForTest()
+	root := commands.Root()
+	root.SetArgs([]string{"deploy", "list"})
+	if err := root.Execute(); err == nil || commands.ExitCode(err) != commands.ExitAuth {
+		t.Fatalf("MIOSA_ORG must be checked the same way, got %v", err)
+	}
+	t.Setenv("MIOSA_ORG", "")
+
+	if _, err := runOrg(t, "--org", "mine", "deploy", "list"); err != nil {
+		t.Fatalf("the key's own org must pass: %v", err)
 	}
 }

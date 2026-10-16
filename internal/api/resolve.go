@@ -284,6 +284,14 @@ func (c *Client) resolveNamed(ctx context.Context, res namedResource, ref string
 		if res.collection == "deployments" {
 			return c.resolveDeploymentRef(ctx, r, key, ref)
 		}
+		if res.collection == "forge/repositories" {
+			for _, row := range out.Data {
+				if row.ID == ref {
+					return ref, nil
+				}
+			}
+			return c.resolveForgeRepoRef(ctx, ref)
+		}
 		return ref, nil
 	case 1:
 		r.mu.Lock()
@@ -444,4 +452,35 @@ func (c *Client) resolveDeploymentRef(ctx context.Context, r *Resolver, key, ref
 	r.cache[key] = one.Data.ID
 	r.mu.Unlock()
 	return one.Data.ID, nil
+}
+
+// resolveForgeRepoRef finds a repository that is not in the caller's own list:
+// "org/name" through the by-slug route, otherwise NOT_FOUND. The API takes
+// only ids on /forge/repositories/<id>, so passing a name through answered
+// 400 BAD_REQUEST ("malformed value", exit 5) for a repository that does not
+// exist (tester item 13, 2026-10-16); a missing repository is exit 4.
+func (c *Client) resolveForgeRepoRef(ctx context.Context, ref string) (string, error) {
+	notFound := &Error{Status: http.StatusNotFound, Code: "NOT_FOUND",
+		Message: fmt.Sprintf("no repository named %q (see 'miosa forge repo list')", ref)}
+	org, name, ok := strings.Cut(ref, "/")
+	if !ok || org == "" || name == "" {
+		return "", notFound
+	}
+	var out struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	path := "/forge/repositories/by-slug/" + url.PathEscape(org) + "/" + url.PathEscape(name)
+	if err := c.JSON(ctx, Request{Method: http.MethodGet, Path: path, Verbatim: true}, &out); err != nil {
+		var ae *Error
+		if errors.As(err, &ae) && (ae.Status == http.StatusNotFound || ae.Status == http.StatusBadRequest) {
+			return "", notFound
+		}
+		return "", err
+	}
+	if out.Data.ID == "" {
+		return "", notFound
+	}
+	return out.Data.ID, nil
 }

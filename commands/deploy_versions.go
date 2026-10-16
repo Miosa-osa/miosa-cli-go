@@ -55,12 +55,15 @@ func newDeployVersionsRmCmd() *cobra.Command {
 	var deployment, dir string
 	var yes bool
 	cmd := &cobra.Command{
-		Use:   "rm <version>",
-		Short: "Delete a version that is not live",
-		Long: `Deletes one version (number, short id or id) of the deployment named by
---deployment, or of the deployment this folder is linked to. A version id on its
-own finds its deployment. The live version is refused, and so is any version the
-server still needs, such as the rollback target.`,
+		Use:     "rm <version>",
+		Aliases: []string{"archive"},
+		Short:   "Archive a version that is not live (also: versions archive)",
+		Long: `Archives one version (number, short id or id) of the deployment named by
+--deployment, or of the deployment this folder is linked to. Archiving keeps the
+row, its logs and its artifact for audit, takes it off the version list and out of
+static storage, and it can no longer be promoted. A version id on its own finds
+its deployment. The live version is refused, and so is any version the server
+still needs, such as the rollback target.`,
 		Example: "  miosa deploy versions rm 90a9dee1\n  miosa deploy versions rm 3 --deployment my-site --yes",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

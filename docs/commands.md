@@ -7,9 +7,10 @@ Regenerate with `make docs`.
 
 - `--api-key string` - API key (overrides MIOSA_API_KEY and config).
 - `--api-url string` - API base URL (overrides MIOSA_BASE_URL and config).
+- `--bill-to string` - Organization a new machine bills: id, slug or name (env MIOSA_BILL_TO).
 - `--json` - Print machine-readable JSON (same as --output json).
 - `--no-update-notice` - Silence the new-version notice (env: MIOSA_NO_UPDATE_NOTICE=1).
-- `--org string` - Organization to bill for this command: id, slug or name (env MIOSA_ORG).
+- `--org string` - Organization to work in: id, slug or name; refused if this key does not act in it (env MIOSA_ORG).
 - `-o, --output string` - Output format: text or json. (default `text`)
 - `--profile string` - Config profile to use (env: MIOSA_PROFILE).
 - `-q, --quiet` - Suppress informational output.
@@ -18,6 +19,7 @@ Regenerate with `make docs`.
 
 ## Commands
 
+- [`miosa admin`](#miosa-admin) - Platform administration (platform operators only)
 - [`miosa agent`](#miosa-agent) - Define, version and run agents
 - [`miosa alerts`](#miosa-alerts) - Platform alerts for your organization
 - [`miosa api`](#miosa-api) - Make an authenticated API request
@@ -101,6 +103,79 @@ Regenerate with `make docs`.
 - [`miosa whoami`](#miosa-whoami) - Show who this CLI is signed in as: user, organization, plan and access
 - [`miosa workflow`](#miosa-workflow) - Automations made of steps, agents and tools
 - [`miosa workspace`](#miosa-workspace) - Manage workspaces
+
+### `miosa admin`
+
+Platform administration (platform operators only).
+
+```
+miosa admin
+```
+
+Platform administration.
+
+These commands operate on platform state, not on your own sandboxes, and they
+require a platform operator API key.
+
+#### `miosa admin slot-revocations`
+
+Revoke a producer bake revision (bad-bake protection).
+
+```
+miosa admin slot-revocations
+```
+
+Manage the revoked producer bake revisions.
+
+A revocation is the supported replacement for a manual sweep after a bad bake.
+Every compute host refuses to acquire or warm-claim a slot whose manifest
+names a revoked revision, and the reaper retires the idle slots cut from it.
+A revocation reaches running hosts within about a minute, without a restart.
+
+Aliases: `slot-revocation`.
+
+##### `miosa admin slot-revocations list`
+
+List every revoked producer bake revision.
+
+```
+miosa admin slot-revocations list
+```
+
+List every revoked producer bake revision, newest first.
+
+```
+  miosa admin slot-revocations list
+  miosa admin slot-revocations list --json | jq -r '.data[].revision'
+```
+
+Aliases: `ls`.
+
+##### `miosa admin slot-revocations revoke`
+
+Revoke a producer bake revision.
+
+```
+miosa admin slot-revocations revoke <revision> [flags]
+```
+
+Revoke a producer bake revision.
+
+Take the revision from the manifest of the bad bake (producer.vcs_revision), or
+from the blocklist of the bake that produced it.
+Revoking is immediate and
+idempotent: revoking an already-revoked revision reports already_revoked rather
+than failing.
+
+```
+  miosa admin slot-revocations revoke 1a2b3c4d --reason "mmds token absent"
+```
+
+Aliases: `add`.
+
+Flags:
+
+- `--reason string` - Why the revision is revoked (recorded in the audit trail).
 
 ### `miosa agent`
 
@@ -2540,7 +2615,8 @@ Pick exactly one source:
 ```
   --from-sandbox <sandbox>   Publish a running sandbox's output.
   --git <url>                Connect a git repository and build it.
-  --dir <path>               Upload a local directory (built static output).
+  --dir <path>               Upload a local directory: built static output, or a
+                             server app with --run-command (and --port).
 
 ```
 With --from-sandbox, --dir is where the app lives inside the sandbox (default
@@ -2566,7 +2642,7 @@ Aliases: `publish`.
 Flags:
 
 - `--branch string` - Git branch to build (default: the current one).
-- `--build-command string` - Build command (git or Forge source).
+- `--build-command string` - Build command (git or Forge source, or a --from-sandbox server publish).
 - `--deployment string` - Push a new version to this existing deployment (id, name or hostname).
 - `--dir string` - With --from-sandbox: the app's path inside the sandbox. On its own: a local directory to upload.
 - `--domain string` - Custom domain to attach (then add the DNS record it shows).
@@ -2580,13 +2656,14 @@ Flags:
 - `--name string` - Deployment name (default: the argument, the repo or the directory name).
 - `--no-auto` - With --forge: do not build automatically on pushes to the branch.
 - `--no-promote` - Upload the version without making it live; prints the version to promote later.
-- `--port int` - With --from-sandbox: the port the app serves on.
+- `--port int` - The port the app serves on (--from-sandbox, or --dir with --run-command).
 - `--project string` - With --forge: the project to link the repository through (one repository per project).
 - `--root-directory string` - With --forge: the app's directory inside the repository.
 - `--run-command string` - Command the app starts with (makes the publish dynamic).
 - `--type string` - Runtime to publish as: static, dynamic or docker_deploy (default: static, or dynamic with --run-command).
 - `--wait` - Wait until the deployment is live, then print its URL.
 - `--wait-timeout duration` - How long --wait may take. (default `10m0s`)
+- `-y, --yes` - Do not ask for confirmation.
 
 #### `miosa deploy diff`
 
@@ -2794,6 +2871,27 @@ Examples:
 miosa deploy env my-app
 ```
 
+#### `miosa deploy env-rm`
+
+Remove environment variables (comma-separated names).
+
+```
+miosa deploy env-rm <deployment> <name>
+```
+
+Removes the named variables.
+Like env-set, the change applies to the next release: run 'miosa deploy redeploy' (or push a new version) to use it.
+A name that is not set is reported, not an error.
+
+Aliases: `env-unset`.
+
+Examples:
+
+```
+miosa deploy env-rm my-app DEBUG
+  miosa deploy env-rm my-app OLD_TOKEN,LEGACY_URL
+```
+
 #### `miosa deploy env-set`
 
 Set the deployment's environment variables (values are encrypted at rest).
@@ -2931,6 +3029,45 @@ Flags:
 
 - `--deployment string` - The deployment the version belongs to (default: the folder link).
 - `--dir string` - Folder whose .miosa/deployment.json names the deployment (default: the current directory).
+
+#### `miosa deploy prove`
+
+Check end to end that a deployment is live and serving.
+
+```
+miosa deploy prove <deployment>
+```
+
+Asks the platform to prove the deployment: it exists, is running, has a public URL, and (for App Engine apps) its host and runtime answer.
+Exits 1 when any check fails, so a script or CI step can gate on it.
+
+Aliases: `proof`.
+
+Examples:
+
+```
+miosa deploy prove my-app
+  miosa deploy prove my-app --json
+```
+
+#### `miosa deploy purge-cache`
+
+Drop the edge cache of a static deployment.
+
+```
+miosa deploy purge-cache <deployment>
+```
+
+Drops every cached file of the deployment's versions, here and on every edge node.
+Promotes and rollbacks already serve new bytes (files are cached by content), so this is for forcing a refresh.
+
+Aliases: `cache-purge`.
+
+Examples:
+
+```
+miosa deploy purge-cache my-site
+```
 
 #### `miosa deploy push`
 
@@ -3157,18 +3294,23 @@ Compare two of them with:
 
 ##### `miosa deploy versions rm`
 
-Delete a version that is not live.
+Archive a version that is not live (also: versions archive).
 
 ```
 miosa deploy versions rm <version> [flags]
 ```
 
-Deletes one version (number, short id or id) of the deployment named by
+Archives one version (number, short id or id) of the deployment named by
 --deployment, or of the deployment this folder is linked to.
-A version id on its
-own finds its deployment.
-The live version is refused, and so is any version the
-server still needs, such as the rollback target.
+Archiving keeps the
+row, its logs and its artifact for audit, takes it off the version list and out of
+static storage, and it can no longer be promoted.
+A version id on its own finds
+its deployment.
+The live version is refused, and so is any version the server
+still needs, such as the rollback target.
+
+Aliases: `archive`.
 
 Flags:
 
@@ -4110,7 +4252,11 @@ After it, plain git works against Forge:
 
 ```
 The password git receives is the API key this CLI is signed in with
-('miosa login'); nothing is stored by git.
+('miosa login').
+A CLI signed in with a browser session token instead gets a
+Forge-only key (forge:read, forge:write) minted once with that session and
+kept in this profile; 'miosa logout' forgets it.
+Nothing is stored by git.
 
 Flags:
 
@@ -4153,6 +4299,12 @@ Show the evidence behind a check.
 miosa forge check evidence <repo> <check>
 ```
 
+Examples:
+
+```
+miosa forge check evidence platform <check-id>
+```
+
 ##### `miosa forge check list`
 
 List recent check suites, newest first.
@@ -4167,6 +4319,13 @@ Flags:
 
 - `--commit string` - Only this commit.
 - `--limit int` - How many suites.
+
+Examples:
+
+```
+miosa forge check list platform
+  miosa forge check list platform --commit <sha>
+```
 
 ##### `miosa forge check report`
 
@@ -4190,6 +4349,12 @@ Flags:
 - `--status string` - Queued, in_progress or completed (default completed).
 - `--summary string` - One line on what the check found.
 
+Examples:
+
+```
+miosa forge check report platform --commit <sha> --name unit-tests --conclusion passed --file evidence.json
+```
+
 ##### `miosa forge check show`
 
 Show one check.
@@ -4200,12 +4365,24 @@ miosa forge check show <repo> <check>
 
 Aliases: `get`.
 
+Examples:
+
+```
+miosa forge check show platform <check-id>
+```
+
 ##### `miosa forge check suite`
 
 Show every check on one commit.
 
 ```
 miosa forge check suite <repo> <commit>
+```
+
+Examples:
+
+```
+miosa forge check suite platform <commit>
 ```
 
 #### `miosa forge fork`
@@ -4222,6 +4399,12 @@ Flags:
 - `--name string` - Name for the fork.
 - `--slug string` - URL slug for the fork.
 - `--visibility string` - Public, private or internal.
+
+Examples:
+
+```
+miosa forge fork acme/platform --name platform-fork
+```
 
 #### `miosa forge grant`
 
@@ -4245,6 +4428,12 @@ Flags:
 
 - `--idempotency-key string` - Replay-safe key: repeating the same key returns the first result (default: generated).
 - `--role string` - Read, write, maintain or admin.
+
+Examples:
+
+```
+miosa forge grant set platform <user-id> --role write
+```
 
 #### `miosa forge policy`
 
@@ -4272,6 +4461,12 @@ Show the code owners.
 miosa forge policy owners <repo>
 ```
 
+Examples:
+
+```
+miosa forge policy owners platform
+```
+
 ##### `miosa forge policy set`
 
 Publish a branch policy.
@@ -4293,6 +4488,13 @@ Flags:
 - `--idempotency-key string` - Replay-safe key: repeating the same key returns the first result (default: generated).
 - `--independent` - Require an approver other than the author. (default `true`)
 
+Examples:
+
+```
+miosa forge policy set platform --branch main --approvals 2 --check unit-tests
+  miosa forge policy set platform --branch main --approvals 0 --independent=false
+```
+
 ##### `miosa forge policy show`
 
 Show the merge policy.
@@ -4304,6 +4506,13 @@ miosa forge policy show <repo> [flags]
 Flags:
 
 - `--branch string` - Branch (default: the default branch).
+
+Examples:
+
+```
+miosa forge policy show platform
+  miosa forge policy show platform --branch release
+```
 
 #### `miosa forge pr`
 
@@ -4353,6 +4562,12 @@ Flags:
 - `--name string` - Check name, for example unit-tests.
 - `--status string` - Queued, in_progress or completed (default completed).
 
+Examples:
+
+```
+miosa forge pr check platform 12 --head-sha <sha> --name unit-tests --conclusion passed --file evidence.json
+```
+
 ##### `miosa forge pr checkout`
 
 Check out a pull request's branch in this git repository.
@@ -4384,6 +4599,12 @@ Close a pull request without merging.
 miosa forge pr close <repo> <number>
 ```
 
+Examples:
+
+```
+miosa forge pr close platform 12
+```
+
 ##### `miosa forge pr comment`
 
 Add a comment to a pull request.
@@ -4397,12 +4618,24 @@ Flags:
 - `--body string` - Comment text.
 - `--idempotency-key string` - Replay-safe key: repeating the same key returns the first result (default: generated).
 
+Examples:
+
+```
+miosa forge pr comment platform 12 --body "Looks good once CI passes"
+```
+
 ##### `miosa forge pr comments`
 
 List the comments on a pull request.
 
 ```
 miosa forge pr comments <repo> <number>
+```
+
+Examples:
+
+```
+miosa forge pr comments platform 12
 ```
 
 ##### `miosa forge pr diff`
@@ -4440,6 +4673,13 @@ Flags:
 - `--base string` - Only pull requests into this branch.
 - `--state string` - Only pull requests in this state (open|closed|merged|all). (default `open`)
 
+Examples:
+
+```
+miosa forge pr list platform
+  miosa forge pr list platform --state all --author dana --base main
+```
+
 ##### `miosa forge pr merge`
 
 Merge a pull request.
@@ -4458,6 +4698,14 @@ Flags:
 - `--merge` - Merge with a merge commit (the default).
 - `--rebase` - Replay the commits onto the base branch.
 - `--squash` - Squash the commits into one on the base branch.
+
+Examples:
+
+```
+miosa forge pr merge platform 12
+  miosa forge pr merge platform 12 --squash
+  miosa forge pr merge platform 12 --rebase --auto
+```
 
 ##### `miosa forge pr new`
 
@@ -4479,6 +4727,13 @@ Flags:
 - `--idempotency-key string` - Replay-safe key: repeating the same key returns the first result (default: generated).
 - `--title string` - Title.
 
+Examples:
+
+```
+miosa forge pr new platform --head fix-redirect --title "Fix redirect loop"
+  miosa forge pr new platform --head docs --base release --title "Docs" --draft
+```
+
 ##### `miosa forge pr previews`
 
 List the preview deployments of a pull request.
@@ -4487,12 +4742,24 @@ List the preview deployments of a pull request.
 miosa forge pr previews <repo> <number>
 ```
 
+Examples:
+
+```
+miosa forge pr previews platform 12
+```
+
 ##### `miosa forge pr reopen`
 
 Reopen a closed pull request.
 
 ```
 miosa forge pr reopen <repo> <number>
+```
+
+Examples:
+
+```
+miosa forge pr reopen platform 12
 ```
 
 ##### `miosa forge pr review`
@@ -4512,6 +4779,13 @@ Flags:
 - `--decision string` - What the review says (approved|changes_requested|commented).
 - `--idempotency-key string` - Replay-safe key: repeating the same key returns the first result (default: generated).
 
+Examples:
+
+```
+miosa forge pr review platform 12 --decision approved
+  miosa forge pr review platform 12 --decision changes_requested --body "Needs a test"
+```
+
 ##### `miosa forge pr show`
 
 Show a pull request with its reviews, checks and merge readiness.
@@ -4521,6 +4795,13 @@ miosa forge pr show <repo> <number>
 ```
 
 Aliases: `get`, `status`.
+
+Examples:
+
+```
+miosa forge pr show platform 12
+  miosa forge pr show platform 12 --json
+```
 
 #### `miosa forge release`
 
@@ -4550,6 +4831,12 @@ miosa forge release list <repo>
 
 Aliases: `ls`.
 
+Examples:
+
+```
+miosa forge release list platform
+```
+
 ##### `miosa forge release new`
 
 Create a release.
@@ -4569,6 +4856,12 @@ Flags:
 - `--prerelease` - Mark it as a prerelease.
 - `--tag string` - Tag name, created if it does not exist.
 
+Examples:
+
+```
+miosa forge release new platform --tag v1.2.0 --name "1.2.0" --body "Fixes the redirect"
+```
+
 ##### `miosa forge release show`
 
 Show one release and its assets.
@@ -4578,6 +4871,12 @@ miosa forge release show <repo> <tag>
 ```
 
 Aliases: `get`.
+
+Examples:
+
+```
+miosa forge release show platform v1.2.0
+```
 
 ##### `miosa forge release tag`
 
@@ -4592,6 +4891,12 @@ Flags:
 - `--message string` - Annotation for the tag.
 - `--name string` - Tag name.
 - `--target string` - Commit or branch to tag (default: the default branch).
+
+Examples:
+
+```
+miosa forge release tag platform --name v1.2.0 --target main --message "1.2.0"
+```
 
 ##### `miosa forge release upload`
 
@@ -4681,6 +4986,12 @@ Flags:
 
 - `-y, --yes` - Confirm permanent deletion without prompting.
 
+Examples:
+
+```
+miosa forge repo delete platform --yes
+```
+
 ##### `miosa forge repo list`
 
 List repositories in the current organization.
@@ -4691,12 +5002,26 @@ miosa forge repo list
 
 Aliases: `ls`.
 
+Examples:
+
+```
+miosa forge repo list
+  miosa forge repo list --json
+```
+
 ##### `miosa forge repo show`
 
 Show a repository in the current organization.
 
 ```
 miosa forge repo show <repository-id>
+```
+
+Examples:
+
+```
+miosa forge repo show platform
+  miosa forge repo show acme/platform --json
 ```
 
 ##### `miosa forge repo update`
@@ -4713,6 +5038,13 @@ Flags:
 - `--project-id stringSlice` - Replace attached project IDs.
 - `--slug string` - Repository URL slug.
 - `--visibility string` - Repository visibility.
+
+Examples:
+
+```
+miosa forge repo update platform --name "Marketing site"
+  miosa forge repo update platform --visibility private
+```
 
 ### `miosa fork`
 
@@ -6294,7 +6626,7 @@ organization that pays, its available credits, running-machine limit, sandbox
 spend cap, and your own caps in it.
 It changes nothing.
 
-Use --org to ask about another organization you can bill.
+Use --bill-to to ask about another organization you can bill.
 
 ### `miosa list`
 
@@ -6382,7 +6714,8 @@ Remove stored credentials.
 miosa logout [flags]
 ```
 
-Sign out of the current profile: its API key and current sandbox are removed.
+Sign out of the current profile: its API key, current sandbox and the Forge
+key it minted for git (if any) are removed.
 With --all the whole config file (every profile) is deleted.
 The key is not
 revoked on the server; revoke it with 'miosa api-key revoke' if it leaked.
@@ -6798,7 +7131,8 @@ Show and choose the organization that pays for new sandboxes and computers.
   miosa org list                  organizations you belong to
   miosa org bill acme             new machines bill acme, in the console, the CLI and the API
   miosa org bill --clear          bill the organization your key belongs to again
-  miosa --org acme create my-box  bill one create to acme without changing the setting
+  miosa --bill-to acme create my-box  bill one create to acme without changing the setting
+  miosa --org acme deploy list        work in acme; refused (exit 3) if this key does not act in acme
   miosa org members               members of the organization your key belongs to
   miosa org invite dana@example.com
   miosa org caps                  per-member spend and concurrency caps

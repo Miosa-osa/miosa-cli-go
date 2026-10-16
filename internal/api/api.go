@@ -267,6 +267,7 @@ func (c *Client) build(ctx context.Context, r Request, body io.Reader, ctype str
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", c.UserAgent)
+	req.Header.Set("X-Miosa-Client-Id", c.UserAgent)
 	if ctype != "" {
 		req.Header.Set("Content-Type", ctype)
 	}

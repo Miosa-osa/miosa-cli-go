@@ -157,7 +157,7 @@ func TestEnvListJSONHasCountsNotValues(t *testing.T) {
 			Variables int    `json:"variables"`
 		} `json:"environments"`
 	}
-	if err := json.Unmarshal([]byte(out), &parsed); err != nil || len(parsed.Environments) != 2 || parsed.Environments[0].Variables != 2 {
+	if err := json.Unmarshal(dataJSON(out), &parsed); err != nil || len(parsed.Environments) != 2 || parsed.Environments[0].Variables != 2 {
 		t.Fatalf("bad json: %v\n%s", err, out)
 	}
 }

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -23,6 +24,10 @@ func rmBefore(cmd *cobra.Command, c *api.Client) error {
 		Data []map[string]any `json:"data"`
 	}
 	if err := c.Get(cmd.Context(), "/deployments/"+url.PathEscape(ids[0])+"/domains", nil, &resp); err != nil {
+		if api.IsStatus(err, http.StatusForbidden) {
+			// A script must not read this as "deleted": say what is missing.
+			return die(fmt.Errorf("deployment %s was NOT deleted: rm checks its custom domains first and this key lacks the domains:read scope. Use a key with domains:read (the cli preset includes it) or sign in with 'miosa login': %w", display[0], err))
+		}
 		return die(fmt.Errorf("deployment %s: could not list its domains, refusing to delete: %w", display[0], err))
 	}
 	hosts := make([]string, 0, len(resp.Data))

@@ -163,6 +163,7 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, body io
 		}
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 		req.Header.Set("User-Agent", c.userAgent)
+		req.Header.Set("X-Miosa-Client-Id", c.userAgent)
 		if body != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
@@ -273,6 +274,7 @@ func (c *Client) postMultipart(ctx context.Context, path string, body io.ReadSee
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("X-Miosa-Client-Id", c.userAgent)
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
 

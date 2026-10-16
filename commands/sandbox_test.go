@@ -79,7 +79,7 @@ func TestSandboxResize_JSON(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var result map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &result); err != nil {
+	if err := json.Unmarshal(dataJSON(out), &result); err != nil {
 		t.Fatalf("output is not JSON: %v (%q)", err, out)
 	}
 	if result["applied_live"] != true {
@@ -176,7 +176,7 @@ func TestSandboxResources_JSON(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var result map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &result); err != nil {
+	if err := json.Unmarshal(dataJSON(out), &result); err != nil {
 		t.Fatalf("output is not JSON: %v (%q)", err, out)
 	}
 	res, _ := result["resources"].(map[string]any)

@@ -86,6 +86,7 @@ func (s *SnapshotsService) Events(ctx context.Context, id, ticket string) (*Snap
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("User-Agent", s.client.userAgent)
+	req.Header.Set("X-Miosa-Client-Id", s.client.userAgent)
 
 	resp, err := s.client.httpClient.Do(req)
 	if err != nil {

@@ -19,7 +19,7 @@ func newLimitsCmd() *cobra.Command {
 organization that pays, its available credits, running-machine limit, sandbox
 spend cap, and your own caps in it. It changes nothing.
 
-Use --org to ask about another organization you can bill.`,
+Use --bill-to to ask about another organization you can bill.`,
 		Args: cobra.NoArgs,
 		RunE: runLimits,
 	}

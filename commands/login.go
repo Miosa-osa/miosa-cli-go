@@ -341,7 +341,8 @@ func newLogoutCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logout",
 		Short: "Remove stored credentials",
-		Long: `Sign out of the current profile: its API key and current sandbox are removed.
+		Long: `Sign out of the current profile: its API key, current sandbox and the Forge
+key it minted for git (if any) are removed.
 With --all the whole config file (every profile) is deleted. The key is not
 revoked on the server; revoke it with 'miosa api-key revoke' if it leaked.`,
 		Args: cobra.NoArgs,
