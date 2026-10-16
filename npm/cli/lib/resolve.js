@@ -20,7 +20,7 @@ function resolveBinary({ platform, arch, deps = {} } = {}) {
   if (!entry) {
     throw new Error(
       `@miosa/cli has no prebuilt binary for ${platformKey(platform, arch)}. ` +
-        "Install the CLI another way: https://docs.miosa.ai/cli",
+        "Install the CLI another way: https://miosa.ai/docs/cli",
     );
   }
 
@@ -40,7 +40,7 @@ function resolveBinary({ platform, arch, deps = {} } = {}) {
       "This usually means optional dependencies were skipped (--no-optional / --omit=optional) " +
       "or scripts were disabled (--ignore-scripts).\n" +
       "Reinstall with: npm install -g @miosa/cli\n" +
-      "Or install the native CLI directly: https://docs.miosa.ai/cli",
+      "Or install the native CLI directly: https://miosa.ai/docs/cli",
   );
 }
 

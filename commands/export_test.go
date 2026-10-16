@@ -111,3 +111,13 @@ func SetSSHToolsForTest(ssh, keygen string) func() {
 	lookSSH = func() (string, string, bool) { return ssh, keygen, true }
 	return func() { lookSSH = old }
 }
+
+// SetLookPathForTest replaces the PATH lookup setup-git uses to name the CLI.
+func SetLookPathForTest(f func(string) (string, error)) func() {
+	old := lookPath
+	lookPath = f
+	return func() { lookPath = old }
+}
+
+// WriteErrorForTest prints err the way Execute does.
+func WriteErrorForTest(w io.Writer, err error, asJSON bool) { writeError(w, err, asJSON) }

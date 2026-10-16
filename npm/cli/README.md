@@ -10,7 +10,7 @@ miosa create my-box --wait
 ```
 
 Supported: macOS (arm64, x64) and Linux (x64, arm64).
-Elsewhere, see https://docs.miosa.ai/cli.
+Elsewhere, see https://miosa.ai/docs/cli.
 
 ## How it works
 

@@ -55,7 +55,7 @@ function platformManifest(key, entry, version) {
     cpu: [entry.cpu],
     files: ["bin", "README.md"],
     license: "MIT",
-    homepage: "https://docs.miosa.ai/cli",
+    homepage: "https://miosa.ai/docs/cli",
     repository: { type: "git", url: "git+https://github.com/Miosa-osa/miosa.git", directory: "sdks/cli/npm" },
     publishConfig: { access: "public" },
   };

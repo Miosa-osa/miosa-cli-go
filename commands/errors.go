@@ -49,6 +49,32 @@ func die(err error) error {
 	return &Failure{Err: err}
 }
 
+// hintError carries the commands that would get past a refusal. The error line
+// prints as usual; the hints follow it, one per line (and under "hints" in
+// --json).
+type hintError struct {
+	err   error
+	hints []string
+}
+
+func (h *hintError) Error() string { return h.err.Error() }
+func (h *hintError) Unwrap() error { return h.err }
+
+func withHints(err error, hints ...string) error {
+	if err == nil || len(hints) == 0 {
+		return err
+	}
+	return &hintError{err: err, hints: hints}
+}
+
+func errorHints(err error) []string {
+	var h *hintError
+	if errors.As(err, &h) {
+		return h.hints
+	}
+	return nil
+}
+
 // usageErr marks an error as a usage mistake (exit code 2).
 type usageErr struct{ error }
 
@@ -302,12 +328,13 @@ func looksLikeUsageError(err error) bool {
 // errorBody is the JSON written to stderr for a failed command in JSON mode.
 type errorBody struct {
 	Error struct {
-		Code      string `json:"code,omitempty"`
-		Message   string `json:"message"`
-		Status    int    `json:"status,omitempty"`
-		RequestID string `json:"request_id,omitempty"`
-		Retryable bool   `json:"retryable,omitempty"`
-		ExitCode  int    `json:"exit_code"`
+		Code      string   `json:"code,omitempty"`
+		Message   string   `json:"message"`
+		Status    int      `json:"status,omitempty"`
+		RequestID string   `json:"request_id,omitempty"`
+		Retryable bool     `json:"retryable,omitempty"`
+		ExitCode  int      `json:"exit_code"`
+		Hints     []string `json:"hints,omitempty"`
 	} `json:"error"`
 }
 
@@ -325,10 +352,14 @@ func writeError(w io.Writer, err error, asJSON bool) {
 	}
 	if !asJSON {
 		fmt.Fprintf(w, "miosa: %s\n", friendlyMessage(err))
+		for _, h := range errorHints(err) {
+			fmt.Fprintf(w, "  %s\n", h)
+		}
 		return
 	}
 	var b errorBody
 	b.Error.Message = friendlyMessage(err)
+	b.Error.Hints = errorHints(err)
 	b.Error.ExitCode = ExitCode(err)
 	if ae, ok := asAPIError(err); ok {
 		b.Error.Code, b.Error.Status, b.Error.RequestID = ae.Code, ae.Status, ae.RequestID

@@ -62,7 +62,7 @@ that ran remotely (exec, ssh) exits with the remote command's status.
 Environment: MIOSA_API_KEY, MIOSA_BASE_URL, MIOSA_PROFILE, MIOSA_OUTPUT,
 MIOSA_RETRIES, MIOSA_NO_UPDATE_NOTICE.
 
-Docs: https://docs.miosa.ai/cli`,
+Docs: https://miosa.ai/docs/cli`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {

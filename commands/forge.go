@@ -29,7 +29,10 @@ func newForgeCmd() *cobra.Command {
 		Short: "Work with MIOSA Forge repositories (beta)",
 		Long:  "Work with repositories owned by the organization associated with the current MIOSA credential.",
 	}
-	cmd.PersistentFlags().BoolVar(&outputOptions.JSON, "json", false, "Output a stable JSON envelope")
+	// Bound to the global --json: this flag shadows the root one for every
+	// forge command, and the pull request, policy and release commands read
+	// the global output format.
+	cmd.PersistentFlags().BoolVar(&globalFlags.JSON, "json", false, "Output a stable JSON envelope")
 	repo := &cobra.Command{Use: "repo", Short: "Manage Forge repositories"}
 	repo.AddCommand(
 		newForgeRepoListCmd(outputOptions),

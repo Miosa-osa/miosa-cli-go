@@ -1,0 +1,89 @@
+version: 2
+
+project_name: miosa
+
+before:
+  hooks:
+    # Every release builds with the toolchain go.mod pins; anything else fails
+    # here instead of shipping (2.3.6 went out on go1.26.2 after 2.3.4 on 1.27.2).
+    - sh -c 'v=$(GOTOOLCHAIN=go1.27.2 go env GOVERSION); [ "$v" = "go1.27.2" ] || { echo "release toolchain is $v, want go1.27.2" >&2; exit 1; }'
+    - go mod tidy
+
+builds:
+  - id: miosa
+    main: ./cmd/miosa
+    binary: miosa
+    env:
+      - CGO_ENABLED=0
+      - GOTOOLCHAIN=go1.27.2
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      # No windows/arm64 archive: the npm win32 package is x64 only.
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X 'github.com/Miosa-osa/miosa-cli-go/commands.cliVersion={{.Version}}'
+
+archives:
+  - id: miosa
+    ids:
+      - miosa
+    name_template: "miosa_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ .Tag }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "Merge pull request"
+      - "Merge branch"
+
+homebrew_casks:
+  - name: miosa
+    ids:
+      - miosa
+    binaries:
+      - miosa
+    repository:
+      owner: Miosa-osa
+      name: homebrew-tap
+      token: '{{ envOrDefault "HOMEBREW_TAP_TOKEN" "" }}'
+    # Without a tap token the archives still publish; the tap is updated by PR.
+    skip_upload: '{{ if isEnvSet "HOMEBREW_TAP_TOKEN" }}false{{ else }}true{{ end }}' 
+    commit_author:
+      name: miosa-releasebot
+      email: releases@miosa.ai
+    homepage: "https://miosa.ai"
+    description: "Official CLI for MIOSA sandboxes"
+    license: "MIT"
+    # The binary is not notarized yet; clear the quarantine flag on install.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr",
+                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/miosa"]
+          end

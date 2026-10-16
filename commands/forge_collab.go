@@ -38,9 +38,17 @@ than the author.
   miosa forge pr new platform --head fix-redirect --title "Fix redirect loop"
   miosa forge pr list platform
   miosa forge pr show platform 12
-  miosa forge pr review platform 12 --approve
-  miosa forge pr merge platform 12`, []string{"pulls", "pull-request", "pull-requests"},
-		Op{Use: "list <repo>", Aliases: []string{"ls"}, Short: "List pull requests", Method: "GET", Path: "/forge/repositories/{0}/pull-requests", Args: []Arg{repo}, Cols: prCols},
+  miosa forge pr review platform 12 --decision approved
+  miosa forge pr diff platform 12
+  miosa forge pr checkout platform 12
+  miosa forge pr merge platform 12 --squash`, []string{"pulls", "pull-request", "pull-requests"},
+		Op{Use: "list <repo>", Aliases: []string{"ls"}, Short: "List pull requests", Method: "GET", Path: "/forge/repositories/{0}/pull-requests", Args: []Arg{repo}, Cols: prCols,
+			Flags: []Flag{
+				{Name: "state", Usage: "Only pull requests in this state", Default: "open", In: "local", Enum: []string{"open", "closed", "merged", "all"}},
+				{Name: "author", Usage: "Only pull requests by this person (name, email or user id)", In: "local"},
+				{Name: "base", Usage: "Only pull requests into this branch", In: "local"},
+			},
+			Rows: filterPullRequests},
 		Op{
 			Use: "new <repo>", Aliases: []string{"create", "open"}, Short: "Open a pull request", Method: "POST", Path: "/forge/repositories/{0}/pull-requests",
 			Args: []Arg{repo}, Idempotent: true, Detail: prDetail,
@@ -56,6 +64,7 @@ than the author.
 		Op{
 			Use: "show <repo> <number>", Aliases: []string{"get", "status"}, Short: "Show a pull request with its reviews, checks and merge readiness",
 			Method: "GET", Path: "/forge/repositories/{0}/pull-requests/{1}/collaboration", Args: []Arg{repo, number},
+			Human: renderPRSnapshot,
 		},
 		Op{
 			Use: "review <repo> <number>", Short: "Approve, request changes on, or comment on a pull request",
@@ -78,6 +87,14 @@ and --head-sha must equal the pull request's head, so a stale result is refused.
 			Use: "merge <repo> <number>", Short: "Merge a pull request",
 			Long:   "Merges when the branch policy is met: enough approvals, required checks passing, and the base branch not moved. A merge into a branch that deploys on merge starts that deployment.",
 			Method: "POST", Path: "/forge/repositories/{0}/pull-requests/{1}/merge", Args: []Arg{repo, number}, Idempotent: true,
+			Flags: []Flag{
+				{Name: "merge", Usage: "Merge with a merge commit (the default)", Type: "bool", In: "local"},
+				{Name: "squash", Usage: "Squash the commits into one on the base branch", Type: "bool", In: "local"},
+				{Name: "rebase", Usage: "Replay the commits onto the base branch", Type: "bool", In: "local"},
+				{Name: "auto", Usage: "Merge by itself once the branch policy is met", Type: "bool", Field: "auto_merge"},
+				{Name: "method", Hidden: true, Field: "merge_method"},
+			},
+			Before: pickMergeMethod, Human: renderMergeReceipt, OnError: explainMergeRefusal,
 		},
 		Op{Use: "close <repo> <number>", Short: "Close a pull request without merging", Method: "POST", Path: "/forge/repositories/{0}/pull-requests/{1}/close", Args: []Arg{repo, number}, Detail: prDetail},
 		Op{Use: "reopen <repo> <number>", Short: "Reopen a closed pull request", Method: "POST", Path: "/forge/repositories/{0}/pull-requests/{1}/reopen", Args: []Arg{repo, number}, Detail: prDetail},
@@ -91,6 +108,7 @@ and --head-sha must equal the pull request's head, so a stale result is refused.
 		},
 		Op{
 			Use: "previews <repo> <number>", Short: "List the preview deployments of a pull request", Method: "GET", Path: "/forge/repositories/{0}/pull-requests/{1}/previews", Args: []Arg{repo, number},
+			Cols: []Col{{Head: "STATE", Path: "state"}, {Head: "URL", Path: "url"}, {Head: "BRANCH", Path: "branch"}, {Head: "COMMIT", Path: "commit_sha", Fmt: "sha"}, {Head: "AGE", Path: "created_at", Fmt: "age"}},
 		},
 	)
 
@@ -121,14 +139,15 @@ request's head; these commands work on any commit.
 		`<tag> is the release's tag name.
 
   miosa forge release list platform
-  miosa forge release new platform --tag v1.2.0 --name "1.2.0" --body "Fixes the redirect"`, []string{"releases"},
+  miosa forge release new platform --tag v1.2.0 --name "1.2.0" --body "Fixes the redirect"
+  miosa forge release upload platform v1.2.0 dist/app.tar.gz`, []string{"releases"},
 		Op{
 			Use: "list <repo>", Aliases: []string{"ls"}, Short: "List releases", Method: "GET", Path: "/forge/repositories/{0}/releases", Args: []Arg{repo},
-			Cols: []Col{{Head: "TAG", Path: "tag_name"}, {Head: "NAME", Path: "name"}, {Head: "PRERELEASE", Path: "prerelease"}, {Head: "AGE", Path: "inserted_at", Fmt: "age"}},
+			Cols: []Col{{Head: "TAG", Path: "tag"}, {Head: "NAME", Path: "name"}, {Head: "PRERELEASE", Path: "prerelease"}, {Head: "AGE", Path: "created_at", Fmt: "age"}},
 		},
-		Op{Use: "show <repo> <tag>", Aliases: []string{"get"}, Short: "Show one release and its assets", Method: "GET", Path: "/forge/repositories/{0}/releases/{1}", Args: []Arg{repo, {Name: "tag"}}},
+		Op{Use: "show <repo> <tag>", Aliases: []string{"get"}, Short: "Show one release and its assets", Method: "GET", Path: "/forge/repositories/{0}/releases/{1}", Args: []Arg{repo, {Name: "tag"}}, Human: renderRelease},
 		Op{
-			Use: "new <repo>", Aliases: []string{"create"}, Short: "Create a release", Method: "POST", Path: "/forge/repositories/{0}/releases", Args: []Arg{repo}, Idempotent: true,
+			Use: "new <repo>", Aliases: []string{"create"}, Short: "Create a release", Method: "POST", Path: "/forge/repositories/{0}/releases", Args: []Arg{repo}, Idempotent: true, Human: renderRelease,
 			Flags: []Flag{
 				{Name: "tag", Usage: "Tag name, created if it does not exist", Required: true},
 				{Name: "commit", Usage: "Commit or branch to tag (default: the default branch)", Field: "commit_sha"},
@@ -154,10 +173,11 @@ new version; the newest applies.
   miosa forge policy set platform --branch main --approvals 2 --check unit-tests
   miosa forge policy show platform
   miosa forge policy owners platform`, nil,
-		Op{Use: "show <repo>", Short: "Show the merge policy", Method: "GET", Path: "/forge/repositories/{0}/merge-policy", Args: []Arg{repo}},
+		Op{Use: "show <repo>", Short: "Show the merge policy", Method: "GET", Path: "/forge/repositories/{0}/merge-policy", Args: []Arg{repo},
+			Flags: []Flag{{Name: "branch", Usage: "Branch (default: the default branch)"}}, Human: renderPolicy},
 		Op{Use: "owners <repo>", Short: "Show the code owners", Method: "GET", Path: "/forge/repositories/{0}/code-owners", Args: []Arg{repo}},
 		Op{
-			Use: "set <repo>", Short: "Publish a branch policy", Method: "POST", Path: "/forge/repositories/{0}/branch-policies", Args: []Arg{repo}, Idempotent: true,
+			Use: "set <repo>", Short: "Publish a branch policy", Method: "POST", Path: "/forge/repositories/{0}/branch-policies", Args: []Arg{repo}, Idempotent: true, Human: renderPolicy,
 			Long: "Needs the maintain role. Without --approvals one approval is required; the author cannot approve their own pull request unless --independent=false.",
 			Flags: []Flag{
 				{Name: "branch", Usage: "Branch the policy covers (default: the default branch)"},
@@ -181,5 +201,7 @@ new version; the newest applies.
 		Flags: []Flag{{Name: "name", Usage: "Name for the fork", Required: true}, {Name: "slug", Usage: "URL slug for the fork"}, {Name: "visibility", Usage: "Public, private or internal"}},
 	}.command("forge")
 
+	pr.AddCommand(newForgePRDiffCmd(), newForgePRCheckoutCmd())
+	release.AddCommand(newForgeReleaseUploadCmd())
 	return []*cobra.Command{pr, check, release, policy, access, fork}
 }

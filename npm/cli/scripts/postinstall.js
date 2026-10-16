@@ -40,7 +40,7 @@ async function main() {
   const platform = process.platform;
   const arch = process.arch;
   if (!platformFor(platform, arch)) {
-    console.warn(`@miosa/cli: no prebuilt binary for ${platformKey(platform, arch)}; see https://docs.miosa.ai/cli`);
+    console.warn(`@miosa/cli: no prebuilt binary for ${platformKey(platform, arch)}; see https://miosa.ai/docs/cli`);
     return 0;
   }
   try {

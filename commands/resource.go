@@ -50,8 +50,8 @@ type Flag struct {
 	// Field is the JSON body field or query name; it defaults to the flag name
 	// with dashes turned into underscores. A dotted Field nests objects.
 	Field string
-	// In is "body" or "query". The default is query for GET and DELETE, body
-	// for everything else.
+	// In is "body", "query" or "local" (read by the command, never sent). The
+	// default is query for GET and DELETE, body for everything else.
 	In       string
 	Required bool
 	Enum     []string
@@ -114,6 +114,12 @@ type Op struct {
 	// After runs on the decoded response before it is rendered. An error stops the
 	// command (the request has already been made).
 	After func(cmd *cobra.Command, resp any) error
+	// OnError may rewrite a failed request's error (a plainer message, hints
+	// naming the next command). It gets the signed-in client for a follow-up read.
+	OnError func(cmd *cobra.Command, c *api.Client, args []string, err error) error
+	// Human renders the response in text mode instead of Cols/Detail/Done;
+	// --json still prints the response.
+	Human func(cmd *cobra.Command, args []string, resp any) error
 	// Idempotent adds --idempotency-key and sends an Idempotency-Key header (a
 	// generated one when the flag is not given), for routes that require it.
 	Idempotent bool
@@ -297,6 +303,12 @@ func (o Op) buildRequest(cmd *cobra.Command, args []string) (api.Request, error)
 		if fl == nil {
 			continue
 		}
+		if f.In == "local" {
+			if len(f.Enum) > 0 && fl.Changed && !contains(f.Enum, fl.Value.String()) {
+				return api.Request{}, fmt.Errorf("--%s must be one of %s (got %q)", f.Name, strings.Join(f.Enum, ", "), fl.Value.String())
+			}
+			continue
+		}
 		if !fl.Changed && f.Default == "" && f.Type != "bool" {
 			continue
 		}
@@ -382,15 +394,20 @@ func (o Op) buildRequest(cmd *cobra.Command, args []string) (api.Request, error)
 	if o.Idempotent {
 		key, _ := cmd.Flags().GetString("idempotency-key")
 		if key == "" {
-			raw := make([]byte, 16)
-			if _, err := rand.Read(raw); err != nil {
-				return api.Request{}, fmt.Errorf("generating an idempotency key: %w", err)
-			}
-			key = "cli-" + hex.EncodeToString(raw)
+			key = generatedKey()
 		}
 		req.IdempotencyKey = key
 	}
 	return req, nil
+}
+
+// generatedKey is a fresh Idempotency-Key for a call the caller gave none for.
+func generatedKey() string {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return "cli-" + hex.EncodeToString(raw)
 }
 
 func contains(list []string, s string) bool {
@@ -461,6 +478,9 @@ func (o Op) run(cmd *cobra.Command, args []string, yes bool) error {
 	}
 	resp, err := c.JSONAny(cmd.Context(), req)
 	if err != nil {
+		if o.OnError != nil {
+			err = o.OnError(cmd, c, display, err)
+		}
 		return die(o.notFoundContext(err, display))
 	}
 	if o.After != nil {
@@ -517,6 +537,7 @@ func confirmByTypedName(cmd *cobra.Command, what string, names ...string) error 
 
 func (o Op) render(cmd *cobra.Command, args []string, resp any) error {
 	p := printerFor(cmd)
+	resp = stripAvatars(resp)
 	if isJSON() {
 		if resp == nil {
 			return p.JSON(map[string]any{"ok": true})
@@ -524,6 +545,8 @@ func (o Op) render(cmd *cobra.Command, args []string, resp any) error {
 		return p.JSON(resp)
 	}
 	switch {
+	case o.Human != nil:
+		return o.Human(cmd, args, resp)
 	case o.Lines != "":
 		items, _ := lookupPath(resp, o.Lines).([]any)
 		for _, it := range items {

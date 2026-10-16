@@ -78,8 +78,11 @@ func deployOps() []Op {
 			Use: "logs <deployment>", Short: "Show the running app's log",
 			Long:    "Prints the most recent lines the deployment's process wrote. Static sites (uploaded files) run no process, so they have no runtime log.",
 			Example: "  miosa deploy logs my-app\n  miosa deploy logs my-app -n 200",
-			After:   staticEmptyNotice("static deployments have no runtime logs: they serve uploaded files and run no process"),
-			Method:  "GET", Path: "/deployments/{0}/logs", Args: []Arg{d}, Lines: "data.lines",
+			After: func(cmd *cobra.Command, resp any) error {
+				_ = showBuildFailure(cmd, resp)
+				return staticEmptyNotice("static deployments have no runtime logs: they serve uploaded files and run no process")(cmd, resp)
+			},
+			Method: "GET", Path: "/deployments/{0}/logs", Args: []Arg{d}, Lines: "data.lines",
 			Flags: []Flag{{Name: "lines", Short: "n", Type: "int", Usage: "Number of lines"}},
 		},
 		Op{
@@ -155,7 +158,7 @@ them first with 'miosa deploy domain-move <domain> <other-deployment>', or pass
 			Example: "  miosa deploy builds my-app",
 			After:   staticEmptyNotice("uploaded sites have no builds: the files are served as uploaded"),
 			Method:  "GET", Path: "/deployments/{0}/builds", Args: []Arg{d}, ListKey: "data",
-			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "STATE", Path: "state"}, {Head: "CREATED", Path: "inserted_at", Fmt: "age"}},
+			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "STATE", Path: "state"}, {Head: "COMMIT", Path: "commit_sha", Fmt: "short"}, {Head: "TRIGGER", Path: "triggered_by"}, {Head: "CREATED", Path: "created_at", Fmt: "age"}, {Head: "ERROR", Path: "error_message", Fmt: "clip"}},
 		},
 		Op{
 			Use: "env <deployment>", Short: "List the deployment's environment variable names",
