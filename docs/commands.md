@@ -1704,6 +1704,12 @@ miosa computer create <name> [flags]
 
 Provision a MIOSA computer (a persistent desktop machine).
 
+--template picks the computer template; it defaults to miosa-desktop, the
+desktop machine image.
+The API requires a template on this route (it answers
+400 template_type is required without one), so the default is sent, not left
+to the server.
+
 --env picks the environment (repositories, secrets, connections) the computer
 starts from; without it your default environment is used. --no-env passes
 nothing of yours. --setup-file runs a script (UTF-8, up to 64KB) in the
@@ -1721,7 +1727,7 @@ Flags:
 - `--no-env` - Pass nothing of yours to the computer (safe to hand to third parties).
 - `--setup-file string` - Shell script (UTF-8, max 64KB) run in the background once the computer is ready.
 - `--size string` - Computer size: xs, small, medium, large, or xl. (default `small`)
-- `--template string` - Computer template type (default: server default).
+- `--template string` - Computer template type (miosa-desktop by default). (default `miosa-desktop`)
 
 #### `miosa computer get`
 
@@ -2492,9 +2498,12 @@ Aliases: `deployments`, `deployment`.
 Flags:
 
 - `--branch string` - Git branch to build (default: the current one).
+- `--deployment string` - Push a new version to this existing deployment (id, name or hostname).
 - `--domain string` - Custom domain to attach (then add the DNS record it shows).
 - `--env stringArray` - Environment variable KEY=VALUE (repeatable).
+- `--force` - Upload even when the files match the latest version.
 - `--name string` - Deployment name (default: the argument, the repo or the directory name).
+- `--no-promote` - Upload the version without making it live; prints the version to promote later.
 - `--wait` - Wait until the deployment is live, then print its URL.
 - `--wait-timeout duration` - How long --wait may take. (default `10m0s`)
 - `--yes` - Do not ask for confirmation.
@@ -2505,6 +2514,15 @@ List builds.
 
 ```
 miosa deploy builds <deployment>
+```
+
+Lists the builds of a repository or sandbox deployment.
+Uploaded static sites are not built, so they have none.
+
+Examples:
+
+```
+miosa deploy builds my-app
 ```
 
 #### `miosa deploy create`
@@ -2548,27 +2566,118 @@ Aliases: `publish`.
 Flags:
 
 - `--branch string` - Git branch to build (default: the current one).
-- `--build-command string` - Build command (git source only).
+- `--build-command string` - Build command (git or Forge source).
+- `--deployment string` - Push a new version to this existing deployment (id, name or hostname).
 - `--dir string` - With --from-sandbox: the app's path inside the sandbox. On its own: a local directory to upload.
 - `--domain string` - Custom domain to attach (then add the DNS record it shows).
 - `--entrypoint string` - With --from-sandbox: the entry file for a static publish.
 - `--env stringArray` - Environment variable KEY=VALUE (repeatable).
+- `--force` - Upload even when the files match the latest version.
+- `--forge string` - Deploy this Forge repository (id, org/name or name); builds --branch and redeploys on every push.
 - `--from-sandbox string` - Publish this sandbox (name, id or 'current').
 - `--git string` - Deploy this git repository URL.
 - `--image string` - App Engine container image (not exposed by the public API; see --type docker_deploy).
 - `--name string` - Deployment name (default: the argument, the repo or the directory name).
+- `--no-auto` - With --forge: do not build automatically on pushes to the branch.
+- `--no-promote` - Upload the version without making it live; prints the version to promote later.
 - `--port int` - With --from-sandbox: the port the app serves on.
+- `--project string` - With --forge: the project to link the repository through (one repository per project).
+- `--root-directory string` - With --forge: the app's directory inside the repository.
 - `--run-command string` - Command the app starts with (makes the publish dynamic).
 - `--type string` - Runtime to publish as: static, dynamic or docker_deploy (default: static, or dynamic with --run-command).
 - `--wait` - Wait until the deployment is live, then print its URL.
 - `--wait-timeout duration` - How long --wait may take. (default `10m0s`)
+
+#### `miosa deploy diff`
+
+Compare two versions file by file.
+
+```
+miosa deploy diff <version> <version> [flags]
+```
+
+Compare what two versions of a deployment ship.
+
+```
+  miosa deploy diff 4bacc5df 7093400e                       # in a linked folder
+  miosa deploy diff 4bacc5df 7093400e --deployment my-site  # from anywhere
+
+```
+Each file the second version adds, changes or drops is listed with its size, so
+a version that went out bigger than expected can be traced to the files that
+did it.
+The deployment comes from --deployment, or from the .miosa/deployment.json
+a first deploy wrote in the folder (--dir, default the current directory).
+
+Flags:
+
+- `--deployment string` - The deployment both versions belong to (default: the folder link).
+- `--dir string` - Folder whose .miosa/deployment.json names the deployment (default: the current directory).
 
 #### `miosa deploy domain-add`
 
 Attach a custom domain (then add the DNS record it shows).
 
 ```
-miosa deploy domain-add <deployment> <hostname>
+miosa deploy domain-add <deployment> <hostname> [flags]
+```
+
+Attaches the hostname and prints the DNS records to add. --dns chooses what
+to do with them:
+
+```
+  --dns zone        print them as DNS zone-file lines to paste (BIND syntax)
+  --dns cloudflare  create them in your Cloudflare zone, using the value of
+                    CLOUDFLARE_API_TOKEN (needs Zone:Read and DNS:Edit). It is
+                    used by this command only and is never sent to MIOSA.
+
+```
+--redirect-to H makes this host answer with a permanent redirect to H, keeping
+the path and query.
+H must be this name with or without "www." and must also be
+attached to the deployment and verified, or nothing is redirected.
+
+Registrars without a records API (Namecheap's replaces a whole zone and needs an
+allow-listed IP) are not automated: use --dns zone and paste the lines.
+
+Flags:
+
+- `--dns string` - What to do with the DNS records: zone | cloudflare (zone|cloudflare).
+- `--redirect-to string` - Redirect this host to the other form of the same name (www.example.com -> example.com or the reverse).
+
+Examples:
+
+```
+miosa deploy domain-add my-app www.example.com --dns cloudflare
+  miosa deploy domain-add my-app www.example.com --redirect-to example.com
+```
+
+#### `miosa deploy domain-move`
+
+Move a custom domain to another deployment (no DNS change).
+
+```
+miosa deploy domain-move <domain> [target] [flags]
+```
+
+Repoints a domain you already verified at a different deployment.
+The
+verification, TLS and redirect settings move with it, so you change no DNS
+record and verify nothing again; the new deployment serves it within seconds.
+
+<domain> is the hostname.
+The target deployment (id, slug or name) is the second
+argument, or --to; give it one way or the other, not both.
+
+Flags:
+
+- `--to string` - Deployment to move the domain to (id, slug or name).
+
+Examples:
+
+```
+miosa deploy domain-move lunivate.com lunivate-site-v2
+  miosa deploy domain-move lunivate.com --to lunivate-site-v2
 ```
 
 #### `miosa deploy domain-rm`
@@ -2579,16 +2688,75 @@ Detach a custom domain.
 miosa deploy domain-rm <deployment> <domain-id> [flags]
 ```
 
+Detaches the domain: it stops serving this deployment.
+To serve it from another deployment without touching DNS, use 'miosa deploy domain-move' instead. <domain-id> is the id from 'miosa deploy domains'.
+
 Flags:
 
 - `-y, --yes` - Do not ask for confirmation.
 
-#### `miosa deploy domain-verify`
-
-Check a domain's DNS.
+Examples:
 
 ```
-miosa deploy domain-verify <deployment> <domain-id>
+miosa deploy domains my-app
+  miosa deploy domain-rm my-app 3f2a91c0
+```
+
+#### `miosa deploy domain-update`
+
+Set or clear the redirect on a custom domain that is already attached.
+
+```
+miosa deploy domain-update <hostname> [flags]
+```
+
+Changes a custom domain in place, without removing and re-adding it (no DNS
+change, no re-verification).
+
+--redirect-to H makes this host answer with a permanent redirect to H, keeping
+the path and query.
+H must be this name with or without "www." and must also be
+attached to the same deployment and verified. --no-redirect makes the host serve
+the site again.
+
+Flags:
+
+- `--no-redirect` - Stop redirecting: this host serves the site.
+- `--redirect-to string` - Redirect this host to the other form of the same name (www.example.com <-> example.com).
+
+Examples:
+
+```
+miosa deploy domain-update www.example.com --redirect-to example.com
+  miosa deploy domain-update www.example.com --no-redirect
+```
+
+#### `miosa deploy domain-verify`
+
+Check a domain's DNS (--wait: until it is live).
+
+```
+miosa deploy domain-verify <deployment> <domain-id> [flags]
+```
+
+Checks the domain's DNS once.
+With --wait it keeps checking every 10 seconds
+until DNS and the TLS certificate are right and the site answers, then prints
+"live https://...".
+On every check that fails it prints the exact record: type,
+name, what is expected and what was observed.
+On timeout it prints what is still
+missing and exits non-zero. <domain-id> may be the hostname when using --wait.
+
+Flags:
+
+- `--timeout string` - With --wait, give up after this long (for example 15m). (default `10m`)
+- `--wait` - Wait until the domain is live (DNS + TLS + serving).
+
+Examples:
+
+```
+miosa deploy domain-verify my-app www.example.com --wait --timeout 15m
 ```
 
 #### `miosa deploy domains`
@@ -2599,12 +2767,31 @@ List custom domains.
 miosa deploy domains <deployment>
 ```
 
+Lists the custom domains attached to the deployment, with their DNS verification and serving status.
+
+Examples:
+
+```
+miosa deploy domains my-app
+  miosa deploy domains 7699e13d
+  miosa deploy domains example.com
+```
+
 #### `miosa deploy env`
 
 List the deployment's environment variable names.
 
 ```
 miosa deploy env <deployment>
+```
+
+Lists the names of the deployment's environment variables and when each changed.
+Values are encrypted at rest and never printed.
+
+Examples:
+
+```
+miosa deploy env my-app
 ```
 
 #### `miosa deploy env-set`
@@ -2615,9 +2802,18 @@ Set the deployment's environment variables (values are encrypted at rest).
 miosa deploy env-set <deployment> [flags]
 ```
 
+Sets one or more environment variables.
+They apply to the next release: run 'miosa deploy redeploy' (or push a new version) to use them.
+
 Flags:
 
 - `--set stringArray` - Environment variable KEY=VALUE (repeatable).
+
+Examples:
+
+```
+miosa deploy env-set my-app --set DATABASE_URL=postgres://... --set FEATURE=on
+```
 
 #### `miosa deploy get`
 
@@ -2626,6 +2822,18 @@ Show a deployment.
 ```
 miosa deploy get <deployment>
 ```
+
+Show a deployment and what it is running.
+
+```
+  miosa deploy get my-app
+
+```
+<deployment> is a name, slug, hostname or id.
+Kind is the active version's
+kind: static, or dynamic for a deployment that runs a server.
+A dynamic or
+App Engine deployment also shows the image, command and port it runs.
 
 Aliases: `show`.
 
@@ -2637,12 +2845,22 @@ List deployments.
 miosa deploy list [flags]
 ```
 
+Lists your deployments with their state and URL.
+Any of the name, short id, hostname or id shown here works as <deployment> in the other commands.
+
 Aliases: `ls`.
 
 Flags:
 
 - `-n, --limit int` - How many.
 - `--workspace-id string` - Only this workspace.
+
+Examples:
+
+```
+miosa deploy list
+  miosa deploy ls --workspace-id <id> -n 20
+```
 
 #### `miosa deploy logs`
 
@@ -2652,9 +2870,19 @@ Show the running app's log.
 miosa deploy logs <deployment> [flags]
 ```
 
+Prints the most recent lines the deployment's process wrote.
+Static sites (uploaded files) run no process, so they have no runtime log.
+
 Flags:
 
 - `-n, --lines int` - Number of lines.
+
+Examples:
+
+```
+miosa deploy logs my-app
+  miosa deploy logs my-app -n 200
+```
 
 #### `miosa deploy observe`
 
@@ -2664,22 +2892,97 @@ Invocations, errors and latency.
 miosa deploy observe <deployment>
 ```
 
+Summarizes the deployment's traffic: invocations, errors, error rate, p50/p95 latency and cold starts.
+Latency is not measured for static sites and shows n/a.
+
 Aliases: `metrics`.
+
+Examples:
+
+```
+miosa deploy observe my-app
+  miosa deploy observe my-app --json
+```
 
 #### `miosa deploy promote`
 
-Make a release the live one.
+Make a version the live one.
 
 ```
-miosa deploy promote <deployment> <release>
+miosa deploy promote <version> [flags]
 ```
+
+Put a version on the air.
+
+```
+  miosa deploy promote 4bacc5df                        # in a linked folder
+  miosa deploy promote 4bacc5df --deployment my-site  # from anywhere
+  miosa deploy promote my-site <release-id>           # promote a release
+
+```
+A version uploaded with 'miosa deploy push --no-promote' is not serving yet.
+This makes it live; the deployment keeps its id, URL and domains, and the
+previous version stays available to roll back to.
+
+The deployment comes from --deployment, or from the .miosa/deployment.json a
+first deploy wrote in the folder (--dir, default the current directory).
+
+Flags:
+
+- `--deployment string` - The deployment the version belongs to (default: the folder link).
+- `--dir string` - Folder whose .miosa/deployment.json names the deployment (default: the current directory).
+
+#### `miosa deploy push`
+
+Upload a new version to an existing deployment.
+
+```
+miosa deploy push <deployment> [flags]
+```
+
+Push a new version of a local directory to an existing deployment.
+
+```
+  miosa deploy push my-site --dir ./dist
+  miosa deploy push lunivate.com            # a hostname works too
+
+```
+The deployment keeps its id, URL and domains; only a new version is released.
+This is what 'miosa deploy' does automatically once a folder is linked: every
+deploy and push writes or refreshes .miosa/deployment.json in the folder (and in
+the project folder when --dir points inside it).
+A push whose files match the
+latest version uploads nothing; --force uploads anyway.
+
+Flags:
+
+- `--dir string` - Local directory to upload (default: the current directory).
+- `--env stringArray` - Environment variable KEY=VALUE (repeatable).
+- `--force` - Upload even when the files match the latest version.
+- `--no-promote` - Upload the version without making it live; prints the version to promote later.
+- `--wait` - Wait until the new version is live, then print its URL.
+- `--wait-timeout duration` - How long --wait may take. (default `10m0s`)
 
 #### `miosa deploy redeploy`
 
 Build and release again from the same source.
 
 ```
-miosa deploy redeploy <deployment>
+miosa deploy redeploy <deployment> [flags]
+```
+
+Rebuilds the deployment from its configured source (repository branch or sandbox) and releases the result.
+An uploaded static site has nothing to rebuild: push a new version with 'miosa deploy push' instead.
+
+Flags:
+
+- `--commit string` - Forge deployments: build this commit instead of the branch head.
+
+Examples:
+
+```
+miosa deploy redeploy my-app
+  miosa deploy redeploy my-app --commit 1a2b3c4d
 ```
 
 #### `miosa deploy releases`
@@ -2690,12 +2993,31 @@ List releases.
 miosa deploy releases <deployment>
 ```
 
+Lists the deployment's releases: each time a version was released to serve. 'miosa deploy versions' lists the uploaded versions and marks the live one.
+
+Examples:
+
+```
+miosa deploy releases my-app
+  miosa deploy versions my-app
+```
+
 #### `miosa deploy requests`
 
 Show recent HTTP requests.
 
 ```
 miosa deploy requests <deployment>
+```
+
+Lists recent HTTP requests the deployment served: time, method, path, status and duration.
+Requests to static sites are not logged yet; this says so instead of showing an empty table.
+
+Examples:
+
+```
+miosa deploy requests my-app
+  miosa deploy requests my-app --json
 ```
 
 #### `miosa deploy rm`
@@ -2706,24 +3028,55 @@ Delete a deployment.
 miosa deploy rm <deployment> [flags]
 ```
 
+Deletes the deployment, its versions and its URLs.
+Custom domains attached
+to it stop serving, so rm lists them and refuses while any are attached: move
+them first with 'miosa deploy domain-move <domain> <other-deployment>', or pass
+--with-domains to delete the deployment and detach them anyway.
+
 Aliases: `delete`.
 
 Flags:
 
+- `--with-domains` - Delete even though custom domains are attached (they go offline).
 - `-y, --yes` - Do not ask for confirmation.
+
+Examples:
+
+```
+miosa deploy rm old-site
+  miosa deploy domain-move example.com new-site && miosa deploy rm old-site
+```
 
 #### `miosa deploy rollback`
 
-Return to an earlier version.
+Make an earlier version live again.
 
 ```
 miosa deploy rollback <deployment> [flags]
 ```
 
+Switches the live version back to the one you name with --to (a version
+number, short id or full id from 'miosa deploy versions').
+Before asking for
+confirmation it prints the version live now and the exact version it will
+switch to.
+Without --to it lists the versions and changes nothing: it never
+guesses which one you meant.
+
 Flags:
 
-- `--to string` - Version id to return to (default: the previous one).
+- `--idempotency-key string` - Replay-safe key: repeating the same key returns the first result (default: generated).
+- `--to string` - Version to make live: number, short id or id (see 'miosa deploy versions').
 - `-y, --yes` - Do not ask for confirmation.
+
+Examples:
+
+```
+miosa deploy versions my-app
+  miosa deploy rollback my-app --to 67cf439d
+  miosa deploy rollback my-app --to 3 --yes
+```
 
 #### `miosa deploy stop`
 
@@ -2733,16 +3086,101 @@ Stop a deployment.
 miosa deploy stop <deployment> [flags]
 ```
 
+Stops serving traffic.
+The deployment, its versions and domains are kept; 'miosa deploy redeploy' or a new push brings it back.
+
 Flags:
 
 - `-y, --yes` - Do not ask for confirmation.
 
+Examples:
+
+```
+miosa deploy stop my-app
+  miosa deploy stop my-app --yes
+```
+
+#### `miosa deploy update`
+
+Change a deployment's Forge source, branch, auto-deploy or build settings.
+
+```
+miosa deploy update <deployment> [flags]
+```
+
+Changes only what you pass.
+
+--forge attaches a Forge repository to an uploaded deployment (or moves the
+deployment to another repository). --auto builds and releases a new version on
+every push or merge to the branch; --no-auto stops that (use 'miosa deploy
+redeploy' to build by hand).
+
+Flags:
+
+- `--auto` - Build and release on every push/merge to the branch.
+- `--branch string` - Branch to build.
+- `--build-command string` - Build command.
+- `--forge string` - Forge repository to build from (id, org/name or name).
+- `--no-auto` - Stop building on pushes.
+- `--root-directory string` - The app's directory inside the repository.
+
+Examples:
+
+```
+miosa deploy update my-site --forge my-repo --branch main --auto
+  miosa deploy update my-site --no-auto
+  miosa deploy update my-site --build-command 'npm run build' --root-directory web
+```
+
 #### `miosa deploy versions`
 
-List versions.
+List versions, with what each one ships and which is live.
 
 ```
 miosa deploy versions <deployment>
+```
+
+List a deployment's versions.
+
+```
+  miosa deploy versions my-app
+
+```
+Each row carries the version number, its kind, how many files it ships and how
+big they are, the artifact sha256, and "live" on the version that is serving.
+
+Compare two of them with:
+
+```
+  miosa deploy diff <version> <version>
+```
+
+##### `miosa deploy versions rm`
+
+Delete a version that is not live.
+
+```
+miosa deploy versions rm <version> [flags]
+```
+
+Deletes one version (number, short id or id) of the deployment named by
+--deployment, or of the deployment this folder is linked to.
+A version id on its
+own finds its deployment.
+The live version is refused, and so is any version the
+server still needs, such as the rollback target.
+
+Flags:
+
+- `--deployment string` - Deployment the version belongs to (default: the folder's linked deployment).
+- `--dir string` - Folder whose .miosa/deployment.json names the deployment.
+- `-y, --yes` - Delete without asking.
+
+Examples:
+
+```
+miosa deploy versions rm 90a9dee1
+  miosa deploy versions rm 3 --deployment my-site --yes
 ```
 
 ### `miosa desktop`
@@ -3646,6 +4084,45 @@ Work with repositories owned by the organization associated with the current MIO
 Flags:
 
 
+#### `miosa forge auth`
+
+Use your MIOSA API key for Forge git (clone, push and pull over HTTPS).
+
+```
+miosa forge auth
+```
+
+##### `miosa forge auth setup-git`
+
+Make git use your MIOSA login for Forge repositories.
+
+```
+miosa forge auth setup-git [flags]
+```
+
+Configures git (globally, for the Forge host only) to ask this CLI for
+your API key when it talks to Forge.
+After it, plain git works against Forge:
+
+```
+  git clone https://forge.miosa.ai/<org>/<repo>.git
+  git push
+
+```
+The password git receives is the API key this CLI is signed in with
+('miosa login'); nothing is stored by git.
+
+Flags:
+
+- `--host string` - Forge git host. (default `forge.miosa.ai`)
+
+Examples:
+
+```
+miosa forge auth setup-git
+  miosa forge repo clone my-repo
+```
+
 #### `miosa forge check`
 
 Commit checks: results reported against a commit.
@@ -3821,8 +4298,12 @@ Flags:
 Show the merge policy.
 
 ```
-miosa forge policy show <repo>
+miosa forge policy show <repo> [flags]
 ```
+
+Flags:
+
+- `--branch string` - Branch (default: the default branch).
 
 #### `miosa forge pr`
 
@@ -3841,8 +4322,10 @@ than the author.
   miosa forge pr new platform --head fix-redirect --title "Fix redirect loop"
   miosa forge pr list platform
   miosa forge pr show platform 12
-  miosa forge pr review platform 12 --approve
-  miosa forge pr merge platform 12
+  miosa forge pr review platform 12 --decision approved
+  miosa forge pr diff platform 12
+  miosa forge pr checkout platform 12
+  miosa forge pr merge platform 12 --squash
 ```
 
 Aliases: `pulls`, `pull-request`, `pull-requests`.
@@ -3869,6 +4352,29 @@ Flags:
 - `--idempotency-key string` - Replay-safe key: repeating the same key returns the first result (default: generated).
 - `--name string` - Check name, for example unit-tests.
 - `--status string` - Queued, in_progress or completed (default completed).
+
+##### `miosa forge pr checkout`
+
+Check out a pull request's branch in this git repository.
+
+```
+miosa forge pr checkout <repo> <number> [flags]
+```
+
+Fetches the pull request's head branch (from its fork, when it has one) and
+checks it out as a local branch with the same name, or --branch.
+An existing
+local branch is moved forward only; local commits are never thrown away.
+
+Flags:
+
+- `--branch string` - Local branch name (default: the pull request's head branch).
+
+Examples:
+
+```
+miosa forge pr checkout platform 12
+```
 
 ##### `miosa forge pr close`
 
@@ -3899,15 +4405,40 @@ List the comments on a pull request.
 miosa forge pr comments <repo> <number>
 ```
 
+##### `miosa forge pr diff`
+
+Show the changes a pull request makes.
+
+```
+miosa forge pr diff <repo> <number> [flags]
+```
+
+Flags:
+
+- `--name-only` - Print only the names of the changed files.
+
+Examples:
+
+```
+miosa forge pr diff platform 12
+  miosa forge pr diff platform 12 --name-only
+```
+
 ##### `miosa forge pr list`
 
 List pull requests.
 
 ```
-miosa forge pr list <repo>
+miosa forge pr list <repo> [flags]
 ```
 
 Aliases: `ls`.
+
+Flags:
+
+- `--author string` - Only pull requests by this person (name, email or user id).
+- `--base string` - Only pull requests into this branch.
+- `--state string` - Only pull requests in this state (open|closed|merged|all). (default `open`)
 
 ##### `miosa forge pr merge`
 
@@ -3922,7 +4453,11 @@ A merge into a branch that deploys on merge starts that deployment.
 
 Flags:
 
+- `--auto` - Merge by itself once the branch policy is met.
 - `--idempotency-key string` - Replay-safe key: repeating the same key returns the first result (default: generated).
+- `--merge` - Merge with a merge commit (the default).
+- `--rebase` - Replay the commits onto the base branch.
+- `--squash` - Squash the commits into one on the base branch.
 
 ##### `miosa forge pr new`
 
@@ -4000,6 +4535,7 @@ miosa forge release
 ```
   miosa forge release list platform
   miosa forge release new platform --tag v1.2.0 --name "1.2.0" --body "Fixes the redirect"
+  miosa forge release upload platform v1.2.0 dist/app.tar.gz
 ```
 
 Aliases: `releases`.
@@ -4057,12 +4593,54 @@ Flags:
 - `--name string` - Tag name.
 - `--target string` - Commit or branch to tag (default: the default branch).
 
+##### `miosa forge release upload`
+
+Attach files to a release.
+
+```
+miosa forge release upload <repo> <tag> [file...] [flags]
+```
+
+Uploads each file as a release asset (up to 25 MB each). --source-archive
+attaches a .tar.gz of the tagged commit instead.
+Repeating an upload with the
+same --idempotency-key returns the first result.
+
+Flags:
+
+- `--content-type string` - Content type (default: from the file extension).
+- `--idempotency-key string` - Replay-safe key: repeating it returns the first result (default: generated).
+- `--name string` - Asset name (default: the file name).
+- `--source-archive` - Attach a .tar.gz of the tagged commit.
+
+Examples:
+
+```
+miosa forge release upload platform v1.2.0 dist/app.tar.gz dist/checksums.txt
+  miosa forge release upload platform v1.2.0 --source-archive
+```
+
 #### `miosa forge repo`
 
 Manage Forge repositories.
 
 ```
 miosa forge repo
+```
+
+##### `miosa forge repo clone`
+
+Clone a Forge repository with your MIOSA login.
+
+```
+miosa forge repo clone <repo> [directory]
+```
+
+Examples:
+
+```
+miosa forge repo clone my-repo
+  miosa forge repo clone acme/my-repo ./src
 ```
 
 ##### `miosa forge repo create`
@@ -8468,10 +9046,27 @@ miosa workspace create <name>
 
 #### `miosa workspace delete`
 
-Delete a workspace.
+Delete a workspace (asks you to type its name).
 
 ```
-miosa workspace delete <id>
+miosa workspace delete <workspace> [flags]
+```
+
+Deletes the workspace.
+On a terminal it shows the workspace and asks you to
+type its name to confirm.
+Off a terminal (scripts, CI) it refuses unless --yes
+is given. <workspace> is its name, slug or id.
+
+Flags:
+
+- `-y, --yes` - Delete without the typed confirmation.
+
+Examples:
+
+```
+miosa workspace delete acme
+  miosa workspace delete acme --yes
 ```
 
 #### `miosa workspace get`

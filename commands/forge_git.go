@@ -37,10 +37,7 @@ The password git receives is the API key this CLI is signed in with
 			if _, _, err := buildClient(); err != nil {
 				return die(err)
 			}
-			helper, err := forgeHelperCommand()
-			if err != nil {
-				return die(err)
-			}
+			helper, onPath := persistentHelperCommand()
 			key := "credential.https://" + host + ".helper"
 			// An empty entry first resets helpers inherited from other config
 			// (osxkeychain and friends) for this host only.
@@ -52,7 +49,12 @@ The password git receives is the API key this CLI is signed in with
 					return die(fmt.Errorf("git %s: %v %s", strings.Join(args, " "), err, strings.TrimSpace(string(out))))
 				}
 			}
-			printerFor(cmd).Success("git now uses your MIOSA login for https://%s", host)
+			p := printerFor(cmd)
+			p.Success("git now uses your MIOSA login for https://%s", host)
+			if !onPath {
+				p.Line("'miosa' is not on your PATH, so git was given this binary's full path: %s", helper)
+				p.Line("Put miosa on your PATH and run 'miosa forge auth setup-git' again, or git auth breaks when this file moves.")
+			}
 			return nil
 		},
 	}
@@ -106,6 +108,26 @@ func isForgeHost(host string) bool {
 	return host == defaultForgeGitHost
 }
 
+// persistentHelperCommand is the helper setup-git writes into the global git
+// config. It names the CLI by PATH, the way gh does, so switching Node versions
+// or reinstalling the CLI elsewhere keeps git working. Only when no miosa is on
+// PATH does it fall back to this binary's full path (and onPath is false).
+func persistentHelperCommand() (helper string, onPath bool) {
+	if _, err := lookPath("miosa"); err == nil {
+		return "!miosa forge auth git-credential", true
+	}
+	abs, err := forgeHelperCommand()
+	if err != nil {
+		return "!miosa forge auth git-credential", false
+	}
+	return abs, false
+}
+
+// lookPath is exec.LookPath, replaceable in tests.
+var lookPath = exec.LookPath
+
+// forgeHelperCommand names this exact binary, for a one-shot git command such
+// as 'forge repo clone', where the path cannot go stale.
 func forgeHelperCommand() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
