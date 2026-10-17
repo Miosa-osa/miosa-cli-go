@@ -79,6 +79,9 @@ type Error struct {
 	// Details is the decoded "details" object, if the server sent one.
 	Details map[string]any
 	Body    []byte
+	// Path is the request path the API refused (e.g. /api/v1/storage/my-bucket),
+	// so a hint can name the command that lists that kind of resource.
+	Path string
 }
 
 func (e *Error) Error() string {
@@ -114,6 +117,9 @@ func ParseError(resp *http.Response) *Error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	resp.Body.Close()
 	e := &Error{Status: resp.StatusCode, Body: body, RequestID: resp.Header.Get("X-Request-Id")}
+	if resp.Request != nil && resp.Request.URL != nil {
+		e.Path = resp.Request.URL.Path
+	}
 	var raw map[string]any
 	parsed := json.Unmarshal(body, &raw) == nil
 	if parsed {

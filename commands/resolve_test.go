@@ -87,3 +87,15 @@ func TestUnknownNameGetsAnActionableError(t *testing.T) {
 		t.Fatalf("exit = %d", commands.ExitCode(err))
 	}
 }
+
+// CLI 2.3.13: an unknown bucket name pointed at the sandbox and deployment lists.
+func TestUnknownBucketNamePointsAtTheBucketList(t *testing.T) {
+	fakeRoutes(t, map[string]any{
+		"GET /storage/buckets":      resp{200, `{"data":[]}`},
+		"GET /storage/buckets/nope": resp{400, `{"error":{"code":"INVALID_ID"}}`},
+	})
+	_, err := run(t, "storage", "get", "nope")
+	if err == nil || !strings.Contains(err.Error(), "'miosa storage list' shows buckets") {
+		t.Fatalf("err = %v", err)
+	}
+}
