@@ -436,12 +436,15 @@ func deployFromGit(ctx context.Context, c *client.Client, p *output.Printer, f *
 	if out.ID == "" {
 		return nil, fmt.Errorf("the server created the deployment but returned no id")
 	}
-	// A repo deployment is created in "pending"; nothing builds until a push or
-	// a redeploy, so queue the first build now (as the 1.x CLI did).
-	if err := c.API.Post(ctx, "/deployments/"+out.ID+"/redeploy", nil, nil); err != nil {
-		return nil, err
+	// The server builds a connected repository on create and answers
+	// "building". Only a server that left it "pending" (or did not say) needs
+	// the first build queued here; redeploying anyway built the same head twice.
+	if out.State == "" || out.State == "pending" {
+		if err := c.API.Post(ctx, "/deployments/"+out.ID+"/redeploy", nil, nil); err != nil {
+			return nil, err
+		}
+		out.State = "building"
 	}
-	out.State = "building"
 	return out, nil
 }
 

@@ -557,7 +557,7 @@ func TestServicesIsARenamedAliasOfDaemon(t *testing.T) {
 		if out != want {
 			t.Fatalf("%s stdout differs:\n%s\nwant\n%s", alias, out, want)
 		}
-		if !strings.Contains(stderr, "is now 'miosa daemon'; use 'miosa daemon list my-box'") {
+		if !strings.Contains(stderr, "is now 'miosa daemon'; use 'miosa daemon list my-box'. The old name will stop working on or after 2026-10-31.") {
 			t.Fatalf("%s notice = %q", alias, stderr)
 		}
 	}

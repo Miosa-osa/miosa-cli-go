@@ -18,9 +18,10 @@ import (
 //
 // It was called `miosa services` (also service, svc) until 2.3.13. That name is
 // moving to project Services (tasks/specs/cli-noun-plan-services-2026-10-16.md):
-// 2.3.13 keeps the old names working with a stderr notice, the next release
-// refuses them with the rewritten command, and the one after gives `service` to
-// project Services.
+// 2.3.13 keeps the old names working with a stderr notice naming the date they
+// stop (2026-10-31, at least 14 days so scripts in CI can move); the first
+// release on or after it refuses them with the rewritten command, and the one
+// after gives `service` to project Services.
 
 var serviceCols = []Col{
 	{Head: "NAME", Path: "name"}, {Head: "STATUS", Path: "status"}, {Head: "PID", Path: "pid"},
@@ -44,8 +45,8 @@ everywhere (the current one is used).
 // newServicesCmd is the pre-2.3.13 name: hidden, same requests and output, and
 // a stderr notice naming the command to use instead.
 func newServicesCmd() *cobra.Command {
-	cmd := daemonGroup("services", "service", []string{"service", "svc"}, `Renamed to 'miosa daemon'. This name keeps working in this release, with a notice
-on standard error, and then stops working. Set MIOSA_NO_DEPRECATION_NOTICE=1 to
+	cmd := daemonGroup("services", "service", []string{"service", "svc"}, `Renamed to 'miosa daemon'. This name keeps working, with a notice on standard
+error, and will stop working on or after 2026-10-31. Set MIOSA_NO_DEPRECATION_NOTICE=1 to
 silence the notice.`)
 	cmd.Hidden = true
 	cmd.Short = "Renamed to 'miosa daemon'"
@@ -104,7 +105,7 @@ func warnRenamed(group *cobra.Command) {
 		sub.RunE = func(cmd *cobra.Command, args []string) error {
 			if os.Getenv(noDeprecationNoticeEnv) == "" {
 				fmt.Fprintf(cmd.ErrOrStderr(),
-					"miosa: 'miosa %s' is now 'miosa daemon'; use 'miosa daemon %s'. The old name stops working in the next release.\n",
+					"miosa: 'miosa %s' is now 'miosa daemon'; use 'miosa daemon %s'. The old name will stop working on or after 2026-10-31.\n",
 					group.Name(), strings.Join(append([]string{cmd.Name()}, args...), " "))
 			}
 			return run(cmd, args)

@@ -189,6 +189,43 @@ func TestDeployCreateFromGit(t *testing.T) {
 	}
 }
 
+// The server builds on connect and answers "building"; a redeploy on top of
+// that built the same head a second time (QA a0042ac1, 2026-10-17).
+func TestDeployCreateFromGitDoesNotRebuildWhatTheServerBuilds(t *testing.T) {
+	f := newFakeAPI(t, func(c call) (int, string) {
+		if c.is("POST", "/deployments") {
+			return 201, `{"data":{"id":"d3","name":"app","state":"building"},"webhook_secret":"whsec_abc"}`
+		}
+		return 404, `{"error":{"code":"NOT_FOUND","message":"no route"}}`
+	})
+	if out, err := run(t, "deploy", "create", "--git", "https://github.com/me/app"); err != nil {
+		t.Fatalf("deploy create --git: %v (out=%q)", err, out)
+	}
+	if n := len(f.find("POST", "/deployments/d3/redeploy")); n != 0 {
+		t.Fatalf("the server already queued the first build; got %d redeploy calls", n)
+	}
+}
+
+// A create response with no state is treated like "pending": the CLI queues
+// the first build, or the deployment would never build.
+func TestDeployCreateFromGitQueuesTheFirstBuildWhenStateIsMissing(t *testing.T) {
+	f := newFakeAPI(t, func(c call) (int, string) {
+		switch {
+		case c.is("POST", "/deployments"):
+			return 201, `{"data":{"id":"d3","name":"app"}}`
+		case c.is("POST", "/deployments/d3/redeploy"):
+			return 202, `{"data":{"id":"b1","state":"queued"}}`
+		}
+		return 404, `{"error":{"code":"NOT_FOUND","message":"no route"}}`
+	})
+	if out, err := run(t, "deploy", "create", "--git", "https://github.com/me/app"); err != nil {
+		t.Fatalf("deploy create --git: %v (out=%q)", err, out)
+	}
+	if n := len(f.find("POST", "/deployments/d3/redeploy")); n != 1 {
+		t.Fatalf("a create with no state needs the first build queued; got %d redeploy calls", n)
+	}
+}
+
 func TestDeployCreateFromGitWait(t *testing.T) {
 	gitDeployAPI(t)
 	out, err := run(t, "deploy", "create", "--git", "https://github.com/me/app", "--wait")

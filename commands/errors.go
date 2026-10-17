@@ -187,7 +187,7 @@ func friendlyMessage(err error) string {
 			}
 		}
 		if strings.EqualFold(ae.Code, "INVALID_ID") && (ae.Message == "" || strings.HasPrefix(ae.Message, "request failed with status")) {
-			return contextPrefix(err) + "not a valid id, and nothing has that name - 'miosa list' shows sandboxes, 'miosa deploy list' deployments" + requestSuffix(ae)
+			return contextPrefix(err) + "not a valid id, and nothing has that name - " + notFoundHint(ae.Path) + requestSuffix(ae)
 		}
 		switch ae.Status {
 		case 401:
@@ -377,4 +377,43 @@ func writeError(w io.Writer, err error, asJSON bool) {
 	}
 	enc := json.NewEncoder(w)
 	_ = enc.Encode(b)
+}
+
+// listCommands maps the first path segment of a refused request to the
+// command that lists that kind of resource and what it lists, so an unknown
+// name points at where the real names are (CLI 2.3.13: a bucket miss pointed
+// at sandboxes and deployments).
+var listCommands = map[string][2]string{
+	"sandboxes":         {"miosa list", "sandboxes"},
+	"deployments":       {"miosa deploy list", "deployments"},
+	"computers":         {"miosa computer list", "computers"},
+	"databases":         {"miosa db list", "databases"},
+	"managed-databases": {"miosa db list", "databases"},
+	"storage":           {"miosa storage list", "buckets"},
+	"volumes":           {"miosa volume list", "volumes"},
+	"functions":         {"miosa function list", "functions"},
+	"projects":          {"miosa project list", "projects"},
+	"workspaces":        {"miosa workspace list", "workspaces"},
+	"agents":            {"miosa agent list", "agents"},
+	"sandbox-templates": {"miosa template list", "templates"},
+	"templates":         {"miosa template list", "templates"},
+	"cron-jobs":         {"miosa schedule list", "scheduled jobs"},
+	"workflows":         {"miosa workflow list", "workflows"},
+	"webhooks":          {"miosa webhook list", "webhooks"},
+	"api-keys":          {"miosa api-key list", "API keys"},
+	"snapshots":         {"miosa snapshot list", "snapshots"},
+	"service-accounts":  {"miosa service-account list", "service accounts"},
+	"hosts":             {"miosa host list", "hosts"},
+	"environments":      {"miosa env list", "environments"},
+}
+
+// notFoundHint names the list command for the resource a path addresses, or
+// the sandbox and deployment lists when the path names none it knows.
+func notFoundHint(path string) string {
+	trimmed := strings.TrimPrefix(strings.TrimPrefix(path, "/"), "api/v1/")
+	segment, _, _ := strings.Cut(trimmed, "/")
+	if entry, ok := listCommands[segment]; ok {
+		return "'" + entry[0] + "' shows " + entry[1]
+	}
+	return "'miosa list' shows sandboxes, 'miosa deploy list' deployments"
 }
