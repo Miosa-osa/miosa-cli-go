@@ -24,10 +24,12 @@ func newSandboxCmd() *cobra.Command {
 		Long: `Show a sandbox's vCPU and memory and what it can change on the running
 sandbox right now, and change them.
 
-Only vCPU can change on a running Firecracker sandbox today, only up to the
-count it booted with, and only on hosts with the cpu controller enabled (a
-per-host flag). Memory never applies live and needs a restart; SOMA and hosts
-without the controller cannot resize live at all.
+What can change live depends on the runtime and the host; 'miosa sandbox
+resources' shows it for one sandbox. A running Firecracker sandbox can take
+more vCPU up to the count it booted with (on hosts with the cpu controller)
+and more memory up to its live ceiling. SOMA sandboxes cannot resize live.
+A change that cannot apply live is not saved: resize says so and exits 5;
+--restart recreates the sandbox at the new size instead.
 
   miosa sandbox resources my-box
   miosa sandbox resize my-box --cpu 4

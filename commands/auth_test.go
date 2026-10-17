@@ -184,7 +184,7 @@ func TestDeviceLoginNoBrowserPrintsURL(t *testing.T) {
 }
 
 func TestLogoutClearsProfileKeyOnly(t *testing.T) {
-	fakeRoutes(t, nil)
+	fakeRoutes(t, map[string]any{"DELETE /cli/session": `{"data":{"status":"revoked"}}`})
 	writeConfigFile(t, "api_key = \"msk_u_default\"\n[profiles.work]\napi_key = \"msk_u_work\"\n")
 	if _, err := run(t, "logout", "--profile", "work"); err != nil {
 		t.Fatal(err)
@@ -196,7 +196,7 @@ func TestLogoutClearsProfileKeyOnly(t *testing.T) {
 }
 
 func TestLogoutAllDeletesFile(t *testing.T) {
-	fakeRoutes(t, nil)
+	fakeRoutes(t, map[string]any{"DELETE /cli/session": `{"data":{"status":"revoked"}}`})
 	path := writeConfigFile(t, "api_key = \"msk_u_default\"\n[profiles.work]\napi_key = \"msk_u_work\"\n")
 	if _, err := run(t, "logout", "--all"); err != nil {
 		t.Fatal(err)

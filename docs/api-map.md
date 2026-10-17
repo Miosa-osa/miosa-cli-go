@@ -90,6 +90,11 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa cron resume` | POST | `/cron-jobs/{0}/resume` |
 | `miosa cron rm` | DELETE | `/cron-jobs/{0}` |
 | `miosa cron run` | POST | `/cron-jobs/{0}/run-now` |
+| `miosa daemon create` | POST | `/sandboxes/{0}/services` |
+| `miosa daemon get` | GET | `/sandboxes/{0}/services/{1}` |
+| `miosa daemon list` | GET | `/sandboxes/{0}/services` |
+| `miosa daemon logs` | GET | `/sandboxes/{0}/services/{1}/logs` |
+| `miosa daemon restart` | POST | `/sandboxes/{0}/services/{1}/restart` |
 | `miosa db backup` | POST | `/databases/{0}/backups` |
 | `miosa db backups` | GET | `/databases/{0}/backups` |
 | `miosa db connection` | GET | `/databases/{0}/credentials` |

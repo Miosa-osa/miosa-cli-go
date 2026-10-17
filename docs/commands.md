@@ -37,6 +37,7 @@ Regenerate with `make docs`.
 - [`miosa connections`](#miosa-connections) - Model providers, apps and tool servers your agents use
 - [`miosa console`](#miosa-console) - Open an interactive shell in a sandbox
 - [`miosa create`](#miosa-create) - Create a new sandbox
+- [`miosa daemon`](#miosa-daemon) - Run named long-lived processes (daemons) in a sandbox
 - [`miosa db`](#miosa-db) - Managed databases
 - [`miosa deploy`](#miosa-deploy) - Create and operate deployments
 - [`miosa desktop`](#miosa-desktop) - Start and open a sandbox's remote desktop
@@ -58,7 +59,7 @@ Regenerate with `make docs`.
 - [`miosa limits`](#miosa-limits) - Limits of the organization a new machine would bill
 - [`miosa list`](#miosa-list) - List sandboxes
 - [`miosa login`](#miosa-login) - Sign in to MIOSA
-- [`miosa logout`](#miosa-logout) - Remove stored credentials
+- [`miosa logout`](#miosa-logout) - Sign out: revoke the stored key on the server and remove it
 - [`miosa logs`](#miosa-logs) - Show a sandbox's system log
 - [`miosa mcp`](#miosa-mcp) - Connect AI clients to the MIOSA Model Context Protocol server
 - [`miosa member`](#miosa-member) - People in your organization
@@ -84,7 +85,6 @@ Regenerate with `make docs`.
 - [`miosa sandbox`](#miosa-sandbox) - Inspect and resize a sandbox's vCPU and memory
 - [`miosa schedule`](#miosa-schedule) - Scheduled jobs
 - [`miosa service-account`](#miosa-service-account) - Non-human accounts that own API keys for pipelines and programs
-- [`miosa services`](#miosa-services) - Run named long-lived services in a sandbox
 - [`miosa snapshot`](#miosa-snapshot) - Browse, name, fork and delete snapshots of sandboxes and computers
 - [`miosa ssh`](#miosa-ssh) - Open an SSH session in a sandbox, or run a command over it
 - [`miosa stop`](#miosa-stop) - Stop a sandbox, keeping its disk
@@ -2428,6 +2428,97 @@ Flags:
 - `--wait` - Wait until the sandbox is ready for commands.
 - `--wait-timeout duration` - How long --wait may take. (default `3m0s`)
 - `--workspace string` - Workspace slug to assign the sandbox to.
+
+### `miosa daemon`
+
+Run named long-lived processes (daemons) in a sandbox.
+
+```
+miosa daemon
+```
+
+A daemon is a named background process in a sandbox that outlives your session: its
+status and logs stay available after the CLI disconnects.
+The sandbox is optional
+everywhere (the current one is used).
+
+```
+  miosa daemon create my-box --name web --command "python -m http.server 8080"
+  miosa daemon list
+  miosa daemon logs web --tail 50
+  miosa daemon restart web
+```
+
+#### `miosa daemon create`
+
+Start a daemon.
+
+```
+miosa daemon create [sandbox] [flags]
+```
+
+Flags:
+
+- `--command string` - Command to run.
+- `--cwd string` - Working directory (default /workspace).
+- `--env stringArray` - Environment variable KEY=VALUE (repeatable).
+- `--name string` - Daemon name.
+- `--sudo` - Run as root.
+
+#### `miosa daemon get`
+
+Show one daemon.
+
+```
+miosa daemon get [sandbox] <daemon>
+```
+
+Aliases: `show`.
+
+#### `miosa daemon list`
+
+List daemons.
+
+```
+miosa daemon list [sandbox]
+```
+
+Aliases: `ls`.
+
+#### `miosa daemon logs`
+
+Show a daemon's output.
+
+```
+miosa daemon logs [sandbox] <daemon> [flags]
+```
+
+Flags:
+
+- `-n, --tail int` - Number of recent lines. (default `100`)
+
+#### `miosa daemon restart`
+
+Restart a daemon (also starts a stopped one).
+
+```
+miosa daemon restart [sandbox] <daemon>
+```
+
+Aliases: `start`.
+
+#### `miosa daemon stop`
+
+Stop a daemon.
+
+```
+miosa daemon stop [sandbox] <daemon>
+```
+
+Stop a daemon by killing its process.
+Start it again with 'daemon restart'.
+
+Aliases: `delete`, `rm`.
 
 ### `miosa db`
 
@@ -6765,21 +6856,37 @@ Flags:
 
 ### `miosa logout`
 
-Remove stored credentials.
+Sign out: revoke the stored key on the server and remove it.
 
 ```
 miosa logout [flags]
 ```
 
-Sign out of the current profile: its API key, current sandbox and the Forge
-key it minted for git (if any) are removed.
-With --all the whole config file (every profile) is deleted.
-The key is not
-revoked on the server; revoke it with 'miosa api-key revoke' if it leaked.
+Sign out of the current profile.
+The key 'miosa login' created is revoked on
+the server first, then the profile's API key, current sandbox and the Forge key
+it minted for git (if any) are removed.
+A browser session is ended the same way.
+
+With --all every profile is signed out and the config file is deleted.
+
+A key you stored yourself (not created by 'miosa login') is removed from the
+profile but left active; a key given with --api-key or MIOSA_API_KEY is never
+revoked.
+If the server cannot be reached, the keys are still removed
+locally and the command exits non-zero, naming the key that is still active.
 
 Flags:
 
-- `--all` - Delete the config file (all profiles).
+- `--all` - Sign out of every profile and delete the config file.
+
+Examples:
+
+```
+miosa logout
+  miosa logout --profile work
+  miosa logout --all
+```
 
 ### `miosa logs`
 
@@ -7689,10 +7796,22 @@ Create a project.
 miosa project create <name> [flags]
 ```
 
+Create a project in a workspace.
+Without --workspace-id it goes where the
+console would put it: the profile's default workspace ('miosa workspace use'),
+else the organization's default workspace, else its only workspace.
+
 Flags:
 
 - `--description string` - What it is for.
-- `--workspace-id string` - Workspace.
+- `--workspace-id string` - Workspace: slug, name or id (default: the default workspace).
+
+Examples:
+
+```
+miosa project create shop
+  miosa project create shop --workspace-id staging
+```
 
 #### `miosa project get`
 
@@ -8137,11 +8256,14 @@ miosa sandbox
 Show a sandbox's vCPU and memory and what it can change on the running
 sandbox right now, and change them.
 
-Only vCPU can change on a running Firecracker sandbox today, only up to the
-count it booted with, and only on hosts with the cpu controller enabled (a
-per-host flag).
-Memory never applies live and needs a restart; SOMA and hosts
-without the controller cannot resize live at all.
+What can change live depends on the runtime and the host; 'miosa sandbox
+resources' shows it for one sandbox.
+A running Firecracker sandbox can take
+more vCPU up to the count it booted with (on hosts with the cpu controller)
+and more memory up to its live ceiling.
+SOMA sandboxes cannot resize live.
+A change that cannot apply live is not saved: resize says so and exits 5;
+--restart recreates the sandbox at the new size instead.
 
 ```
   miosa sandbox resources my-box
@@ -8400,99 +8522,6 @@ Flags:
 
 - `--description string` - New description.
 - `--name string` - New name.
-
-### `miosa services`
-
-Run named long-lived services in a sandbox.
-
-```
-miosa services
-```
-
-A service is a named background process that outlives your session: its status and
-logs stay available after the CLI disconnects.
-The sandbox is optional everywhere
-(the current one is used).
-
-```
-  miosa services create my-box --name web --command "python -m http.server 8080"
-  miosa services list
-  miosa services logs web --tail 50
-  miosa services restart web
-```
-
-Aliases: `service`, `svc`.
-
-#### `miosa services create`
-
-Start a service.
-
-```
-miosa services create [sandbox] [flags]
-```
-
-Flags:
-
-- `--command string` - Command to run.
-- `--cwd string` - Working directory (default /workspace).
-- `--env stringArray` - Environment variable KEY=VALUE (repeatable).
-- `--name string` - Service name.
-- `--sudo` - Run as root.
-
-#### `miosa services get`
-
-Show one service.
-
-```
-miosa services get [sandbox] <service>
-```
-
-Aliases: `show`.
-
-#### `miosa services list`
-
-List services.
-
-```
-miosa services list [sandbox]
-```
-
-Aliases: `ls`.
-
-#### `miosa services logs`
-
-Show a service's output.
-
-```
-miosa services logs [sandbox] <service> [flags]
-```
-
-Flags:
-
-- `-n, --tail int` - Number of recent lines. (default `100`)
-
-#### `miosa services restart`
-
-Restart a service (also starts a stopped one).
-
-```
-miosa services restart [sandbox] <service>
-```
-
-Aliases: `start`.
-
-#### `miosa services stop`
-
-Stop a service.
-
-```
-miosa services stop [sandbox] <service>
-```
-
-Stop a service by killing its process.
-Start it again with 'services restart'.
-
-Aliases: `delete`, `rm`.
 
 ### `miosa snapshot`
 
@@ -8764,7 +8793,7 @@ Object storage buckets.
 miosa storage
 ```
 
-Buckets hold objects behind an S3-compatible endpoint. <bucket> is the bucket id.
+Buckets hold objects behind an S3-compatible endpoint. <bucket> is the bucket name or id.
 
 Aliases: `bucket`, `buckets`.
 

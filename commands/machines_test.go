@@ -496,9 +496,10 @@ func TestProcessCommands(t *testing.T) {
 	}
 }
 
-func TestServicesCommands(t *testing.T) {
+func daemonRoutes(t *testing.T) *fakeAPI {
+	t.Helper()
 	svc := `{"id":"s-id","name":"web","status":"running","pid":9,"command":"npm start","cwd":"/workspace"}`
-	f := boxRoutes(t, map[string]any{
+	return boxRoutes(t, map[string]any{
 		"GET " + boxPath + "/services":              `{"data":[` + svc + `]}`,
 		"POST " + boxPath + "/services":             resp{201, `{"data":` + svc + `}`},
 		"GET " + boxPath + "/services/web":          `{"data":` + svc + `}`,
@@ -506,32 +507,80 @@ func TestServicesCommands(t *testing.T) {
 		"GET " + boxPath + "/services/web/logs":     `{"data":{"service":"web","lines":["ready"],"count":1}}`,
 		"DELETE " + boxPath + "/processes/s-id":     `{}`,
 	})
-	if out, err := run(t, "services", "list", "my-box"); err != nil || !strings.Contains(out, "npm start") {
+}
+
+func TestDaemonCommands(t *testing.T) {
+	f := daemonRoutes(t)
+	if out, err := run(t, "daemon", "list", "my-box"); err != nil || !strings.Contains(out, "npm start") {
 		t.Fatalf("list: %v\n%s", err, out)
 	}
-	if _, err := run(t, "services", "create", "my-box", "--name", "web", "--command", "npm start", "--cwd", "/workspace", "--env", "PORT=3000", "--sudo"); err != nil {
+	if _, err := run(t, "daemon", "create", "my-box", "--name", "web", "--command", "npm start", "--cwd", "/workspace", "--env", "PORT=3000", "--sudo"); err != nil {
 		t.Fatal(err)
 	}
 	b := f.find("POST", boxPath+"/services")[0].Body
 	if b["name"] != "web" || b["command"] != "npm start" || b["cwd"] != "/workspace" || b["sudo"] != true || b["env"].(map[string]any)["PORT"] != "3000" {
 		t.Fatalf("create body = %v", b)
 	}
-	for _, args := range [][]string{{"services", "get", "my-box", "web"}, {"services", "restart", "my-box", "web"}, {"services", "start", "my-box", "web"}} {
+	for _, args := range [][]string{{"daemon", "get", "my-box", "web"}, {"daemon", "restart", "my-box", "web"}, {"daemon", "start", "my-box", "web"}} {
 		if _, err := run(t, args...); err != nil {
 			t.Fatalf("%v: %v", args, err)
 		}
 	}
-	if out, err := run(t, "services", "logs", "my-box", "web", "--tail", "20"); err != nil || out != "ready\n" {
+	if out, err := run(t, "daemon", "logs", "my-box", "web", "--tail", "20"); err != nil || out != "ready\n" {
 		t.Fatalf("logs: %v %q", err, out)
 	}
-	if out, err := run(t, "services", "stop", "my-box", "web"); err != nil || !strings.Contains(out, "Stopped service") {
+	if out, err := run(t, "daemon", "stop", "my-box", "web"); err != nil || !strings.Contains(out, "Stopped daemon") {
 		t.Fatalf("stop: %v %s", err, out)
 	}
 	if len(f.find("DELETE", boxPath+"/processes/s-id")) != 1 {
 		t.Fatalf("stop must kill the service process: %+v", f.calls)
 	}
-	if _, err := run(t, "services", "create", "my-box", "--name", "x"); err == nil {
+	if _, err := run(t, "daemon", "create", "my-box", "--name", "x"); err == nil {
 		t.Fatal("--command is required")
+	}
+}
+
+// 2.3.13 renamed `services` to `daemon` (tasks/specs/cli-noun-plan-services-2026-10-16.md).
+// The old names keep working for one release: same requests, same stdout and
+// --json, and one notice on standard error naming the command to use.
+func TestServicesIsARenamedAliasOfDaemon(t *testing.T) {
+	daemonRoutes(t)
+	want, _, err := runSplit(t, "daemon", "list", "my-box", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, alias := range []string{"services", "service", "svc"} {
+		out, stderr, err := runSplit(t, alias, "list", "my-box", "--json")
+		if err != nil {
+			t.Fatalf("%s: %v", alias, err)
+		}
+		if out != want {
+			t.Fatalf("%s stdout differs:\n%s\nwant\n%s", alias, out, want)
+		}
+		if !strings.Contains(stderr, "is now 'miosa daemon'; use 'miosa daemon list my-box'") {
+			t.Fatalf("%s notice = %q", alias, stderr)
+		}
+	}
+	if out, stderr, err := runSplit(t, "services", "logs", "my-box", "web", "--tail", "20"); err != nil || out != "ready\n" || stderr == "" {
+		t.Fatalf("logs through the old name: %v %q %q", err, out, stderr)
+	}
+	if out, _, err := runSplit(t, "services", "stop", "my-box", "web"); err != nil || !strings.Contains(out, "Stopped service") {
+		t.Fatalf("the old name keeps its wording: %v %s", err, out)
+	}
+
+	t.Setenv("MIOSA_NO_DEPRECATION_NOTICE", "1")
+	if _, stderr, err := runSplit(t, "svc", "list", "my-box"); err != nil || stderr != "" {
+		t.Fatalf("notice not silenced: %v %q", err, stderr)
+	}
+}
+
+func TestHelpListsDaemonNotServices(t *testing.T) {
+	out, _, err := runSplit(t, "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "\n  daemon ") || strings.Contains(out, "\n  services ") {
+		t.Fatalf("help:\n%s", out)
 	}
 }
 
