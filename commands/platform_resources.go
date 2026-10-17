@@ -323,7 +323,7 @@ func dbCmd() *cobra.Command {
 func storageCmd() *cobra.Command {
 	b := idArg("bucket")
 	return group("storage", "Object storage buckets",
-		"Buckets hold objects behind an S3-compatible endpoint. <bucket> is the bucket id.", []string{"bucket", "buckets"},
+		"Buckets hold objects behind an S3-compatible endpoint. <bucket> is the bucket name or id.", []string{"bucket", "buckets"},
 		Op{
 			Use: "list", Aliases: []string{"ls"}, Short: "List buckets", Method: "GET", Path: "/storage/buckets",
 			Cols: []Col{{Head: "NAME", Path: "name"}, {Head: "ID", Path: "id", Fmt: "short"}, {Head: "OBJECTS", Path: "object_count"}, {Head: "USED", Path: "used_bytes", Fmt: "bytes"}, {Head: "VISIBILITY", Path: "visibility"}, {Head: "REGION", Path: "region"}},
@@ -476,8 +476,14 @@ func projectCmd() *cobra.Command {
 		Op{Use: "get <project>", Aliases: []string{"show"}, Short: "Show a project", Method: "GET", Path: "/projects/{0}", Args: []Arg{idArg("project")}},
 		Op{
 			Use: "create <name>", Short: "Create a project", Method: "POST", Path: "/projects", Args: []Arg{idArg("name")},
-			Flags: []Flag{{Name: "workspace-id", Usage: "Workspace", Field: "workspace_id"}, {Name: "description", Usage: "What it is for"}},
-			Body:  func(a []string, body map[string]any) (map[string]any, error) { body["name"] = a[0]; return body, nil },
+			Long: `Create a project in a workspace. Without --workspace-id it goes where the
+console would put it: the profile's default workspace ('miosa workspace use'),
+else the organization's default workspace, else its only workspace.`,
+			Example: `  miosa project create shop
+  miosa project create shop --workspace-id staging`,
+			Flags:  []Flag{{Name: "workspace-id", Usage: "Workspace: slug, name or id (default: the default workspace)", Field: "workspace_id"}, {Name: "description", Usage: "What it is for"}},
+			Body:   func(a []string, body map[string]any) (map[string]any, error) { body["name"] = a[0]; return body, nil },
+			Before: settleProjectWorkspace,
 		},
 	)
 }

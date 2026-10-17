@@ -392,15 +392,42 @@ func newLogoutCmd() *cobra.Command {
 	var all bool
 	cmd := &cobra.Command{
 		Use:   "logout",
-		Short: "Remove stored credentials",
-		Long: `Sign out of the current profile: its API key, current sandbox and the Forge
-key it minted for git (if any) are removed.
-With --all the whole config file (every profile) is deleted. The key is not
-revoked on the server; revoke it with 'miosa api-key revoke' if it leaked.`,
+		Short: "Sign out: revoke the stored key on the server and remove it",
+		Long: `Sign out of the current profile. The key 'miosa login' created is revoked on
+the server first, then the profile's API key, current sandbox and the Forge key
+it minted for git (if any) are removed. A browser session is ended the same way.
+
+With --all every profile is signed out and the config file is deleted.
+
+A key you stored yourself (not created by 'miosa login') is removed from the
+profile but left active; a key given with --api-key or MIOSA_API_KEY is never
+revoked. If the server cannot be reached, the keys are still removed
+locally and the command exits non-zero, naming the key that is still active.`,
+		Example: `  miosa logout
+  miosa logout --profile work
+  miosa logout --all`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			p := printerFor(cmd)
-			var err error
+			f, err := config.LoadFile()
+			if err != nil {
+				return die(err)
+			}
+			names := []string{f.ActiveName()}
+			if all {
+				names = f.Names()
+			}
+			var notes []string
+			var revokeErr error
+			for _, name := range names {
+				prof, ok := f.Get(name)
+				if !ok {
+					continue
+				}
+				n, rerr := revokeStored(cmd.Context(), prof)
+				notes = append(notes, n...)
+				revokeErr = errors.Join(revokeErr, rerr)
+			}
 			if all {
 				err = config.ClearAll()
 			} else {
@@ -410,17 +437,37 @@ revoked on the server; revoke it with 'miosa api-key revoke' if it leaked.`,
 				return die(err)
 			}
 			if isJSON() {
-				return p.JSON(map[string]string{"status": "logged_out"})
-			}
-			if all {
-				p.Success("Logged out of every profile. Config deleted.")
+				status := "logged_out"
+				if revokeErr != nil {
+					status = "logged_out_locally"
+				}
+				if jerr := p.JSON(map[string]any{"status": status, "notes": notes}); jerr != nil {
+					return jerr
+				}
 			} else {
-				p.Success("Logged out of profile %q.", profileLabel())
+				for _, n := range notes {
+					p.Line("%s", n)
+				}
+			}
+			if revokeErr != nil {
+				// The notes above name the key or session and why; the exit code
+				// comes from that failure (7 for a server or network error).
+				if !isJSON() {
+					fmt.Fprintln(cmd.ErrOrStderr(), "miosa: removed from this computer, but a key or session above is still active on the server; revoke it under Settings > CLI sessions.")
+				}
+				return &Failure{Err: revokeErr, quiet: true}
+			}
+			if !isJSON() {
+				if all {
+					p.Success("Logged out of every profile. Config deleted.")
+				} else {
+					p.Success("Logged out of profile %q.", profileLabel())
+				}
 			}
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&all, "all", false, "Delete the config file (all profiles)")
+	cmd.Flags().BoolVar(&all, "all", false, "Sign out of every profile and delete the config file")
 	return cmd
 }
 

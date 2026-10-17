@@ -237,6 +237,7 @@ var namedResources = []namedResource{
 	{collection: "cron-jobs", list: "/cron-jobs", label: "cron job"},
 	{collection: "functions", list: "/functions", label: "function"},
 	{collection: "forge/repositories", list: "/forge/repositories", literals: []string{"by-slug"}, label: "repository"},
+	{collection: "storage/buckets", list: "/storage/buckets", label: "bucket"},
 }
 
 // ResolveNamed returns the id of the member of res called ref (by name or

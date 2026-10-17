@@ -33,6 +33,8 @@ func TestRewritePath(t *testing.T) {
 			w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"Acme","slug":"acme"}]}`))
 		case "/agents":
 			w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"reviewer"}]}`))
+		case "/storage/buckets":
+			w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"photos"}],"meta":{}}`))
 		case "/sandboxes/by-name/enveloped":
 			w.Write([]byte(`{"data":{"id":"` + id1 + `"}}`))
 		default:
@@ -75,6 +77,11 @@ func TestRewritePath(t *testing.T) {
 		{"/deployments/www.example.com/domains", "/deployments/" + id1 + "/domains"},
 		{"/workspaces/acme/stats?x=1", "/workspaces/" + id1 + "/stats?x=1"},
 		{"/workflows/runs/abc", "/workflows/runs/abc"},
+		// QA 2026-10-16: 'miosa storage rm <name>' sent the name and got INVALID_ID.
+		{"/storage/buckets/photos", "/storage/buckets/" + id1},
+		{"/storage/buckets/photos/objects", "/storage/buckets/" + id1 + "/objects"},
+		{"/storage/buckets/" + id1, "/storage/buckets/" + id1},
+		{"/storage/buckets", "/storage/buckets"},
 		{"/sandboxes/unknown-name/exec", "/sandboxes/unknown-name/exec"}, // 404 by name: left for the server to judge
 	}
 	for _, tc := range cases {
