@@ -103,10 +103,16 @@ func (e *CloseError) Error() string {
 // resizes are forwarded as resize frames. On a clean end it sends a normal
 // close so the server removes the PTY.
 func Bridge(ctx context.Context, conn *websocket.Conn, in io.Reader, out io.Writer, resizes <-chan Size) (Result, error) {
+	// Each goroutine reports through done; the result travels with its signal,
+	// so nothing is shared. (Writing a shared Result raced with the return when
+	// another goroutine signalled first.)
+	type outcome struct {
+		res Result
+		err error
+	}
 	var (
 		wmu  sync.Mutex
-		res  Result
-		done = make(chan error, 3)
+		done = make(chan outcome, 3)
 	)
 	write := func(typ int, data []byte) error {
 		wmu.Lock()
@@ -121,7 +127,7 @@ func Bridge(ctx context.Context, conn *websocket.Conn, in io.Reader, out io.Writ
 			n, err := in.Read(buf)
 			if n > 0 {
 				if werr := write(websocket.BinaryMessage, append([]byte(nil), buf[:n]...)); werr != nil {
-					done <- nil
+					done <- outcome{}
 					return
 				}
 			}
@@ -159,20 +165,19 @@ func Bridge(ctx context.Context, conn *websocket.Conn, in io.Reader, out io.Writ
 				var ce *websocket.CloseError
 				if errors.As(err, &ce) {
 					if ce.Code == websocket.CloseNormalClosure || ce.Code == websocket.CloseNoStatusReceived {
-						res.Closed = true
-						done <- nil
+						done <- outcome{res: Result{Closed: true}}
 						return
 					}
-					done <- &CloseError{Code: ce.Code, Text: ce.Text}
+					done <- outcome{err: &CloseError{Code: ce.Code, Text: ce.Text}}
 					return
 				}
-				done <- err
+				done <- outcome{err: err}
 				return
 			}
 			switch typ {
 			case websocket.BinaryMessage:
 				if _, werr := out.Write(data); werr != nil {
-					done <- werr
+					done <- outcome{err: werr}
 					return
 				}
 			case websocket.TextMessage:
@@ -181,17 +186,20 @@ func Bridge(ctx context.Context, conn *websocket.Conn, in io.Reader, out io.Writ
 					ExitCode int    `json:"exit_code"`
 				}
 				if json.Unmarshal(data, &ev) == nil && ev.Type == "exit" {
-					res.ExitCode = ev.ExitCode
-					done <- nil
+					done <- outcome{res: Result{ExitCode: ev.ExitCode}}
 					return
 				}
 			}
 		}
 	}()
 
-	var err error
+	var (
+		res Result
+		err error
+	)
 	select {
-	case err = <-done:
+	case o := <-done:
+		res, err = o.res, o.err
 	case <-ctx.Done():
 		err = ctx.Err()
 	}
