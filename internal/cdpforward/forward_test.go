@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -92,7 +93,7 @@ func TestForwardDrivesFakeCDPHost(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = Serve(ctx, Options{HTTPBase: srv.URL, WSBase: "ws://" + host, Bind: "127.0.0.1", Port: port, Logf: t.Logf})
+		_ = Serve(ctx, Options{HTTPBase: srv.URL, WSBase: "ws://" + host, Bind: "127.0.0.1", Port: port, Logf: testLogf(t)})
 	}()
 	if !waitPort(t, addr) {
 		t.Fatalf("forward listener never came up on %s", addr)
@@ -185,6 +186,29 @@ func TestCloseReasonMapsCDPCodes(t *testing.T) {
 	for code, want := range cases {
 		if got := closeReason(code); got != want {
 			t.Errorf("closeReason(%d) = %q, want %q", code, got, want)
+		}
+	}
+}
+
+// testLogf is t.Logf until the test's cleanup starts, then silent. Relay
+// goroutines on hijacked WebSocket connections can outlive Serve's shutdown,
+// and a t.Logf after the test completes panics ("Log in goroutine after ...
+// has completed"), which failed the 2.3.14 release run.
+func testLogf(t *testing.T) func(string, ...any) {
+	var (
+		mu   sync.Mutex
+		done bool
+	)
+	t.Cleanup(func() {
+		mu.Lock()
+		done = true
+		mu.Unlock()
+	})
+	return func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !done {
+			t.Logf(format, args...)
 		}
 	}
 }
