@@ -416,8 +416,9 @@ func TestOrgMembersAndInvite(t *testing.T) {
 		switch {
 		case r.URL.Path == "/bill-to":
 			return 200, billToFollowing
-		case r.URL.Path == "/tenants/org-mine/members":
-			return 200, `{"total":1,"members":[{"user_id":"u1","user_name":"Dana","user_email":"dana@example.com","role":"admin","status":"active"}]}`
+		case r.URL.Path == "/tenant/members":
+			// The same surface `member list` reads (one surface, WO-11).
+			return 200, `{"data":[{"id":"m1","user_id":"u1","email":"dana@example.com","role":"admin"}]}`
 		case r.URL.Path == "/tenants/org-mine/invites":
 			return 201, `{"data":{"invite_id":"i1","email":"new@example.com","role":"member","expires_at":"2026-10-16T00:00:00Z","invite_url":"https://miosa.ai/invites/tok"}}`
 		}
@@ -433,6 +434,15 @@ func TestOrgMembersAndInvite(t *testing.T) {
 	}
 	if !strings.Contains(out, "dana@example.com") || !strings.Contains(out, "admin") {
 		t.Errorf("output:\n%s", out)
+	}
+
+	// JSON keeps user_email (scripts) and now also carries email (member list).
+	jsonOut, err := runOrg(t, "org", "members", "--json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(jsonOut, `"user_email": "dana@example.com"`) || !strings.Contains(jsonOut, `"email": "dana@example.com"`) {
+		t.Errorf("json output:\n%s", jsonOut)
 	}
 
 	out, err = runOrg(t, "org", "invite", "new@example.com", "--role", "member")

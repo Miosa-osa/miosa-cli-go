@@ -265,3 +265,36 @@ func TestStoragePutOverTheSingleLimitUsesParts(t *testing.T) {
 		t.Fatalf("270 MiB in 64 MiB parts is 5 parts, got %d", len(s.parts))
 	}
 }
+
+func TestStoragePutReadsStandardInputForDash(t *testing.T) {
+	var gotBody, gotPath, gotType string
+	srv := plainServer(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody, gotPath, gotType = string(b), r.URL.Path, r.Header.Get("Content-Type")
+		_, _ = w.Write([]byte(`{"ok":true,"size":4}`))
+	})
+	setupEnv(t, srv)
+	if _, err := runIn(t, "pipe", "storage", "put", bucketID, "-", "a.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if gotBody != "pipe" {
+		t.Errorf("body = %q", gotBody)
+	}
+	if !strings.HasSuffix(gotPath, "/objects/a.txt") {
+		t.Errorf("path = %q", gotPath)
+	}
+	if !strings.HasPrefix(gotType, "text/plain") {
+		t.Errorf("content type = %q", gotType)
+	}
+}
+
+func TestStoragePutFromStandardInputNeedsAKey(t *testing.T) {
+	f := fakeRoutes(t, map[string]any{})
+	_, err := runIn(t, "pipe", "storage", "put", bucketID, "-")
+	if err == nil || !strings.Contains(err.Error(), "needs a key") {
+		t.Fatalf("err = %v", err)
+	}
+	if f.count() != 0 {
+		t.Fatalf("a request was sent: %+v", f.calls)
+	}
+}

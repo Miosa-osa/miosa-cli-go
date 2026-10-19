@@ -45,6 +45,7 @@ Regenerate with `make docs`.
 - [`miosa device`](#miosa-device) - Every machine you can run work on, across runtime kinds
 - [`miosa doctor`](#miosa-doctor) - Diagnose configuration, connectivity and authentication
 - [`miosa egress`](#miosa-egress) - Outbound network policy for sandboxes
+- [`miosa engine`](#miosa-engine) - Operate an Optimal Engine: wire two of them together and read sync status
 - [`miosa env`](#miosa-env) - Manage environments (what new machines start with)
 - [`miosa events`](#miosa-events) - Stream a sandbox's lifecycle events
 - [`miosa exec`](#miosa-exec) - Execute a command in a sandbox
@@ -3774,6 +3775,68 @@ Suggest allowlist entries from observed traffic.
 ```
 miosa egress suggestions
 ```
+
+### `miosa engine`
+
+Operate an Optimal Engine: wire two of them together and read sync status.
+
+```
+miosa engine
+```
+
+Commands here talk to Optimal Engine endpoints directly.
+
+They take the two Engine URLs and an admin key per Engine.
+The admin key is used
+to mint a workspace-scoped replica key on each side, so the peer key each Engine
+stores can read and sync one workspace and nothing else.
+
+#### `miosa engine sync`
+
+Keep one workspace in sync between a local and a cloud Engine.
+
+```
+miosa engine sync <local> <cloud> [flags]
+```
+
+Wires two Engines for one workspace:
+
+```
+  1. mint a replica key on each Engine (scopes sync and read, one workspace)
+  2. enable the sync ledger for the workspace on both
+  3. register each Engine as the other's peer with policy both
+  4. run one cycle unless --no-run, then print both statuses
+
+```
+The admin keys come from --local-key/--cloud-key or MIOSA_ENGINE_LOCAL_KEY and
+MIOSA_ENGINE_CLOUD_KEY.
+They are never printed.
+
+Flags:
+
+- `--cloud string` - Cloud Engine URL (defaults to the second positional argument).
+- `--cloud-key string` - Admin key for the cloud Engine (env: MIOSA_ENGINE_CLOUD_KEY).
+- `--local string` - Local Engine URL (defaults to the first positional argument).
+- `--local-key string` - Admin key for the local Engine (env: MIOSA_ENGINE_LOCAL_KEY).
+- `--no-run` - Wire the peers but do not run a sync cycle now.
+- `--policy string` - Peer policy: push, pull, both, or none. (default `both`)
+- `--workspace string` - Workspace id to sync (required).
+
+##### `miosa engine sync status`
+
+Show sync status and open conflicts on both Engines.
+
+```
+miosa engine sync status <local> <cloud> [flags]
+```
+
+Flags:
+
+- `--cloud string` - Cloud Engine URL (defaults to the second positional argument).
+- `--cloud-key string` - Admin key for the cloud Engine (env: MIOSA_ENGINE_CLOUD_KEY).
+- `--local string` - Local Engine URL (defaults to the first positional argument).
+- `--local-key string` - Admin key for the local Engine (env: MIOSA_ENGINE_LOCAL_KEY).
+- `--workspace string` - Workspace id (required).
 
 ### `miosa env`
 
@@ -9162,20 +9225,22 @@ Flags:
 
 #### `miosa storage put`
 
-Upload a file to a bucket.
+Upload a file, or standard input, to a bucket.
 
 ```
-miosa storage put <bucket> <file> [key] [flags]
+miosa storage put <bucket> <file|-> [key] [flags]
 ```
 
-Upload a local file.
-The key defaults to the file name.
-Files over 256 MiB go up
-in 64 MiB parts automatically (the object appears only when every part is in).
+Upload a local file, or standard input with -, as an object.
+The key defaults to
+the file name; with - it is required.
+Files over 256 MiB go up in 64 MiB parts
+automatically (the object appears only when every part is in).
 
 ```
   miosa storage put assets ./logo.png brand/logo.png
   miosa storage put builds ./App.dmg
+  cat backup.sql | miosa storage put backups - db/backup.sql
 ```
 
 Flags:

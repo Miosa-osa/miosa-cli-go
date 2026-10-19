@@ -125,11 +125,14 @@ type MemberCapUpdate struct {
 
 // OrgMember is one row of an organization's member list.
 type OrgMember struct {
+	ID        string `json:"id,omitempty"`
 	UserID    string `json:"user_id"`
-	UserName  string `json:"user_name"`
+	UserName  string `json:"user_name,omitempty"`
 	UserEmail string `json:"user_email"`
-	Role      string `json:"role"`
-	Status    string `json:"status"`
+	// Email repeats UserEmail: `miosa member list` has always printed "email".
+	Email  string `json:"email"`
+	Role   string `json:"role"`
+	Status string `json:"status,omitempty"`
 }
 
 // OrgInvite is the result of inviting someone.
@@ -295,16 +298,27 @@ func (c *Client) ClearMemberCap(ctx context.Context, tenantID, userID string) (*
 	return &out.Data, nil
 }
 
-// ListOrgMembers lists the members of an organization.
-func (c *Client) ListOrgMembers(ctx context.Context, tenantID string) ([]OrgMember, error) {
+// ListOrgMembers lists the members of the organization the key is acting in.
+// It reads /tenant/members, the same surface `miosa member list` uses, so the
+// two commands cannot disagree; the path tenant id is not needed (the acting
+// organization comes from the key and --org).
+func (c *Client) ListOrgMembers(ctx context.Context) ([]OrgMember, error) {
 	var out struct {
-		Members []OrgMember `json:"members"`
+		Data []OrgMember `json:"data"`
 	}
-	path := "/tenants/" + url.PathEscape(tenantID) + "/members"
-	if err := c.RC.call(ctx, http.MethodGet, path, nil, &out); err != nil {
+	if err := c.RC.call(ctx, http.MethodGet, "/tenant/members", nil, &out); err != nil {
 		return nil, err
 	}
-	return out.Members, nil
+	for i := range out.Data {
+		m := &out.Data[i]
+		if m.UserEmail == "" {
+			m.UserEmail = m.Email
+		}
+		if m.Email == "" {
+			m.Email = m.UserEmail
+		}
+	}
+	return out.Data, nil
 }
 
 // InviteOrgMember invites an email address to an organization.

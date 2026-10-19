@@ -196,6 +196,7 @@ func init() {
 		newEnvCmd(),
 		newInfoCmd(),
 		newComputerCmd(),
+		newEngineCmd(),
 		newSSHCmd(),
 		newUpdateCmd(),
 		newVersionCmd(),

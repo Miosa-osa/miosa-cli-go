@@ -89,13 +89,15 @@ func extendStorageGet(group *cobra.Command) {
 func storagePutCmd() *cobra.Command {
 	var contentType string
 	cmd := &cobra.Command{
-		Use:   "put <bucket> <file> [key]",
-		Short: "Upload a file to a bucket",
-		Long: `Upload a local file. The key defaults to the file name. Files over 256 MiB go up
-in 64 MiB parts automatically (the object appears only when every part is in).
+		Use:   "put <bucket> <file|-> [key]",
+		Short: "Upload a file, or standard input, to a bucket",
+		Long: `Upload a local file, or standard input with -, as an object. The key defaults to
+the file name; with - it is required. Files over 256 MiB go up in 64 MiB parts
+automatically (the object appears only when every part is in).
 
   miosa storage put assets ./logo.png brand/logo.png
-  miosa storage put builds ./App.dmg`,
+  miosa storage put builds ./App.dmg
+  cat backup.sql | miosa storage put backups - db/backup.sql`,
 		Args: cobra.RangeArgs(2, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p := printerFor(cmd)
@@ -107,6 +109,26 @@ in 64 MiB parts automatically (the object appears only when every part is in).
 			key := filepath.Base(file)
 			if len(args) == 3 {
 				key = args[2]
+			}
+			if file == "-" {
+				if len(args) < 3 {
+					return usagef("reading from standard input needs a key: miosa storage put %s - <key>", bucket)
+				}
+				ctype := contentType
+				if ctype == "" {
+					ctype = mime.TypeByExtension(filepath.Ext(key))
+				}
+				if ctype == "" {
+					ctype = "application/octet-stream"
+				}
+				if _, err := c.API.JSONAny(cmd.Context(), api.Request{Method: http.MethodPut, Path: bucketObjectPath(bucket, key), Body: cmd.InOrStdin(), ContentType: ctype, NoRetry: true}); err != nil {
+					return die(err)
+				}
+				if isJSON() {
+					return p.JSON(map[string]any{"bucket": bucket, "key": key})
+				}
+				p.Success("Uploaded %s to %s", key, bucket)
+				return nil
 			}
 			st, err := os.Stat(file)
 			if err != nil {

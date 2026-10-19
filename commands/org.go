@@ -226,11 +226,10 @@ func runOrgMembers(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	org, err := scopedOrg(cmd.Context(), c)
-	if err != nil {
+	if _, err := scopedOrg(cmd.Context(), c); err != nil {
 		return err
 	}
-	members, err := c.ListOrgMembers(cmd.Context(), org.ID)
+	members, err := c.ListOrgMembers(cmd.Context())
 	if err != nil {
 		return err
 	}
