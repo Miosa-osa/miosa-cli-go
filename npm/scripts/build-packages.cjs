@@ -14,7 +14,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { PLATFORMS, archiveName, releaseBaseUrl } = require("../cli/lib/platforms");
-const { verifyChecksum } = require("../cli/lib/checksums");
+const { sha256Hex, verifyChecksum } = require("../cli/lib/checksums");
 const { extractBinary } = require("../cli/lib/archive");
 
 const CLI_DIR = path.join(__dirname, "..", "cli");
@@ -77,6 +77,7 @@ async function buildPackages({ version, outDir, platforms, getAsset, allowMissin
   fs.mkdirSync(outDir, { recursive: true });
 
   const built = [];
+  const digests = {};
   for (const key of platforms) {
     const entry = PLATFORMS[key];
     const name = archiveName(version, entry);
@@ -89,6 +90,7 @@ async function buildPackages({ version, outDir, platforms, getAsset, allowMissin
       throw new Error(`release v${version} has no ${name} (use --platforms or --allow-missing to skip ${key})`);
     }
     verifyChecksum(archive, name, sums);
+    digests[name] = sha256Hex(archive);
     const bin = extractBinary(archive, entry.ext, entry.bin);
     const dir = path.join(outDir, key);
     fs.mkdirSync(path.join(dir, "bin"), { recursive: true });
@@ -105,6 +107,9 @@ async function buildPackages({ version, outDir, platforms, getAsset, allowMissin
 
   const cliOut = path.join(outDir, "cli");
   copyDir(CLI_DIR, cliOut);
+  // Ship the verified digests inside the launcher so the install-time download
+  // can be checked without trusting a checksums.txt from the same origin.
+  fs.writeFileSync(path.join(cliOut, "checksums.json"), JSON.stringify(digests, null, 2) + "\n");
   const manifest = { ...source, optionalDependencies: {} };
   for (const key of built.slice().sort()) manifest.optionalDependencies[PLATFORMS[key].pkg] = version;
   fs.writeFileSync(path.join(cliOut, "package.json"), JSON.stringify(manifest, null, 2) + "\n");

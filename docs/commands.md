@@ -49,6 +49,7 @@ Regenerate with `make docs`.
 - [`miosa env`](#miosa-env) - Manage environments (what new machines start with)
 - [`miosa events`](#miosa-events) - Stream a sandbox's lifecycle events
 - [`miosa exec`](#miosa-exec) - Execute a command in a sandbox
+- [`miosa export`](#miosa-export) - Export everything an organization (or one workspace) owns
 - [`miosa extend`](#miosa-extend) - Replace a sandbox's time to live
 - [`miosa files`](#miosa-files) - Copy, list, read, move and delete files in a sandbox
 - [`miosa forge`](#miosa-forge) - Work with MIOSA Forge repositories (beta)
@@ -1951,7 +1952,7 @@ miosa connections
 
 Connections are what your agents and machines use to reach the outside world:
 model providers (Claude, ChatGPT, API keys), apps (GitHub, Slack, Linear,
-Discord) and tool servers.
+Discord, Google Workspace, Notion) and tool servers.
 MIOSA's own model keys never power your agents;
 every run uses a connection of yours.
 
@@ -1999,12 +2000,32 @@ miosa connections add
 Connect an app through your browser.
 
 ```
-miosa connections add apps <github|slack|linear|discord>
+miosa connections add apps <github|slack|linear|discord|google|notion> [flags]
 ```
 
-Starts the OAuth flow for an app and prints the URL to open.
-The connection is
-completed in the browser; check it with 'miosa connections list --kind apps'.
+Starts the OAuth flow for an app, prints the consent URL, and - once the
+browser finishes - prints the connection id.
+
+A Google or Notion account is one connection: connect four Gmail accounts and
+you get four connections, each with its own label.
+Google scopes follow the
+products you name, never more:
+
+```
+  miosa connections add apps google --label work-gmail --products gmail,calendar,drive
+  miosa connections add apps notion --label team-wiki
+  miosa connections add apps google --label qa-gmail --products gmail --no-wait
+
+```
+Use --no-wait when the browser is on another device; check the result with
+'miosa connections list --kind apps'.
+
+Flags:
+
+- `--label string` - Name this connection (for example work-gmail).
+- `--no-wait` - Print the consent URL and exit without waiting.
+- `--products string` - Google products to request (gmail, gmail-send, calendar, drive, docs, sheets).
+- `--workspace-id string` - Bind the connection to one workspace.
 
 ##### `miosa connections add models`
 
@@ -2566,6 +2587,34 @@ miosa db connection <database>
 
 Aliases: `url`.
 
+#### `miosa db create`
+
+Create a database.
+
+```
+miosa db create <name> [flags]
+```
+
+Create a managed database.
+
+```
+  miosa db create app-db --engine postgres --version 16 --size small
+  miosa db create app-db --extensions vector,pg_trgm,pgcrypto --workspace tz
+
+```
+--extensions applies to PostgreSQL only; allowed: vector, pg_trgm, pgcrypto, uuid-ossp,
+pg_stat_statements, citext, hstore, btree_gin, btree_gist. --version is a version with an
+image (postgres 16, mysql 8, redis 7). --size is one of tiny, xs, small, medium, large.
+
+Flags:
+
+- `--engine string` - Engine: postgres, mysql, redis or qdrant (postgres|postgresql|mysql|redis|qdrant). (default `postgres`)
+- `--extensions stringArray` - PostgreSQL extensions to enable at create, comma separated.
+- `--region string` - Pin to a region.
+- `--size string` - Size: tiny, xs, small, medium or large (tiny|xs|small|medium|large).
+- `--version string` - Engine version (default: the engine's current one).
+- `--workspace string` - Workspace slug.
+
 #### `miosa db get`
 
 Show a database.
@@ -2592,11 +2641,47 @@ Flags:
 
 #### `miosa db logs`
 
-Show the database log.
+Show the database log (the last run of one that failed).
 
 ```
-miosa db logs <database>
+miosa db logs <database> [flags]
 ```
+
+Flags:
+
+- `-n, --tail int` - How many lines.
+
+#### `miosa db recover`
+
+Restore a backup into the database, or into a new one.
+
+```
+miosa db recover <database> [flags]
+```
+
+Restore a backup (also available as "miosa db restore").
+
+```
+  miosa db recover app-db --to-new app-db-restored     # safe: a new database, the source is untouched
+  miosa db recover app-db --backup 778439c0 --to-new app-db-restored
+  miosa db recover app-db --backup 778439c0 --yes      # over app-db itself
+
+```
+--backup is a backup id (see 'miosa db backups'); without it the newest completed
+backup is used. --to-new creates a database of the same engine, version and size
+in the same workspace, waits for it to run, then restores into it.
+Restoring over
+the source replaces its data, so it asks first (or pass --yes).
+
+A Redis restore is a merge: keys in the backup replace the same-named keys and
+other keys stay.
+A backup only restores into a database of the same engine.
+
+Flags:
+
+- `--backup string` - Backup id (default: the newest completed backup).
+- `--to-new string` - Create a new database with this name and restore into it.
+- `-y, --yes` - Do not ask before restoring over the source.
 
 #### `miosa db restart`
 
@@ -3643,6 +3728,7 @@ Aliases: `ls`.
 
 Flags:
 
+- `--errored` - Include machines in the error state.
 - `-n, --limit int` - How many.
 - `--name string` - Only devices whose name contains this.
 - `--status string` - Only this state.
@@ -4257,6 +4343,33 @@ Examples:
 Flags:
 
 - `--cwd string` - Working directory, relative to the sandbox home directory.
+
+### `miosa export`
+
+Export everything an organization (or one workspace) owns.
+
+```
+miosa export [flags]
+```
+
+Writes an organization's records into a bucket of the same organization and
+prints the manifest, which lists every file with its SHA-256 and byte size.
+
+```
+  miosa export --to bucket:exports
+  miosa export --workspace prod --to bucket:backups --prefix exports/2026-10-19/
+
+```
+Buckets can be named by id or by name.
+What is never exported: secret values,
+token bytes, deploy variable values and object bodies (the bucket objects are
+listed by key and size, and stay where they are).
+
+Flags:
+
+- `--prefix string` - Key prefix inside the bucket (default exports/<timestamp>/).
+- `--to string` - Bucket to write into: bucket:<id-or-name>.
+- `--workspace string` - Narrow the export to one workspace (id or slug).
 
 ### `miosa extend`
 
@@ -9492,8 +9605,8 @@ Update the miosa CLI to the latest release.
 miosa update [flags]
 ```
 
-Download the latest release for this platform from GitHub, verify it against
-the release's SHA-256 checksums, and replace the running binary.
+Download the latest release for this platform, verify it against its SHA-256
+checksum, and replace the running binary.
 
 If miosa was installed with Homebrew or npm, run the package manager instead;
 update prints the command.
@@ -9577,9 +9690,44 @@ Persistent volumes shared between machines.
 miosa volume
 ```
 
-Volumes outlive any one machine and can be attached to computers.
+A volume outlives any one machine.
+It attaches to one machine at a time for
+writing (several for reading), and keeps its data when detached.
+<volume> is a name or an id.
+
+```
+  miosa volume create data --size-gb 5
+  miosa volume attach data my-box --mount /data
+  miosa volume attachments data
+  miosa volume detach data my-box
+```
 
 Aliases: `volumes`.
+
+#### `miosa volume attach`
+
+Attach a volume to a machine.
+
+```
+miosa volume attach <volume> <machine> [flags]
+```
+
+Flags:
+
+- `--mount string` - Where to mount it in the machine.
+- `--read-only` - Mount read-only (several machines may share it).
+
+#### `miosa volume attachments`
+
+Where a volume is attached.
+
+```
+miosa volume attachments <volume> [flags]
+```
+
+Flags:
+
+- `--all` - Include past attachments.
 
 #### `miosa volume create`
 
@@ -9589,9 +9737,33 @@ Create a volume.
 miosa volume create <name> [flags]
 ```
 
+Creates a volume of the given size on local disk (the only backend).
+A volume is formatted when it is first attached.
+
 Flags:
 
-- `--size-gb int` - Size in GB.
+- `--size-gb string` - Size in GB (fractions allowed).
+- `--workspace string` - Workspace slug or id.
+
+#### `miosa volume detach`
+
+Detach a volume from a machine.
+
+```
+miosa volume detach <volume> <machine>
+```
+
+#### `miosa volume fork`
+
+Create a new volume from a snapshot.
+
+```
+miosa volume fork <snapshot> [flags]
+```
+
+Flags:
+
+- `--to-new string` - Name of the new volume.
 
 #### `miosa volume get`
 
@@ -9608,10 +9780,14 @@ Aliases: `show`.
 List volumes.
 
 ```
-miosa volume list
+miosa volume list [flags]
 ```
 
 Aliases: `ls`.
+
+Flags:
+
+- `--deleted` - Include deleted volumes.
 
 #### `miosa volume rm`
 
@@ -9626,6 +9802,38 @@ Aliases: `delete`.
 Flags:
 
 - `-y, --yes` - Do not ask for confirmation.
+
+#### `miosa volume snapshot`
+
+Take a snapshot of a volume now.
+
+```
+miosa volume snapshot <volume>
+```
+
+Copies the volume's backing file on the host that holds it.
+A volume attached for writing is copied by an atomic clone, so the image is consistent.
+A volume that was never attached has nothing to snapshot.
+
+#### `miosa volume snapshot-rm`
+
+Delete a snapshot.
+
+```
+miosa volume snapshot-rm <snapshot> [flags]
+```
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
+
+#### `miosa volume snapshots`
+
+List a volume's snapshots.
+
+```
+miosa volume snapshots <volume>
+```
 
 ### `miosa wait`
 

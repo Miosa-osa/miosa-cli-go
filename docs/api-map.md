@@ -99,6 +99,7 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa db backup` | POST | `/databases/{0}/backups` |
 | `miosa db backups` | GET | `/databases/{0}/backups` |
 | `miosa db connection` | GET | `/databases/{0}/credentials` |
+| `miosa db create` | POST | `/databases` |
 | `miosa db get` | GET | `/databases/{0}` |
 | `miosa db list` | GET | `/databases` |
 | `miosa db logs` | GET | `/databases/{0}/logs` |
@@ -361,10 +362,17 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa token list` | GET | `/tokens/scoped` |
 | `miosa token revoke` | DELETE | `/tokens/scoped/{0}` |
 | `miosa usage` | GET | `/sandboxes/{0}/usage` |
+| `miosa volume attach` | POST | `/computers/{1}/volumes` |
+| `miosa volume attachments` | GET | `/volumes/{0}/attachments` |
 | `miosa volume create` | POST | `/volumes` |
+| `miosa volume detach` | DELETE | `/computers/{1}/volumes/{2}` |
+| `miosa volume fork` | POST | `/volume-snapshots/{0}/restore` |
 | `miosa volume get` | GET | `/volumes/{0}` |
 | `miosa volume list` | GET | `/volumes` |
 | `miosa volume rm` | DELETE | `/volumes/{0}` |
+| `miosa volume snapshot` | POST | `/volumes/{0}/snapshots` |
+| `miosa volume snapshot-rm` | DELETE | `/volume-snapshots/{0}` |
+| `miosa volume snapshots` | GET | `/volumes/{0}/snapshots` |
 | `miosa webhook create` | POST | `/webhooks` |
 | `miosa webhook deliveries` | GET | `/webhooks/{0}/deliveries` |
 | `miosa webhook events` | GET | `/webhooks/events` |

@@ -21,6 +21,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/Miosa-osa/miosa-cli-go/internal/api"
+	"github.com/Miosa-osa/miosa-cli-go/internal/output"
 )
 
 // A declarative command layer. Most API surfaces are "call one route, show a
@@ -124,6 +125,17 @@ type Op struct {
 	// Human renders the response in text mode instead of Cols/Detail/Done;
 	// --json still prints the response.
 	Human func(cmd *cobra.Command, args []string, resp any) error
+	// ResolveArgs turns what a person typed (a name, a short id) into what the
+	// path needs, once the client exists. The request is built from its result.
+	ResolveArgs func(ctx context.Context, c *api.Client, args []string) ([]string, error)
+	// PathFor builds the path from the resolved args when one declared path
+	// cannot serve every kind of machine the args may name.
+	PathFor func(args []string) string
+	// HiddenCount is a dotted path to the number of rows the server left out of
+	// the list on purpose; a table is followed by a footer saying so, and
+	// HiddenHint names the flag that shows them.
+	HiddenCount string
+	HiddenHint  string
 	// Idempotent adds --idempotency-key and sends an Idempotency-Key header (a
 	// generated one when the flag is not given), for routes that require it.
 	Idempotent bool
@@ -285,6 +297,9 @@ func (o Op) pathArgs(given []string) []string {
 // buildRequest turns args and flags into the request. It does no I/O.
 func (o Op) buildRequest(cmd *cobra.Command, args []string) (api.Request, error) {
 	path := o.Path
+	if o.PathFor != nil {
+		path = o.PathFor(args)
+	}
 	for i, a := range o.pathArgs(args) {
 		if a == "" {
 			path = strings.ReplaceAll(path, "/{"+strconv.Itoa(i)+"}", "") // an unset optional segment collapses
@@ -472,6 +487,13 @@ func (o Op) run(cmd *cobra.Command, args []string, yes bool) error {
 			return err
 		}
 	}
+	if o.ResolveArgs != nil {
+		resolved, err := o.ResolveArgs(cmd.Context(), c, o.fullArgs(args))
+		if err != nil {
+			return die(err)
+		}
+		args = resolved
+	}
 	// Built after Before: a hook may settle a flag (a short version id becomes
 	// the full one) and the request must carry what the hook printed.
 	req, err := o.buildRequest(cmd, args)
@@ -498,7 +520,7 @@ func (o Op) run(cmd *cobra.Command, args []string, yes bool) error {
 			return err
 		}
 	}
-	return o.render(cmd, o.pathArgs(args), resp)
+	return o.render(cmd, display, resp)
 }
 
 var unfilledArg = regexp.MustCompile(`\{\d+\}`)
@@ -595,6 +617,7 @@ func (o Op) render(cmd *cobra.Command, args []string, resp any) error {
 		}
 		if len(rows) == 0 {
 			p.Line("No results.")
+			o.hiddenFooter(p, resp)
 			return nil
 		}
 		heads := make([]string, len(o.Cols))
@@ -610,6 +633,7 @@ func (o Op) render(cmd *cobra.Command, args []string, resp any) error {
 			table = append(table, line)
 		}
 		p.Table(heads, table)
+		o.hiddenFooter(p, resp)
 	case len(o.Detail) > 0:
 		obj := unwrapObject(resp)
 		rows := make([][2]string, 0, len(o.Detail))
@@ -632,6 +656,35 @@ func (o Op) render(cmd *cobra.Command, args []string, resp any) error {
 		return renderReadable(p, resp)
 	}
 	return nil
+}
+
+// hiddenFooter says how many rows the server held back, so a list never looks
+// complete when it is not ("2 errored machines hidden, use --errored").
+func (o Op) hiddenFooter(p *output.Printer, resp any) {
+	if o.HiddenCount == "" {
+		return
+	}
+	var n int
+	switch v := lookupPath(resp, o.HiddenCount).(type) {
+	case json.Number:
+		n64, _ := v.Int64()
+		n = int(n64)
+	case float64:
+		n = int(v)
+	}
+	if n < 1 {
+		return
+	}
+	p.Line("")
+	p.Line("%s", hiddenFooterText(n, o.HiddenHint))
+}
+
+func hiddenFooterText(n int, hint string) string {
+	noun := "errored machines"
+	if n == 1 {
+		noun = "errored machine"
+	}
+	return fmt.Sprintf("%d %s hidden, use %s", n, noun, hint)
 }
 
 // findRows returns the list in a response: the top-level array, or the array

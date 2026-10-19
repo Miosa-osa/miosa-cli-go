@@ -105,3 +105,19 @@ func TestDeviceDestroyNeedsConfirmation(t *testing.T) {
 		t.Fatalf("calls = %+v", f.calls)
 	}
 }
+
+func TestDeviceListSaysWhenErroredMachinesAreHidden(t *testing.T) {
+	f := fakeRoutes(t, map[string]any{
+		"GET /devices": `{"data":[{"id":"` + deviceID + `","name":"builder","kind":"sandbox","state":"running","running":true}],"meta":{"errored_hidden":2}}`,
+	})
+	out, err := run(t, "device", "list")
+	if err != nil || !strings.Contains(out, "2 errored machines hidden, use --errored") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if _, err := run(t, "device", "list", "--errored"); err != nil {
+		t.Fatal(err)
+	}
+	if q := f.find("GET", "/devices")[1].Query; !strings.Contains(q, "include_errored=true") {
+		t.Fatalf("--errored must ask the server for them: %q", q)
+	}
+}

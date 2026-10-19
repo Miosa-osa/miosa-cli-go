@@ -165,3 +165,64 @@ func TestListCommand_ShowsWhyASandboxIsLost(t *testing.T) {
 		t.Errorf("list should show the lost reason, got: %s", out)
 	}
 }
+
+// A list that holds machines back on purpose must say so (WO-04, QA
+// 2026-10-19: two errored machines were absent from `list` with no hint).
+func TestListCommand_ErroredHiddenFooterAndCount(t *testing.T) {
+	body := `{"data":[{"id":"abc","name":"box-1","state":"running","template_id":"miosa-sandbox","created_at":"2026-04-18T00:00:00Z"}],
+	  "meta":{"total":1,"page":1,"limit":50,"state_counts":{"running":1,"error":2}}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	cleanup := setupEnv(t, srv)
+	defer cleanup()
+
+	out, err := run(t, "list")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "2 errored machines hidden, use --errored") {
+		t.Errorf("expected the hidden-errored footer, got: %s", out)
+	}
+
+	jsonOut, err := run(t, "list", "--json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var env struct {
+		Meta struct {
+			ErroredHidden int `json:"errored_hidden"`
+		} `json:"meta"`
+	}
+	if err := json.Unmarshal([]byte(jsonOut), &env); err != nil {
+		t.Fatalf("bad json: %v\n%s", err, jsonOut)
+	}
+	if env.Meta.ErroredHidden != 2 {
+		t.Errorf("meta.errored_hidden = %d, want 2", env.Meta.ErroredHidden)
+	}
+
+	shown, err := run(t, "list", "--errored")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(shown, "hidden") {
+		t.Errorf("--errored shows them, so nothing is hidden: %s", shown)
+	}
+}
+
+func TestListCommand_NoFooterWhenNothingIsHidden(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"id":"abc","name":"box-1","state":"running"}],"meta":{"total":1,"state_counts":{"running":1}}}`))
+	}))
+	defer srv.Close()
+	cleanup := setupEnv(t, srv)
+	defer cleanup()
+
+	out, err := run(t, "list")
+	if err != nil || strings.Contains(out, "hidden") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}

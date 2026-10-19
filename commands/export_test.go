@@ -68,6 +68,9 @@ func ConsoleURLForTest(u string) string { return consoleURL(u) }
 // InstallScriptURL exposes the install script URL for a guard test.
 const InstallScriptURL = installScriptURL
 
+// DefaultReleaseURL exposes the default release endpoint for a guard test.
+const DefaultReleaseURL = defaultReleaseURL
+
 // SetPollIntervalForTest shortens the wait poll interval.
 func SetPollIntervalForTest(d time.Duration) func() {
 	old := pollEvery

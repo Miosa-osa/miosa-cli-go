@@ -230,3 +230,91 @@ func TestVersionFlagPrintsVersion(t *testing.T) {
 		t.Fatalf("out = %q err = %v", out, err)
 	}
 }
+
+// The MIOSA release index carries the version and a per-file SHA-256. Update
+// must read it, build the asset URLs from it, and verify against the index
+// digest without depending on checksums.txt.
+func TestUpdateReadsTheMiosaIndex(t *testing.T) {
+	version := "9.9.9"
+	name := fmt.Sprintf("miosa_%s_%s_%s.tar.gz", version, runtime.GOOS, runtime.GOARCH)
+	archive := tarball(t, "miosa", []byte("NEW-FROM-MIOSA"))
+	sum := sha256.Sum256(archive)
+	hexSum := hex.EncodeToString(sum[:])
+	srv := plainServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/latest.json":
+			json.NewEncoder(w).Encode(map[string]any{
+				"version": version,
+				"assets": map[string]any{
+					"current": map[string]any{"file": name, "sha256": hexSum, "size": len(archive)},
+				},
+			})
+		case "/v" + version + "/" + name:
+			w.Write(archive)
+		case "/v" + version + "/checksums.txt":
+			// Deliberately absent: the index digest is enough.
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	t.Setenv("MIOSA_RELEASES_URL", srv.URL+"/latest.json")
+	defer commands.SetVersionForTest("1.2.4")()
+
+	out, err := run(t, "update", "--check")
+	if err != nil || !strings.Contains(out, version+" is available") {
+		t.Fatalf("check: %v %s", err, out)
+	}
+
+	target := filepath.Join(t.TempDir(), "miosa")
+	os.WriteFile(target, []byte("OLD"), 0o755)
+	defer commands.SetSelfPathForTest(target)()
+	if _, err := run(t, "update"); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	got, _ := os.ReadFile(target)
+	if string(got) != "NEW-FROM-MIOSA" {
+		t.Fatalf("binary = %q", got)
+	}
+}
+
+func TestUpdateRefusesATamperedIndexDigest(t *testing.T) {
+	version := "9.9.8"
+	name := fmt.Sprintf("miosa_%s_%s_%s.tar.gz", version, runtime.GOOS, runtime.GOARCH)
+	archive := tarball(t, "miosa", []byte("TAMPERED"))
+	srv := plainServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/latest.json":
+			json.NewEncoder(w).Encode(map[string]any{
+				"version": version,
+				"assets": map[string]any{
+					"current": map[string]any{"file": name, "sha256": strings.Repeat("0", 64)},
+				},
+			})
+		case "/v" + version + "/" + name:
+			w.Write(archive)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	t.Setenv("MIOSA_RELEASES_URL", srv.URL+"/latest.json")
+	defer commands.SetVersionForTest("1.2.4")()
+	target := filepath.Join(t.TempDir(), "miosa")
+	os.WriteFile(target, []byte("OLD"), 0o755)
+	defer commands.SetSelfPathForTest(target)()
+	if _, err := run(t, "update"); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("err = %v", err)
+	}
+	got, _ := os.ReadFile(target)
+	if string(got) != "OLD" {
+		t.Fatalf("binary was replaced: %q", got)
+	}
+}
+
+// The MIOSA origin is not the default until the captain's acceptance curls
+// pass. Flip this test together with defaultReleaseURL.
+func TestReleaseDefaultStaysOnGitHubUntilTheOriginIsAccepted(t *testing.T) {
+	if !strings.HasPrefix(commands.DefaultReleaseURL, "https://api.github.com/") {
+		t.Fatalf("default release URL = %q; do not flip it before acceptance", commands.DefaultReleaseURL)
+	}
+}

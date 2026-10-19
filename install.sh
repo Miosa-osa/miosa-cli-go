@@ -1,14 +1,20 @@
 #!/usr/bin/env sh
 set -eu
 
-# Install the native MIOSA CLI from GitHub Releases.
+# Install the native MIOSA CLI.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Miosa-osa/miosa-cli-go/main/install.sh | sh
 #   curl -fsSL https://raw.githubusercontent.com/Miosa-osa/miosa-cli-go/main/install.sh | INSTALL_DIR=/usr/local/bin sh
 #   curl -fsSL https://raw.githubusercontent.com/Miosa-osa/miosa-cli-go/main/install.sh | MIOSA_CLI_VERSION=1.2.0 sh
+#
+# Set MIOSA_CLI_DOWNLOAD_BASE (for example https://dl.miosa.ai/cli) to install
+# from the MIOSA release origin instead. That path falls back to GitHub if the
+# origin is unavailable. GitHub remains the default until the origin is
+# accepted.
 
 REPO="${MIOSA_CLI_REPO:-Miosa-osa/miosa-cli-go}"
+MIOSA_BASE="${MIOSA_CLI_DOWNLOAD_BASE:-}"
 INSTALL_DIR="${INSTALL_DIR:-}"
 VERSION="${MIOSA_CLI_VERSION:-latest}"
 
@@ -87,6 +93,14 @@ verify_checksum() {
 latest_version() {
   need sed
   tmp="$1"
+  # Opt-in MIOSA origin: latest.json carries "version".
+  if [ -n "$MIOSA_BASE" ] && download "$MIOSA_BASE/latest.json" "$tmp"; then
+    tag="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp" | head -n 1)"
+    if [ -n "$tag" ]; then
+      printf '%s' "$tag"
+      return 0
+    fi
+  fi
   download "https://api.github.com/repos/$REPO/releases/latest" "$tmp"
   tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp" | head -n 1)"
   if [ -z "$tag" ]; then
@@ -94,6 +108,14 @@ latest_version() {
     exit 1
   fi
   printf '%s' "$tag"
+}
+
+miosa_release_base() {
+  printf '%s/v%s' "$MIOSA_BASE" "$(asset_version "$1")"
+}
+
+github_release_base() {
+  printf 'https://github.com/%s/releases/download/v%s' "$REPO" "$(asset_version "$1")"
 }
 
 asset_version() {
@@ -133,12 +155,24 @@ main() {
   version_for_asset="$(asset_version "$tag")"
   tag="$(release_tag "$tag")"
   asset="miosa_${version_for_asset}_${os}_${arch}.tar.gz"
-  url="https://github.com/$REPO/releases/download/$tag/$asset"
 
   printf 'Installing miosa %s for %s/%s\n' "$tag" "$os" "$arch"
-  printf 'Downloading %s\n' "$url"
-  download "$url" "$workdir/$asset"
-  download "https://github.com/$REPO/releases/download/$tag/checksums.txt" "$workdir/checksums.txt"
+  base="$(github_release_base "$tag")"
+  if [ -n "$MIOSA_BASE" ]; then
+    mbase="$(miosa_release_base "$tag")"
+    printf 'Trying %s\n' "$mbase/$asset"
+    if download "$mbase/$asset" "$workdir/$asset" && download "$mbase/checksums.txt" "$workdir/checksums.txt"; then
+      base="$mbase"
+    else
+      printf 'MIOSA origin unavailable; using %s\n' "$base"
+      download "$base/$asset" "$workdir/$asset"
+      download "$base/checksums.txt" "$workdir/checksums.txt"
+    fi
+  else
+    printf 'Downloading %s\n' "$base/$asset"
+    download "$base/$asset" "$workdir/$asset"
+    download "$base/checksums.txt" "$workdir/checksums.txt"
+  fi
   verify_checksum "$workdir/$asset" "$workdir/checksums.txt"
 
   tar -xzf "$workdir/$asset" -C "$workdir"

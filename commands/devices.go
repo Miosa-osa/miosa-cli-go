@@ -36,7 +36,12 @@ another kind. <device> is an id.
   miosa device exec <device> -- uname -a`, []string{"devices"},
 		Op{
 			Use: "list", Aliases: []string{"ls"}, Short: "List devices", Method: "GET", Path: "/devices", Cols: deviceCols,
-			Flags: []Flag{{Name: "status", Usage: "Only this state"}, {Name: "name", Usage: "Only devices whose name contains this"}, {Name: "limit", Short: "n", Type: "int", Usage: "How many"}},
+			Flags: []Flag{
+				{Name: "status", Usage: "Only this state"}, {Name: "name", Usage: "Only devices whose name contains this"},
+				{Name: "limit", Short: "n", Type: "int", Usage: "How many"},
+				{Name: "errored", Type: "bool", Field: "include_errored", Usage: "Include machines in the error state"},
+			},
+			HiddenCount: "meta.errored_hidden", HiddenHint: "--errored",
 		},
 		Op{Use: "get <device>", Aliases: []string{"show"}, Short: "Show one device", Method: "GET", Path: "/devices/{0}", Args: []Arg{d}, Detail: deviceDetail},
 		Op{Use: "capabilities <device>", Aliases: []string{"caps"}, Short: "What this device can do", Method: "GET", Path: "/devices/{0}/capabilities", Args: []Arg{d}},

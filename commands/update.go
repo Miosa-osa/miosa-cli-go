@@ -26,7 +26,13 @@ import (
 )
 
 const (
-	releaseRepo       = "Miosa-osa/miosa-cli-go"
+	releaseRepo = "Miosa-osa/miosa-cli-go"
+	// The MIOSA download origin. It becomes the default ONLY after the
+	// captain's acceptance curls pass; until then GitHub is the default and
+	// this index is reachable through MIOSA_RELEASES_URL. To flip, set
+	// defaultReleaseURL = miosaReleaseURL.
+	miosaReleaseBase  = "https://dl.miosa.ai/cli"
+	miosaReleaseURL   = miosaReleaseBase + "/latest.json"
 	defaultReleaseURL = "https://api.github.com/repos/" + releaseRepo + "/releases/latest"
 	installScriptURL  = "https://raw.githubusercontent.com/" + releaseRepo + "/main/install.sh"
 	updateCheckEvery  = 24 * time.Hour
@@ -50,6 +56,9 @@ type releaseAsset struct {
 type release struct {
 	Tag    string         `json:"tag_name"`
 	Assets []releaseAsset `json:"assets"`
+	// Sums is the per-file SHA-256 from a latest.json index. Empty for the
+	// GitHub shape, where checksums.txt is fetched instead.
+	Sums map[string]string `json:"-"`
 }
 
 func (r release) Version() string { return strings.TrimPrefix(r.Tag, "v") }
@@ -63,27 +72,92 @@ func (r release) asset(name string) (releaseAsset, bool) {
 	return releaseAsset{}, false
 }
 
+// sha returns the digest the index published for name, or "".
+func (r release) sha(name string) string { return r.Sums[name] }
+
+// releaseIndex is the MIOSA latest.json shape.
+type releaseIndex struct {
+	Version string `json:"version"`
+	Assets  map[string]struct {
+		File   string `json:"file"`
+		SHA256 string `json:"sha256"`
+		Size   int64  `json:"size"`
+	} `json:"assets"`
+}
+
+// releaseFromIndex turns latest.json into the shape the rest of update uses.
+func releaseFromIndex(url string, idx releaseIndex) (release, error) {
+	version := strings.TrimPrefix(strings.TrimSpace(idx.Version), "v")
+	if version == "" {
+		return release{}, errors.New("release index has no version")
+	}
+	base := strings.TrimSuffix(url, "/latest.json")
+	if base == url {
+		base = strings.TrimSuffix(url, "/")
+	}
+	rel := release{Tag: "v" + version, Sums: map[string]string{}}
+	for _, a := range idx.Assets {
+		if a.File == "" {
+			continue
+		}
+		rel.Assets = append(rel.Assets, releaseAsset{Name: a.File, URL: base + "/v" + version + "/" + a.File})
+		if a.SHA256 != "" {
+			rel.Sums[a.File] = strings.ToLower(a.SHA256)
+		}
+	}
+	rel.Assets = append(rel.Assets, releaseAsset{Name: "checksums.txt", URL: base + "/v" + version + "/checksums.txt"})
+	return rel, nil
+}
+
+// releaseForVersion builds a release for one version without an index, so
+// `miosa update --version` still works when the index is unavailable.
+func releaseForVersion(base, version string) (release, error) {
+	v := strings.TrimPrefix(strings.TrimSpace(version), "v")
+	if v == "" {
+		return release{}, errors.New("no version given")
+	}
+	name := archiveName(v)
+	return release{
+		Tag: "v" + v,
+		Assets: []releaseAsset{
+			{Name: name, URL: base + "/v" + v + "/" + name},
+			{Name: "checksums.txt", URL: base + "/v" + v + "/checksums.txt"},
+		},
+	}, nil
+}
+
 func fetchRelease(ctx context.Context, url string) (release, error) {
-	var rel release
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return rel, err
+		return release{}, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "miosa-cli/"+cliVersion)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return rel, fmt.Errorf("checking for a new release: %w", err)
+		return release{}, fmt.Errorf("checking for a new release: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return rel, fmt.Errorf("checking for a new release: %s", resp.Status)
+		return release{}, fmt.Errorf("checking for a new release: %s", resp.Status)
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&rel); err != nil {
-		return rel, fmt.Errorf("reading release metadata: %w", err)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return release{}, fmt.Errorf("reading release metadata: %w", err)
+	}
+
+	// A latest.json index is tried first; a GitHub release response has no
+	// "version" key and falls through to the original shape.
+	var idx releaseIndex
+	if json.Unmarshal(body, &idx) == nil && idx.Version != "" {
+		return releaseFromIndex(url, idx)
+	}
+	var rel release
+	if err := json.Unmarshal(body, &rel); err != nil {
+		return release{}, fmt.Errorf("reading release metadata: %w", err)
 	}
 	if rel.Tag == "" {
-		return rel, errors.New("release metadata has no tag")
+		return release{}, errors.New("release metadata has no tag")
 	}
 	return rel, nil
 }
@@ -256,8 +330,8 @@ func newUpdateCmd() *cobra.Command {
 		Use:     "update",
 		Aliases: []string{"upgrade", "self-update"},
 		Short:   "Update the miosa CLI to the latest release",
-		Long: `Download the latest release for this platform from GitHub, verify it against
-the release's SHA-256 checksums, and replace the running binary.
+		Long: `Download the latest release for this platform, verify it against its SHA-256
+checksum, and replace the running binary.
 
 If miosa was installed with Homebrew or npm, run the package manager instead;
 update prints the command.
@@ -284,10 +358,22 @@ func runUpdate(cmd *cobra.Command, checkOnly bool, target string, force bool) er
 	defer cancel()
 
 	url := releasesURL()
-	if target != "" {
+	var rel release
+	var err error
+	switch {
+	case target != "" && strings.HasSuffix(url, "/latest.json"):
+		// Build the version's URLs directly; no index needed.
+		rel, err = releaseForVersion(strings.TrimSuffix(url, "/latest.json"), target)
+	case target != "":
 		url = strings.Replace(url, "/releases/latest", "/releases/tags/v"+strings.TrimPrefix(target, "v"), 1)
+		rel, err = fetchRelease(ctx, url)
+	default:
+		rel, err = fetchRelease(ctx, url)
+		if err != nil && os.Getenv("MIOSA_RELEASES_URL") == "" && url == miosaReleaseURL {
+			// GitHub is the fallback once MIOSA is the default.
+			rel, err = fetchRelease(ctx, defaultReleaseURL)
+		}
 	}
-	rel, err := fetchRelease(ctx, url)
 	if err != nil {
 		return die(err)
 	}
@@ -339,13 +425,17 @@ func runUpdate(cmd *cobra.Command, checkOnly bool, target string, force bool) er
 	if !isJSON() {
 		p.Line("Downloading miosa %s (%s/%s)...", latest, runtime.GOOS, runtime.GOARCH)
 	}
-	sums, err := download(ctx, sumsAsset.URL, 1<<20)
-	if err != nil {
-		return die(err)
-	}
-	want, ok := checksumFor(sums, name)
-	if !ok {
-		return die(fmt.Errorf("checksums.txt has no entry for %s", name))
+	want := rel.sha(name)
+	if want == "" {
+		sums, err := download(ctx, sumsAsset.URL, 1<<20)
+		if err != nil {
+			return die(err)
+		}
+		var ok bool
+		want, ok = checksumFor(sums, name)
+		if !ok {
+			return die(fmt.Errorf("checksums.txt has no entry for %s", name))
+		}
 	}
 	archive, err := download(ctx, asset.URL, maxBinaryBytes)
 	if err != nil {

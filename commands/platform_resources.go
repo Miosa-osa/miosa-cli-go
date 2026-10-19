@@ -295,27 +295,54 @@ var dbCols = []Col{
 
 func dbCmd() *cobra.Command {
 	d := idArg("database")
-	return group("db", "Managed databases",
+	cmd := group("db", "Managed databases",
 		`Databases run on MIOSA and bill while running. <database> is a name or id.
 'connection' prints the connection secret: treat the output like a password.`, []string{"database", "databases"},
 		Op{Use: "list", Aliases: []string{"ls"}, Short: "List databases", Method: "GET", Path: "/databases", Cols: dbCols, AllOrgs: true},
 		Op{
 			Use: "get <database>", Aliases: []string{"show"}, Short: "Show a database", Method: "GET", Path: "/databases/{0}", Args: []Arg{d},
-			Detail: []Col{{Head: "Name", Path: "name"}, {Head: "Id", Path: "id"}, {Head: "Engine", Path: "engine"}, {Head: "State", Path: "state"}, {Head: "Host", Path: "host"}, {Head: "Port", Path: "port"}, {Head: "Memory (MB)", Path: "memory_mb"}, {Head: "Error", Path: "last_error"}},
+			Detail: []Col{{Head: "Name", Path: "name"}, {Head: "Id", Path: "id"}, {Head: "Engine", Path: "engine"}, {Head: "State", Path: "state"}, {Head: "Host", Path: "host"}, {Head: "Port", Path: "port"}, {Head: "Memory (MB)", Path: "memory_mb"}, {Head: "Version", Path: "engine_version"}, {Head: "Extensions", Path: "extensions"}, {Head: "Workspace", Path: "workspace_id"}, {Head: "Error", Path: "error.reason"}, {Head: "Failed at", Path: "error.at"}},
+		},
+		Op{
+			Use: "create <name>", Short: "Create a database", Method: "POST", Path: "/databases", Args: []Arg{idArg("name")},
+			Long: `Create a managed database.
+
+  miosa db create app-db --engine postgres --version 16 --size small
+  miosa db create app-db --extensions vector,pg_trgm,pgcrypto --workspace tz
+
+--extensions applies to PostgreSQL only; allowed: vector, pg_trgm, pgcrypto, uuid-ossp,
+pg_stat_statements, citext, hstore, btree_gin, btree_gist. --version is a version with an
+image (postgres 16, mysql 8, redis 7). --size is one of tiny, xs, small, medium, large.`,
+			Flags: []Flag{
+				{Name: "engine", Usage: "Engine: postgres, mysql, redis or qdrant", Default: "postgres", Enum: []string{"postgres", "postgresql", "mysql", "redis", "qdrant"}},
+				{Name: "version", Usage: "Engine version (default: the engine's current one)", Field: "engine_version"},
+				{Name: "size", Usage: "Size: tiny, xs, small, medium or large", Enum: []string{"tiny", "xs", "small", "medium", "large"}},
+				{Name: "extensions", Type: "strings", Usage: "PostgreSQL extensions to enable at create, comma separated"},
+				{Name: "workspace", Usage: "Workspace slug", Field: "workspace_slug"},
+				{Name: "workspace-id", Usage: "Workspace id", Field: "workspace_id", Hidden: true},
+				{Name: "region", Usage: "Pin to a region"},
+			},
+			Body:   func(a []string, body map[string]any) (map[string]any, error) { body["name"] = a[0]; return body, nil },
+			Detail: []Col{{Head: "Name", Path: "name"}, {Head: "Id", Path: "id"}, {Head: "Engine", Path: "engine"}, {Head: "Version", Path: "engine_version"}, {Head: "State", Path: "state"}, {Head: "Memory (MB)", Path: "memory_mb"}, {Head: "Workspace", Path: "workspace_id"}},
 		},
 		Op{Use: "start <database>", Short: "Start a stopped database", Method: "POST", Path: "/databases/{0}/start", Args: []Arg{d}, Done: "Starting {0}"},
 		Op{Use: "stop <database>", Short: "Stop a database", Method: "POST", Path: "/databases/{0}/stop", Args: []Arg{d}, Confirm: "Stop database {0}?", Done: "Stopping {0}"},
 		Op{Use: "restart <database>", Short: "Restart a database", Method: "POST", Path: "/databases/{0}/restart", Args: []Arg{d}, Done: "Restarting {0}"},
 		Op{Use: "wake <database>", Short: "Wake a database that scaled to zero", Method: "POST", Path: "/databases/{0}/wake", Args: []Arg{d}, Done: "Waking {0}"},
 		Op{Use: "connection <database>", Aliases: []string{"url"}, Short: "Show how to connect (a secret)", Method: "GET", Path: "/databases/{0}/credentials", Args: []Arg{d}},
-		Op{Use: "logs <database>", Short: "Show the database log", Method: "GET", Path: "/databases/{0}/logs", Args: []Arg{d}, Lines: "lines"},
+		Op{
+			Use: "logs <database>", Short: "Show the database log (the last run of one that failed)", Method: "GET", Path: "/databases/{0}/logs", Args: []Arg{d}, Lines: "logs",
+			Flags: []Flag{{Name: "tail", Short: "n", Type: "int", Usage: "How many lines", Field: "lines"}},
+		},
 		Op{
 			Use: "backups <database>", Short: "List backups", Method: "GET", Path: "/databases/{0}/backups", Args: []Arg{d},
-			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "STATE", Path: "state"}, {Head: "SIZE", Path: "size_bytes", Fmt: "bytes"}, {Head: "CREATED", Path: "inserted_at", Fmt: "age"}},
+			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "STATE", Path: "state"}, {Head: "SIZE", Path: "size_bytes", Fmt: "bytes"}, {Head: "CREATED", Path: "created_at", Fmt: "age"}},
 		},
 		Op{Use: "backup <database>", Short: "Take a backup now", Method: "POST", Path: "/databases/{0}/backups", Args: []Arg{d}},
 		Op{Use: "rm <database>", Aliases: []string{"delete"}, Short: "Permanently delete a database", Method: "DELETE", Path: "/databases/{0}", Args: []Arg{d}, Confirm: "Permanently delete database {0} and its data?", Done: "Deleted {0}"},
 	)
+	cmd.AddCommand(newDBRestoreCmd(), newDBRestoreAliasCmd())
+	return cmd
 }
 
 // ─── storage, volume ──────────────────────────────────────────────────────────
@@ -353,23 +380,6 @@ func storageCmd() *cobra.Command {
 	extendStorageGet(g)
 	g.AddCommand(storageKeysCmd())
 	return g
-}
-
-func volumeCmd() *cobra.Command {
-	v := idArg("volume")
-	return group("volume", "Persistent volumes shared between machines", "Volumes outlive any one machine and can be attached to computers.", []string{"volumes"},
-		Op{
-			Use: "list", Aliases: []string{"ls"}, Short: "List volumes", Method: "GET", Path: "/volumes",
-			Cols: []Col{{Head: "NAME", Path: "name"}, {Head: "ID", Path: "id", Fmt: "short"}, {Head: "STATUS", Path: "status"}, {Head: "SIZE", Path: "size_bytes", Fmt: "bytes"}, {Head: "BACKEND", Path: "backend"}},
-		},
-		Op{
-			Use: "create <name>", Short: "Create a volume", Method: "POST", Path: "/volumes", Args: []Arg{idArg("name")},
-			Flags: []Flag{{Name: "size-gb", Type: "int", Usage: "Size in GB", Field: "size_gb"}},
-			Body:  func(a []string, body map[string]any) (map[string]any, error) { body["name"] = a[0]; return body, nil },
-		},
-		Op{Use: "get <volume>", Aliases: []string{"show"}, Short: "Show a volume", Method: "GET", Path: "/volumes/{0}", Args: []Arg{v}},
-		Op{Use: "rm <volume>", Aliases: []string{"delete"}, Short: "Delete a volume", Method: "DELETE", Path: "/volumes/{0}", Args: []Arg{v}, Confirm: "Permanently delete volume {0} and its data?", Done: "Deleted {0}"},
-	)
 }
 
 // ─── workflow, cron, function ─────────────────────────────────────────────────

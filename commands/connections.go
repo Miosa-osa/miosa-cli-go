@@ -14,6 +14,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/Miosa-osa/miosa-cli-go/internal/api"
+	"github.com/Miosa-osa/miosa-cli-go/internal/client"
 )
 
 func init() {
@@ -31,7 +32,7 @@ func connectionsCmd() *cobra.Command {
 		Short:   "Model providers, apps and tool servers your agents use",
 		Long: `Connections are what your agents and machines use to reach the outside world:
 model providers (Claude, ChatGPT, API keys), apps (GitHub, Slack, Linear,
-Discord) and tool servers. MIOSA's own model keys never power your agents;
+Discord, Google Workspace, Notion) and tool servers. MIOSA's own model keys never power your agents;
 every run uses a connection of yours.
 
   miosa connections list
@@ -474,34 +475,151 @@ func readLine(r io.Reader) (string, error) {
 }
 
 func newConnAddAppsCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "apps <github|slack|linear|discord>",
+	var (
+		label       string
+		workspaceID string
+		products    string
+		noWait      bool
+	)
+	cmd := &cobra.Command{
+		Use:   "apps <github|slack|linear|discord|google|notion>",
 		Short: "Connect an app through your browser",
-		Long: `Starts the OAuth flow for an app and prints the URL to open. The connection is
-completed in the browser; check it with 'miosa connections list --kind apps'.`,
+		Long: `Starts the OAuth flow for an app, prints the consent URL, and - once the
+browser finishes - prints the connection id.
+
+A Google or Notion account is one connection: connect four Gmail accounts and
+you get four connections, each with its own label. Google scopes follow the
+products you name, never more:
+
+  miosa connections add apps google --label work-gmail --products gmail,calendar,drive
+  miosa connections add apps notion --label team-wiki
+  miosa connections add apps google --label qa-gmail --products gmail --no-wait
+
+Use --no-wait when the browser is on another device; check the result with
+'miosa connections list --kind apps'.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p := printerFor(cmd)
+			provider := strings.ToLower(args[0])
 			c, _, err := buildClient()
 			if err != nil {
 				return die(err)
 			}
-			resp, err := c.API.JSONAny(cmd.Context(), api.Request{Method: "GET", Path: "/integrations/" + url.PathEscape(strings.ToLower(args[0])) + "/start"})
+			before := connAppIDs(cmd.Context(), c, provider)
+
+			path := "/integrations/" + url.PathEscape(provider) + "/start"
+			q := url.Values{}
+			if label != "" {
+				q.Set("label", label)
+			}
+			if workspaceID != "" {
+				q.Set("workspace_id", workspaceID)
+			}
+			if products != "" {
+				q.Set("products", products)
+			}
+			if len(q) > 0 {
+				path += "?" + q.Encode()
+			}
+
+			resp, err := c.API.JSONAny(cmd.Context(), api.Request{Method: "GET", Path: path})
 			if err != nil {
 				return die(err)
 			}
 			obj, _ := unwrapObject(resp).(map[string]any)
 			target, _ := orEmpty(obj["authorize_url"], obj["url"], obj["auth_url"], obj["redirect_url"]).(string)
-			if isJSON() {
+			if isJSON() && (noWait || target == "") {
 				return p.JSON(resp)
 			}
 			if target == "" {
 				return p.JSON(resp)
 			}
-			p.Line("Open this URL to connect %s:", args[0])
+			p.Line("Open this URL to connect %s:", provider)
 			p.Line("  %s", target)
+			if noWait {
+				return nil
+			}
+			// Waiting only makes sense at a terminal. A script, a pipe or a test
+			// gets the link and returns, so nothing hangs where nobody can consent.
+			if noWait || !term.IsTerminal(int(os.Stdout.Fd())) {
+				p.Line("Finish the sign-in in the browser, then run: miosa connections list --kind apps")
+				return nil
+			}
+			p.Line("Waiting for the browser sign-in (Ctrl-C to stop)...")
+			id, err := waitForNewApp(cmd.Context(), c, provider, label, before, 3*time.Minute)
+			if err != nil {
+				return die(err)
+			}
+			if isJSON() {
+				return p.JSON(map[string]string{"status": "connected", "provider": provider, "id": id})
+			}
+			p.Success("Connected %s: %s", provider, id)
 			return nil
 		},
+	}
+	cmd.Flags().StringVar(&label, "label", "", "Name this connection (for example work-gmail)")
+	cmd.Flags().StringVar(&workspaceID, "workspace-id", "", "Bind the connection to one workspace")
+	cmd.Flags().StringVar(&products, "products", "", "Google products to request (gmail, gmail-send, calendar, drive, docs, sheets)")
+	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Print the consent URL and exit without waiting")
+	return cmd
+}
+
+// connAppIDs is the set of app connection ids a provider has right now, so the
+// wait can tell a new connection from one that already existed.
+func connAppIDs(ctx context.Context, c *client.Client, provider string) map[string]bool {
+	ids := map[string]bool{}
+	var apps struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := c.API.Get(ctx, "/integrations", nil, &apps); err != nil {
+		return ids
+	}
+	for _, a := range apps.Data {
+		if !strings.EqualFold(fmt.Sprint(a["provider"]), provider) {
+			continue
+		}
+		if id := fmt.Sprint(orEmpty(a["id"], "")); id != "" {
+			ids[id] = true
+		}
+	}
+	return ids
+}
+
+// waitForNewApp polls until a connection this provider did not have before
+// appears, and returns its id. Consent can take a minute (a password, a second
+// factor, an account chooser), so this waits; Ctrl-C stops it.
+func waitForNewApp(ctx context.Context, c *client.Client, provider, label string, before map[string]bool, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		var apps struct {
+			Data []map[string]any `json:"data"`
+		}
+		if err := c.API.Get(ctx, "/integrations", nil, &apps); err == nil {
+			for _, a := range apps.Data {
+				if !strings.EqualFold(fmt.Sprint(a["provider"]), provider) {
+					continue
+				}
+				id := fmt.Sprint(orEmpty(a["id"], ""))
+				if id == "" || before[id] {
+					continue
+				}
+				if label != "" && !strings.EqualFold(fmt.Sprint(orEmpty(a["label"], a["account_name"], "")), label) {
+					continue
+				}
+				if status := strings.ToLower(fmt.Sprint(orEmpty(a["status"], a["state"], "active"))); status != "active" {
+					continue
+				}
+				return id, nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("no connection appeared within %s; finish the sign-in in the browser, then run: miosa connections list --kind apps", timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
 	}
 }
 
@@ -602,7 +720,13 @@ touched, and the scope falls back to it:
 					path = "/settings/provider-keys/" + url.PathEscape(strings.ToLower(ref))
 				}
 			case "apps":
-				path = "/integrations/" + url.PathEscape(strings.ToLower(ref))
+				if api.IsUUID(ref) {
+					// One of several connections to the same provider (four Gmail
+					// accounts); the id names the one to disconnect.
+					path = "/integrations/apps/" + url.PathEscape(ref)
+				} else {
+					path = "/integrations/" + url.PathEscape(strings.ToLower(ref))
+				}
 			case "tools":
 				path = "/mcp-servers/" + url.PathEscape(ref)
 			default:

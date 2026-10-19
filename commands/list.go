@@ -90,6 +90,10 @@ type listPage struct {
 		TotalPages  int            `json:"total_pages"`
 		HasNext     bool           `json:"has_next_page"`
 		StateCounts map[string]int `json:"state_counts"`
+		// ErroredHidden is how many errored sandboxes this page left out. The
+		// server reports every state it holds in state_counts; the default list
+		// hides "error", so the count is what the caller is not seeing.
+		ErroredHidden int `json:"errored_hidden"`
 	} `json:"meta"`
 }
 
@@ -159,6 +163,10 @@ func runList(cmd *cobra.Command, o listOptions) error {
 		page++
 	}
 
+	if !o.errored && o.state == "" {
+		meta.ErroredHidden = meta.StateCounts["error"]
+	}
+
 	// Legacy client-side filter on the workspace slug stored in metadata.
 	if o.workspace != "" {
 		filtered := sandboxes[:0]
@@ -193,6 +201,9 @@ func runList(cmd *cobra.Command, o listOptions) error {
 		p.Line("No sandboxes found.")
 		if o.workspace != "" {
 			p.Line("(filtered by workspace %q)", o.workspace)
+		}
+		if meta.ErroredHidden > 0 {
+			p.Line("%s", hiddenFooterText(meta.ErroredHidden, "--errored"))
 		}
 		p.Line("")
 		p.Line("Create one with: miosa create <name>")
@@ -245,6 +256,9 @@ func runList(cmd *cobra.Command, o listOptions) error {
 	}
 	if current != "" {
 		p.Line("* = current (set with 'miosa use <name>')")
+	}
+	if meta.ErroredHidden > 0 {
+		p.Line("%s", hiddenFooterText(meta.ErroredHidden, "--errored"))
 	}
 	return nil
 }
