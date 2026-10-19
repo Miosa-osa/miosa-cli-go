@@ -177,9 +177,15 @@ func runList(cmd *cobra.Command, o listOptions) error {
 		return nil
 	}
 	if isJSON() {
+		total := meta.Total
+		if total == 0 {
+			total = len(sandboxes)
+		}
 		return p.JSON(map[string]interface{}{
-			"data": sandboxes,
-			"meta": meta,
+			"data":     sandboxes,
+			"meta":     meta,
+			"has_more": meta.HasNext && !o.all,
+			"total":    total,
 		})
 	}
 
@@ -215,7 +221,7 @@ func runList(cmd *cobra.Command, o listOptions) error {
 		row := []string{
 			name,
 			sandbox.ID,
-			statusBadge(sandbox.State),
+			sandboxStatusCell(sandbox),
 			string(sandbox.Size),
 			sandbox.TemplateID,
 			envBadge(sandbox.MachineEnvironment),
@@ -233,7 +239,7 @@ func runList(cmd *cobra.Command, o listOptions) error {
 		total = len(sandboxes)
 	}
 	if meta.HasNext && !o.all {
-		p.Line("Showing %d of %d - use --all or --page %d for more", len(sandboxes), total, meta.Page+1)
+		p.Line("showing %d of %d, use --all (or --page %d) for more", len(sandboxes), total, meta.Page+1)
 	} else {
 		p.Line("Total: %d", total)
 	}
@@ -276,6 +282,16 @@ func statusBadge(s miosa.ComputerStatus) string {
 	default:
 		return string(s)
 	}
+}
+
+// sandboxStatusCell is the STATUS column: the state, and for a lost sandbox
+// the reason, so a list shows why it will not come back.
+func sandboxStatusCell(s miosa.SandboxData) string {
+	badge := statusBadge(s.State)
+	if s.State == "lost" && s.LostReason != "" {
+		return badge + ": " + s.LostReason
+	}
+	return badge
 }
 
 func formatAge(createdAt string) string {

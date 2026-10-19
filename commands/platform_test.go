@@ -102,6 +102,9 @@ func TestPlatformCommandsSendTheRightRequests(t *testing.T) {
 		{args: []string{"billing", "invoices"}, method: "GET", path: "/billing/invoices", reply: `{"data":[]}`},
 		{args: []string{"billing", "upcoming"}, method: "GET", path: "/billing/upcoming", reply: `{"data":{"amount_due_cents":4673,"currency":"usd"}}`, wantOut: "$46.73"},
 		{args: []string{"billing", "plan"}, method: "GET", path: "/tenant/plan", reply: `{"plan":{"name":"enterprise","interval":"month"},"usage":{"sandboxes":1}}`, wantOut: "enterprise"},
+		// notion import
+		{args: []string{"storage", "import-notion", "b1", "--source", "exports/notion.zip", "--prefix", "wiki/"}, method: "POST", path: "/storage/buckets/b1/imports/notion", reply: `{"data":{"prefix":"wiki/","manifest_key":"wiki/manifest.json","files_written":3,"stats":{"pages":2,"databases":0,"assets":1,"links_unresolved":2}}}`, body: map[string]any{"source_key": "exports/notion.zip", "target_prefix": "wiki/"}, wantOut: "Imported 3 files into wiki/"},
+		{args: []string{"storage", "import-notion", "b1", "--source", "z.zip"}, method: "POST", path: "/storage/buckets/b1/imports/notion", reply: `{"data":{"prefix":"notion/","manifest_key":"notion/manifest.json","files_written":1,"stats":{"pages":1,"databases":0,"assets":0,"links_unresolved":0}}}`, body: map[string]any{"source_key": "z.zip"}, wantOut: "Manifest: notion/manifest.json"},
 		// audit, alerts, notifications, members, egress, regions
 		{args: []string{"audit", "-n", "5", "--type", "api.get"}, method: "GET", path: "/audit-log", reply: list(`{"ts":"2026-10-09T00:00:00Z","type":"api.get","status":"success","resource":{"type":"credits"}}`), query: map[string]string{"limit": "5", "type": "api.get"}, wantOut: "credits"},
 		{args: []string{"alerts", "list"}, method: "GET", path: "/alerts", reply: `{"data":[]}`},
@@ -150,6 +153,8 @@ func TestPlatformCommandsSendTheRightRequests(t *testing.T) {
 		{args: []string{"regions"}, method: "GET", path: "/regions", reply: `{"regions":[{"id":"us-east","label":"US-East","available":true}]}`, wantOut: "US-East"},
 		// workspaces (extras)
 		{args: []string{"workspace", "get", "acme"}, method: "GET", path: "/workspaces/" + wsID, reply: `{"data":{"id":"` + wsID + `","name":"Acme","slug":"acme","is_default":false}}`, wantOut: "Acme"},
+		{args: []string{"workspace", "update", "acme", "--name", "Acme Inc", "--description", "Client delivery", "--meta", "entity=lunivate", "--meta", "owner=roberto"}, method: "PATCH", path: "/workspaces/" + wsID, reply: `{"data":{"id":"` + wsID + `","name":"Acme Inc"}}`, body: map[string]any{"name": "Acme Inc", "description": "Client delivery", "metadata": map[string]any{"entity": "lunivate", "owner": "roberto"}}, wantOut: "Updated acme"},
+		{args: []string{"workspace", "transfer", "acme", "--to", wsID, "--id", "sbx-1", "--id", "sbx-2"}, method: "POST", path: "/workspaces/" + wsID + "/transfer", reply: `{"data":{"moved_count":2,"resource_ids":["sbx-1","sbx-2"]}}`, body: map[string]any{"target_workspace_id": wsID, "resource_ids": []string{"sbx-1", "sbx-2"}}, wantOut: "Moved 2"},
 		{args: []string{"workspace", "stats", "acme"}, method: "GET", path: "/workspaces/" + wsID + "/stats", reply: `{"sandboxes":3}`},
 		{args: []string{"workspace", "usage", "acme"}, method: "GET", path: "/workspaces/" + wsID + "/usage", reply: `{"credit_cents":1}`},
 		{args: []string{"workspace", "activity", "acme"}, method: "GET", path: "/workspaces/" + wsID + "/activity", reply: `{"data":[]}`},

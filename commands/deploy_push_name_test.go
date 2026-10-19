@@ -56,7 +56,7 @@ func TestDeployPushNamesTheDeploymentNotTheFolder(t *testing.T) {
 	dir := t.TempDir()
 	writeStaticSite(t, dir)
 
-	out, err := run(t, "deploy", "push", "my-site", "--dir", dir)
+	out, err := run(t, "deploy", "push", "my-site", "--dir", dir, "--no-wait")
 	if err != nil {
 		t.Fatalf("deploy push: %v (out=%q)", err, out)
 	}
@@ -80,7 +80,7 @@ func TestDeployCurrentDirInALinkedFolderNamesTheLinkedDeployment(t *testing.T) {
 	writeLink(t, dir, "d3", "my-linked-site")
 	t.Chdir(dir)
 
-	out, err := run(t, "deploy", "--yes")
+	out, err := run(t, "deploy", "--yes", "--no-wait")
 	if err != nil {
 		t.Fatalf("deploy --yes: %v (out=%q)", err, out)
 	}

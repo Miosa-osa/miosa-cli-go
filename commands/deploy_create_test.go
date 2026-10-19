@@ -45,7 +45,7 @@ func deploySandboxAPI(t *testing.T) *fakeAPI {
 
 func TestDeployCreateNeedsASource(t *testing.T) {
 	fakeRoutes(t, map[string]any{})
-	_, err := run(t, "deploy", "create")
+	_, err := run(t, "deploy", "create", "--no-wait")
 	if err == nil {
 		t.Fatal("expected an error when no source is given")
 	}
@@ -56,7 +56,7 @@ func TestDeployCreateNeedsASource(t *testing.T) {
 
 func TestDeployCreateRejectsTwoSources(t *testing.T) {
 	fakeRoutes(t, map[string]any{})
-	_, err := run(t, "deploy", "create", "--git", "https://github.com/me/app", "--from-sandbox", "box-1")
+	_, err := run(t, "deploy", "create", "--git", "https://github.com/me/app", "--from-sandbox", "box-1", "--no-wait")
 	if err == nil || !strings.Contains(err.Error(), "exactly one source") {
 		t.Fatalf("expected an exactly-one-source error, got: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestDeployCreateRejectsTwoSources(t *testing.T) {
 
 func TestDeployCreateRejectsImage(t *testing.T) {
 	fakeRoutes(t, map[string]any{})
-	_, err := run(t, "deploy", "create", "--image", "nginx:latest")
+	_, err := run(t, "deploy", "create", "--image", "nginx:latest", "--no-wait")
 	if err == nil || !strings.Contains(err.Error(), "--image is not available") {
 		t.Fatalf("expected --image to be rejected, got: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestDeployCreateRejectsImage(t *testing.T) {
 
 func TestDeployCreatePortOnlyForSandbox(t *testing.T) {
 	fakeRoutes(t, map[string]any{})
-	_, err := run(t, "deploy", "create", "--git", "https://github.com/me/app", "--port", "3000")
+	_, err := run(t, "deploy", "create", "--git", "https://github.com/me/app", "--port", "3000", "--no-wait")
 	if err == nil || !strings.Contains(err.Error(), "--port only applies") {
 		t.Fatalf("expected a --port error, got: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestDeployCreatePortOnlyForSandbox(t *testing.T) {
 
 func TestDeployCreateBuildCommandNeedsAServerForSandbox(t *testing.T) {
 	fakeRoutes(t, map[string]any{})
-	_, err := run(t, "deploy", "create", "--from-sandbox", "box-1", "--build-command", "npm run build")
+	_, err := run(t, "deploy", "create", "--from-sandbox", "box-1", "--build-command", "npm run build", "--no-wait")
 	if err == nil || !strings.Contains(err.Error(), "needs --run-command or --type dynamic") {
 		t.Fatalf("expected a --build-command error for a static publish, got: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestDeployCreateBuildCommandNeedsAServerForSandbox(t *testing.T) {
 
 func TestDeployCreateRejectsBadEnv(t *testing.T) {
 	fakeRoutes(t, map[string]any{})
-	_, err := run(t, "deploy", "create", "--from-sandbox", "box-1", "--env", "NOVALUE")
+	_, err := run(t, "deploy", "create", "--from-sandbox", "box-1", "--env", "NOVALUE", "--no-wait")
 	if err == nil || !strings.Contains(err.Error(), "KEY=VALUE") {
 		t.Fatalf("expected a KEY=VALUE error, got: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestDeployCreateFromSandbox(t *testing.T) {
 	f := deploySandboxAPI(t)
 	out, err := run(t, "deploy", "create", "my-app", "--from-sandbox", "box-1",
 		"--dir", "/srv/app", "--port", "3000", "--type", "dynamic", "--run-command", "npm start",
-		"--env", "NODE_ENV=production", "--domain", "app.example.com")
+		"--env", "NODE_ENV=production", "--domain", "app.example.com", "--no-wait")
 	if err != nil {
 		t.Fatalf("deploy create: %v (out=%q)", err, out)
 	}
@@ -119,16 +119,47 @@ func TestDeployCreateFromSandbox(t *testing.T) {
 	if _, ok := b["build_command"]; ok {
 		t.Fatalf("build_command is only sent when given: %+v", b)
 	}
-	// env is set after create for sandbox publishes.
+	// The env goes with the publish; this fake server predates it (no
+	// env_applied), so the CLI also sets it after create, as before.
+	if env, _ := b["env"].(map[string]interface{}); env["NODE_ENV"] != "production" {
+		t.Fatalf("env not sent with the publish: %+v", b)
+	}
 	envCall := f.find("POST", "/deployments/d1/env")
 	if len(envCall) != 1 {
-		t.Fatalf("expected env to be set after create, got %d calls", len(envCall))
+		t.Fatalf("expected env to be set after create on an older server, got %d calls", len(envCall))
 	}
 	if env, _ := envCall[0].Body["env"].(map[string]interface{}); env["NODE_ENV"] != "production" {
 		t.Fatalf("env not sent: %+v", envCall[0].Body)
 	}
 	if !strings.Contains(out, "https://d1.miosa.app") {
 		t.Fatalf("URL not printed: %q", out)
+	}
+}
+
+// QA 2026-10-16: setting the env after the publish cut a second release.
+// A server that froze the env into the first release says env_applied, and
+// the CLI then sends no separate env call.
+func TestDeployCreateFromSandboxEnvGoesIntoTheFirstRelease(t *testing.T) {
+	f := newFakeAPI(t, func(c call) (int, string) {
+		switch {
+		case c.is("GET", "/sandboxes/by-name/box-1"):
+			return 200, `{"id":"sbx-1"}`
+		case c.is("POST", "/sandboxes/sbx-1/deploy"):
+			return 201, strings.Replace(sandboxDeployBody, "{", `{"env_applied":true,`, 1)
+		}
+		return 404, `{"error":{"code":"NOT_FOUND","message":"no route"}}`
+	})
+	out, err := run(t, "deploy", "create", "my-app", "--from-sandbox", "box-1",
+		"--run-command", "node server.js", "--port", "3000", "--env", "K=V1", "--no-wait")
+	if err != nil {
+		t.Fatalf("deploy create: %v (out=%q)", err, out)
+	}
+	deploy := f.find("POST", "/sandboxes/sbx-1/deploy")
+	if env, _ := deploy[0].Body["env"].(map[string]interface{}); env["K"] != "V1" {
+		t.Fatalf("env not sent with the publish: %+v", deploy[0].Body)
+	}
+	if calls := f.find("POST", "/deployments/d1/env"); len(calls) != 0 {
+		t.Fatalf("env was set again after the publish (%d calls): that cuts a second release", len(calls))
 	}
 }
 
@@ -163,7 +194,7 @@ func gitDeployAPI(t *testing.T) *fakeAPI {
 func TestDeployCreateFromGit(t *testing.T) {
 	f := gitDeployAPI(t)
 	out, err := run(t, "deploy", "create", "--git", "https://github.com/me/app", "--branch", "dev",
-		"--env", "A=1")
+		"--env", "A=1", "--no-wait")
 	if err != nil {
 		t.Fatalf("deploy create --git: %v (out=%q)", err, out)
 	}
@@ -198,7 +229,7 @@ func TestDeployCreateFromGitDoesNotRebuildWhatTheServerBuilds(t *testing.T) {
 		}
 		return 404, `{"error":{"code":"NOT_FOUND","message":"no route"}}`
 	})
-	if out, err := run(t, "deploy", "create", "--git", "https://github.com/me/app"); err != nil {
+	if out, err := run(t, "deploy", "create", "--git", "https://github.com/me/app", "--no-wait"); err != nil {
 		t.Fatalf("deploy create --git: %v (out=%q)", err, out)
 	}
 	if n := len(f.find("POST", "/deployments/d3/redeploy")); n != 0 {
@@ -218,7 +249,7 @@ func TestDeployCreateFromGitQueuesTheFirstBuildWhenStateIsMissing(t *testing.T) 
 		}
 		return 404, `{"error":{"code":"NOT_FOUND","message":"no route"}}`
 	})
-	if out, err := run(t, "deploy", "create", "--git", "https://github.com/me/app"); err != nil {
+	if out, err := run(t, "deploy", "create", "--git", "https://github.com/me/app", "--no-wait"); err != nil {
 		t.Fatalf("deploy create --git: %v (out=%q)", err, out)
 	}
 	if n := len(f.find("POST", "/deployments/d3/redeploy")); n != 1 {
@@ -253,7 +284,7 @@ func TestDeployCreateFromDir(t *testing.T) {
 	})
 	dir := t.TempDir()
 	writeStaticSite(t, dir)
-	out, err := run(t, "deploy", "create", "--dir", dir, "--name", "site", "--domain", "site.example.com")
+	out, err := run(t, "deploy", "create", "--dir", dir, "--name", "site", "--domain", "site.example.com", "--no-wait")
 	if err != nil {
 		t.Fatalf("deploy create --dir: %v (out=%q)", err, out)
 	}
@@ -298,7 +329,7 @@ func TestDeployCreateJSON(t *testing.T) {
 func TestDeployBareNeedsConfirmationOffTerminal(t *testing.T) {
 	fakeRoutes(t, map[string]any{})
 	// Off a terminal the bare shortcut refuses without --yes, whatever the source.
-	_, err := run(t, "deploy")
+	_, err := run(t, "deploy", "--no-wait")
 	if err == nil || !strings.Contains(err.Error(), "--yes") {
 		t.Fatalf("expected a confirmation error, got: %v", err)
 	}
@@ -315,7 +346,7 @@ func TestDeployCreateFromSandboxSendsBuildCommandForAServer(t *testing.T) {
 	// Customer write-up #4 (2026-10-16): --build-command was refused with --from-sandbox.
 	f := deploySandboxAPI(t)
 	if out, err := run(t, "deploy", "create", "my-app", "--from-sandbox", "box-1", "--dir", "/home/user/app",
-		"--port", "3000", "--run-command", "npx next start -p 3000", "--build-command", "npm ci && npm run build"); err != nil {
+		"--port", "3000", "--run-command", "npx next start -p 3000", "--build-command", "npm ci && npm run build", "--no-wait"); err != nil {
 		t.Fatalf("deploy create: %v (out=%q)", err, out)
 	}
 	b := f.find("POST", "/sandboxes/sbx-1/deploy")[0].Body

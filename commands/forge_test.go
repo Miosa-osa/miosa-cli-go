@@ -183,6 +183,10 @@ func TestForgeCommandContractMatchesBothDistributions(t *testing.T) {
 
 // git asks the helper for credentials; only the Forge host gets the API key.
 func TestForgeGitCredentialAnswersOnlyForTheForgeHost(t *testing.T) {
+	// An active org from the developer's own profile or MIOSA_ORG makes buildClient call the
+	// live API to check the acting org; the test must see neither.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MIOSA_ORG", "")
 	t.Setenv("MIOSA_API_KEY", "msk_test_forge_key")
 	commands.ResetForTest()
 	root := commands.Root()

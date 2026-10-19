@@ -22,7 +22,7 @@ func TestDeployCreateFromDirWithRunCommandPublishesAServer(t *testing.T) {
 	})
 	dir := t.TempDir()
 	writeStaticSite(t, dir)
-	out, err := run(t, "deploy", "create", "--dir", dir, "--name", "api", "--run-command", "node server.js", "--port", "3000")
+	out, err := run(t, "deploy", "create", "--dir", dir, "--name", "api", "--run-command", "node server.js", "--port", "3000", "--no-wait")
 	if err != nil {
 		t.Fatalf("deploy create --dir --run-command: %v (out=%q)", err, out)
 	}
@@ -58,7 +58,7 @@ func TestDeployCreateFromDirWithoutRunCommandStaysStatic(t *testing.T) {
 	})
 	dir := t.TempDir()
 	writeStaticSite(t, dir)
-	if _, err := run(t, "deploy", "create", "--dir", dir, "--name", "site"); err != nil {
+	if _, err := run(t, "deploy", "create", "--dir", dir, "--name", "site", "--no-wait"); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := f.find("POST", "/deployments/d3/drop/sessions/s1/complete")[0].Body["start_command"]; ok {
@@ -71,11 +71,11 @@ func TestDeployCreateFromDirWithoutRunCommandStaysStatic(t *testing.T) {
 func TestDeployCreateFromDirTypeDynamicNeedsRunCommand(t *testing.T) {
 	fakeRoutes(t, map[string]any{})
 	dir := t.TempDir()
-	if _, err := run(t, "deploy", "create", "--dir", dir, "--type", "dynamic"); err == nil ||
+	if _, err := run(t, "deploy", "create", "--dir", dir, "--type", "dynamic", "--no-wait"); err == nil ||
 		!strings.Contains(err.Error(), "needs --run-command") {
 		t.Fatalf("expected a --run-command usage error, got: %v", err)
 	}
-	if _, err := run(t, "deploy", "create", "--dir", dir, "--type", "docker_deploy"); err == nil ||
+	if _, err := run(t, "deploy", "create", "--dir", dir, "--type", "docker_deploy", "--no-wait"); err == nil ||
 		!strings.Contains(err.Error(), "--from-sandbox") {
 		t.Fatalf("expected a --from-sandbox usage error, got: %v", err)
 	}

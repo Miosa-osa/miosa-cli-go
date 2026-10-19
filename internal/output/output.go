@@ -38,6 +38,10 @@ func Default() *Printer {
 // Writer returns the underlying writer.
 func (p *Printer) Writer() io.Writer { return p.w }
 
+// JSONMode reports whether the caller asked for machine-readable output, so a
+// custom command can choose JSON over a table without re-reading the flag.
+func (p *Printer) JSONMode() bool { return p.format == FormatJSON }
+
 // JSON prints v as indented JSON inside one {"data": ...} envelope (see
 // Envelope), unconditionally.
 func (p *Printer) JSON(v interface{}) error {

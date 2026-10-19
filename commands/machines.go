@@ -153,7 +153,7 @@ Exits 0 when reached, non-zero on timeout or if the sandbox lands in the error s
 		},
 	}
 	cmd.Flags().StringVar(&until, "for", "ready", "State to wait for: ready, running, paused, destroyed")
-	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "Give up after this long")
+	timeoutVar(cmd.Flags(), &timeout, 3*time.Minute, "Give up after this long")
 	return cmd
 }
 

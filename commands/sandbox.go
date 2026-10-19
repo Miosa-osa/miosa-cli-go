@@ -33,9 +33,10 @@ A change that cannot apply live is not saved: resize says so and exits 5;
 
   miosa sandbox resources my-box
   miosa sandbox resize my-box --cpu 4
-  miosa sandbox resize my-box --memory 8192`,
+  miosa sandbox resize my-box --memory 8192
+  miosa sandbox update my-box --always-on`,
 	}
-	cmd.AddCommand(newSandboxResourcesCmd(), newSandboxResizeCmd())
+	cmd.AddCommand(newSandboxResourcesCmd(), newSandboxResizeCmd(), newSandboxUpdateCmd())
 	return cmd
 }
 
@@ -375,4 +376,66 @@ func capInt(caps map[string]any, key string) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+func newSandboxUpdateCmd() *cobra.Command {
+	var alwaysOn bool
+	cmd := &cobra.Command{
+		Use:   "update [sandbox] --always-on[=false]",
+		Short: "Change whether a sandbox is always-on",
+		Long: `Mark a sandbox always-on, or clear the mark.
+
+An always-on sandbox is never paused for inactivity, and the platform resumes
+it by itself after a host restart. --always-on is required.`,
+		Args:        cobra.MaximumNArgs(1),
+		Annotations: map[string]string{routeAnnotation: "PATCH /sandboxes/{0}"},
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			if len(args) > 0 {
+				return nil, cobra.ShellCompDirectiveNoFileComp
+			}
+			return completeKind(cmd, "sandbox", toComplete)
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runSandboxUpdate(cmd, args, alwaysOn)
+		},
+	}
+	cmd.Flags().BoolVar(&alwaysOn, "always-on", false, "Keep the sandbox running (--always-on=false clears it)")
+	return cmd
+}
+
+func runSandboxUpdate(cmd *cobra.Command, args []string, alwaysOn bool) error {
+	p := printerFor(cmd)
+	if !cmd.Flags().Changed("always-on") {
+		return usagef("nothing to change: pass --always-on or --always-on=false")
+	}
+	c, cfg, err := buildClient()
+	if err != nil {
+		return die(err)
+	}
+	ref := ""
+	if len(args) > 0 {
+		ref = args[0]
+	}
+	ref, err = requireSandbox(ref, cfg.CurrentSandbox)
+	if err != nil {
+		return usagef("%v", err)
+	}
+	id, err := c.API.ResolveSandbox(cmd.Context(), ref)
+	if err != nil {
+		return die(err)
+	}
+
+	var out json.RawMessage
+	if err := c.API.Patch(cmd.Context(), "/sandboxes/"+id, map[string]any{"always_on": alwaysOn}, &out); err != nil {
+		return die(err)
+	}
+	if isJSON() {
+		return p.JSON(out)
+	}
+	if alwaysOn {
+		p.Success("%s is always-on", ref)
+	} else {
+		p.Success("%s is no longer always-on", ref)
+	}
+	return nil
 }

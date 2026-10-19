@@ -33,6 +33,8 @@ type SandboxData struct {
 	EnvdReadyMS    *int              `json:"envd_ready_ms"`
 	TimeoutSec     int               `json:"timeout_sec"`
 	IdleTimeoutSec int               `json:"idle_timeout_sec"`
+	AlwaysOn       bool              `json:"always_on"`
+	LostReason     string            `json:"lost_reason,omitempty"`
 	PreviewURL     string            `json:"preview_url"`
 	Ready          bool              `json:"ready"`
 	ReadyAt        string            `json:"ready_at"`
@@ -65,6 +67,7 @@ type CreateSandboxInput struct {
 	DiskMB         int               `json:"disk_mb,omitempty"`
 	TimeoutSec     int               `json:"timeout_sec,omitempty"`
 	IdleTimeoutSec int               `json:"idle_timeout_sec,omitempty"`
+	AlwaysOn       bool              `json:"always_on,omitempty"`
 	WorkspaceID    string            `json:"workspace_id,omitempty"`
 	WorkspaceSlug  string            `json:"workspace_slug,omitempty"`
 	WorkspaceName  string            `json:"workspace_name,omitempty"`

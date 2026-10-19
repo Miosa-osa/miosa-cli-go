@@ -3,7 +3,9 @@ package commands
 import (
 	"fmt"
 	"net/url"
+	"sort"
 
+	"github.com/Miosa-osa/miosa-cli-go/internal/api"
 	"github.com/spf13/cobra"
 )
 
@@ -124,13 +126,25 @@ func runWorkspaceDelete(cmd *cobra.Command, args []string, yes bool) error {
 			return err
 		}
 	}
-	if err := c.Workspaces.Delete(cmd.Context(), firstNonEmpty(id, args[0])); err != nil {
+	target := firstNonEmpty(id, args[0])
+	resp, err := c.API.JSONAny(cmd.Context(), api.Request{Method: "DELETE", Path: "/workspaces/" + url.PathEscape(target)})
+	if err != nil {
 		return die(err)
 	}
+	// The server lists the leftover rows it let go of (deleted volumes, old cron jobs and so on).
+	released, _ := lookupPath(resp, "released").(map[string]any)
 
 	if isJSON() {
-		return p.JSON(map[string]string{"status": "deleted", "id": firstNonEmpty(id, args[0])})
+		return p.JSON(map[string]any{"status": "deleted", "id": target, "released": released})
 	}
 	p.Success("Deleted workspace %q", label)
+	keys := make([]string, 0, len(released))
+	for k := range released {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Fprintf(p.Writer(), "  released %v %s\n", released[k], k)
+	}
 	return nil
 }

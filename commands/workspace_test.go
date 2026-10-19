@@ -109,7 +109,7 @@ func workspaceDeleteServer(t *testing.T, deleted *bool) *httptest.Server {
 			w.Write([]byte(`{"data":{"id":"ws_001","name":"alpha","slug":"alpha"}}`))
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/workspaces/"):
 			*deleted = true
-			w.WriteHeader(http.StatusNoContent)
+			w.Write([]byte(`{"id":"ws_001","deleted":true,"released":{"volumes":2,"cron_jobs":1}}`))
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 		}
@@ -146,6 +146,10 @@ func TestWorkspaceDelete_WithYes(t *testing.T) {
 	}
 	if !deleted || !strings.Contains(out, "alpha") {
 		t.Errorf("expected the delete and a line naming the workspace, got %q", out)
+	}
+	// WO-08: what the server let go of is printed.
+	if !strings.Contains(out, "released 2 volumes") || !strings.Contains(out, "released 1 cron_jobs") {
+		t.Errorf("expected the purge list, got %q", out)
 	}
 }
 

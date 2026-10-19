@@ -44,7 +44,7 @@ func TestDeployCreateNewNameOverAStaleLinkCreatesAndRelinks(t *testing.T) {
 	f := staleLinkAPI(t)
 	dir := linkedToDeleted(t)
 
-	out, err := run(t, "deploy", "create", "--dir", dir, "--name", "fresh", "--yes")
+	out, err := run(t, "deploy", "create", "--dir", dir, "--name", "fresh", "--yes", "--no-wait")
 	if err != nil {
 		t.Fatalf("deploy create: %v\n%s", err, out)
 	}
@@ -69,7 +69,7 @@ func TestDeployCreateOverAStaleLinkAsksBeforeCreating(t *testing.T) {
 	f := staleLinkAPI(t)
 	dir := linkedToDeleted(t)
 
-	_, err := run(t, "deploy", "create", "--dir", dir, "--name", "fresh")
+	_, err := run(t, "deploy", "create", "--dir", dir, "--name", "fresh", "--no-wait")
 	if err == nil || !strings.Contains(err.Error(), "no longer exists") || !strings.Contains(err.Error(), "--yes") {
 		t.Fatalf("err = %v", err)
 	}

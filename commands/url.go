@@ -16,28 +16,8 @@ Example:
 		Args: cobra.MaximumNArgs(1),
 	}
 
-	updateCmd := &cobra.Command{
-		Use:   "update [name|id]",
-		Short: "Update URL visibility for a sandbox",
-		Long: `Update the visibility (auth policy) for a sandbox's public URL.
-
-  --auth public    Anyone with the URL can access
-  --auth tenant    Only authenticated tenant members can access
-  --auth key       Access requires a secret key in the URL`,
-		Args: cobra.MaximumNArgs(1),
-	}
-
-	var auth string
-	updateCmd.Flags().StringVar(&auth, "auth", "tenant", "Auth policy: public, tenant, or key")
-
-	cmd.AddCommand(updateCmd)
-
 	cmd.RunE = func(c *cobra.Command, args []string) error {
 		return runURL(c, args)
-	}
-
-	updateCmd.RunE = func(c *cobra.Command, args []string) error {
-		return runURLUpdate(c, args, auth)
 	}
 
 	return cmd
@@ -81,16 +61,4 @@ func runURL(cmd *cobra.Command, args []string) error {
 	}
 	p.Line("%s", sandboxURL)
 	return nil
-}
-
-func runURLUpdate(cmd *cobra.Command, args []string, auth string) error {
-	switch auth {
-	case "public", "tenant", "key":
-	default:
-		return usagef("invalid auth policy %q: must be public, tenant, or key", auth)
-	}
-	return die(sandboxNativeFeatureUnavailable(
-		"sandbox URL visibility updates",
-		"use 'miosa preview share <sandbox> <id>' to make a preview reachable by link and 'miosa preview unshare' to revoke it",
-	))
 }

@@ -144,3 +144,24 @@ func TestListCommand_401(t *testing.T) {
 		t.Fatal("expected error for 401 response")
 	}
 }
+
+func TestListCommand_ShowsWhyASandboxIsLost(t *testing.T) {
+	sandboxes := []miosa.SandboxData{
+		{ID: "lost1", Name: "gone", State: "lost", LostReason: "checkpoint unreadable", TemplateID: "miosa-sandbox", CreatedAt: "2026-04-18T00:00:00Z"},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(fakeSandboxListResponse(sandboxes))
+	}))
+	defer srv.Close()
+	cleanup := setupEnv(t, srv)
+	defer cleanup()
+
+	out, err := run(t, "list")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "lost: checkpoint unreadable") {
+		t.Errorf("list should show the lost reason, got: %s", out)
+	}
+}

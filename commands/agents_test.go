@@ -481,6 +481,13 @@ func TestAgentCRUDAndVersions(t *testing.T) {
 	if len(d) != 2 || d[0].Body["harness"] != "osa" || d[1].Body["harness"] != "codex" || d[1].Body["model"] != "gpt-6.1-sol" {
 		t.Fatalf("defaults = %+v", d)
 	}
+	if _, err := run(t, "agent", "defaults", "--workspace-id", "ws-1"); err != nil {
+		t.Fatal(err)
+	}
+	g := f.find("GET", "/agents/defaults")
+	if len(g) == 0 || !strings.Contains(g[len(g)-1].Query, "workspace_id=ws-1") {
+		t.Fatalf("defaults query = %+v", g)
+	}
 	// The old spelling still reaches connections.
 	if out, err := run(t, "agent", "credentials", "list"); err != nil || !strings.Contains(out, "No connections") {
 		t.Fatalf("legacy alias: %v\n%s", err, out)
@@ -579,6 +586,9 @@ func TestAgentTriggersApprovalsAuthority(t *testing.T) {
 	}
 	if a := f.find("POST", "/agents/"+boxID+"/triggers"); len(a) != 1 || a[0].Body["kind"] != "schedule" || a[0].Body["schedule"] != "0 9 * * *" || a[0].Body["input"] != "daily review" {
 		t.Fatalf("add = %+v", a)
+	}
+	if out, err := run(t, "agent", "triggers", "add", "reviewer", "--kind", "schedule", "--schedule", "0 9 * * *", "--json"); err != nil || !strings.Contains(out, `"t2"`) {
+		t.Fatalf("triggers add --json must print the created trigger: %v\n%s", err, out)
 	}
 	if _, err := run(t, "agent", "triggers", "add", "reviewer", "--kind", "cron"); err == nil || commands.ExitCode(err) != commands.ExitUsage {
 		t.Fatalf("bad kind: %v", err)

@@ -322,7 +322,7 @@ func dbCmd() *cobra.Command {
 
 func storageCmd() *cobra.Command {
 	b := idArg("bucket")
-	return group("storage", "Object storage buckets",
+	g := group("storage", "Object storage buckets",
 		"Buckets hold objects behind an S3-compatible endpoint. <bucket> is the bucket name or id.", []string{"bucket", "buckets"},
 		Op{
 			Use: "list", Aliases: []string{"ls"}, Short: "List buckets", Method: "GET", Path: "/storage/buckets",
@@ -337,10 +337,22 @@ func storageCmd() *cobra.Command {
 		Op{
 			Use: "objects <bucket>", Aliases: []string{"ls-objects"}, Short: "List objects", Method: "GET", Path: "/storage/buckets/{0}/objects", Args: []Arg{b},
 			Flags: []Flag{{Name: "prefix", Usage: "Only keys with this prefix"}, {Name: "limit", Short: "n", Type: "int", Usage: "How many"}},
+			Query: func(a []string, q url.Values) error {
+				if l := q.Get("limit"); l != "" {
+					q.Set("max_keys", l)
+				}
+				return nil
+			},
+			After: func(cmd *cobra.Command, resp any) error { objectRows(resp); return nil },
 			Cols:  []Col{{Head: "KEY", Path: "key"}, {Head: "SIZE", Path: "size", Fmt: "bytes"}, {Head: "MODIFIED", Path: "last_modified", Fmt: "age"}},
 		},
 		Op{Use: "rm <bucket>", Aliases: []string{"delete"}, Short: "Delete a bucket", Method: "DELETE", Path: "/storage/buckets/{0}", Args: []Arg{b}, Confirm: "Permanently delete bucket {0}?", Done: "Deleted {0}"},
+		notionImportOp(b),
 	)
+	g.AddCommand(storageObjectCmds()...)
+	extendStorageGet(g)
+	g.AddCommand(storageKeysCmd())
+	return g
 }
 
 func volumeCmd() *cobra.Command {
@@ -398,15 +410,21 @@ func scheduleCmd() *cobra.Command {
 	return group("schedule", "Scheduled jobs", "A schedule runs a command or function at set times. <job> is a name or id.", []string{"schedules", "schedule-jobs"},
 		Op{
 			Use: "list", Aliases: []string{"ls"}, Short: "List jobs", Method: "GET", Path: "/cron-jobs",
-			Cols: []Col{{Head: "NAME", Path: "name"}, {Head: "ID", Path: "id", Fmt: "short"}, {Head: "SCHEDULE", Path: "schedule"}, {Head: "STATUS", Path: "status"}, {Head: "NEXT", Path: "next_run_at"}},
+			Cols: []Col{{Head: "NAME", Path: "name"}, {Head: "ID", Path: "id", Fmt: "short"}, {Head: "SCHEDULE", Path: "schedule"}, {Head: "STATE", Path: "state"}, {Head: "LAST RUN", Path: "last_run_at", Fmt: "age"}, {Head: "LAST", Path: "last_status"}},
 		},
 		Op{Use: "get <job>", Aliases: []string{"show"}, Short: "Show a job", Method: "GET", Path: "/cron-jobs/{0}", Args: []Arg{j}},
 		Op{Use: "pause <job>", Short: "Pause a job", Method: "POST", Path: "/cron-jobs/{0}/pause", Args: []Arg{j}, Done: "Paused {0}"},
 		Op{Use: "resume <job>", Short: "Resume a job", Method: "POST", Path: "/cron-jobs/{0}/resume", Args: []Arg{j}, Done: "Resumed {0}"},
 		Op{Use: "run <job>", Aliases: []string{"run-now"}, Short: "Run a job now", Method: "POST", Path: "/cron-jobs/{0}/run-now", Args: []Arg{j}},
 		Op{
-			Use: "executions <job>", Short: "List past executions", Method: "GET", Path: "/cron-jobs/{0}/executions", Args: []Arg{j},
-			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "STATUS", Path: "status"}, {Head: "STARTED", Path: "started_at", Fmt: "age"}},
+			Use: "executions <job>", Aliases: []string{"runs"}, Short: "List past runs", Method: "GET", Path: "/cron-jobs/{0}/executions", Args: []Arg{j},
+			Cols: []Col{{Head: "ID", Path: "id"}, {Head: "STATE", Path: "state"}, {Head: "EXIT", Path: "exit_code"}, {Head: "MS", Path: "duration_ms"}, {Head: "STARTED", Path: "started_at", Fmt: "age"}},
+		},
+		Op{
+			Use: "output <job> <run>", Aliases: []string{"logs"}, Short: "Show a run's exit code and output", Method: "GET",
+			Path: "/cron-jobs/{0}/executions/{1}", Args: []Arg{j, idArg("run")},
+			Example: "miosa schedule runs nightly\nmiosa schedule output nightly <run-id>",
+			Human:   printScheduleRun,
 		},
 		Op{Use: "rm <job>", Aliases: []string{"delete"}, Short: "Delete a job", Method: "DELETE", Path: "/cron-jobs/{0}", Args: []Arg{j}, Confirm: "Delete job {0}?", Done: "Deleted {0}"},
 	)
@@ -639,6 +657,38 @@ func workspaceOps() []*cobra.Command {
 			Detail: []Col{{Head: "Name", Path: "name"}, {Head: "Slug", Path: "slug"}, {Head: "Id", Path: "id"}, {Head: "Default", Path: "is_default"}, {Head: "Description", Path: "description"}, {Head: "Created", Path: "created_at", Fmt: "age"}},
 		},
 		{
+			Use: "update <workspace>", Short: "Rename a workspace or change its description and labels",
+			Long: `Changes the name, slug or description of a workspace, and sets labels on it
+(--meta key=value, repeatable): the entity it belongs to, an owner, tags. The labels you
+give replace the ones it has, so pass all of them. Machines, deployments and data stay
+where they are.`,
+			Example: "  miosa workspace update acme --name 'Acme Inc' --description 'Client delivery'\n  miosa workspace update acme --meta entity=lunivate --meta owner=roberto",
+			Method:  "PATCH", Path: "/workspaces/{0}", Args: []Arg{w},
+			Flags: []Flag{
+				{Name: "name", Usage: "New name"},
+				{Name: "slug", Usage: "New slug"},
+				{Name: "description", Usage: "What the workspace is for"},
+				{Name: "meta", Type: "kv", Usage: "Label key=value (repeatable)", Field: "metadata"},
+			},
+			Done: "Updated {0}",
+		},
+		{
+			Use: "transfer <workspace>", Short: "Move machines to another workspace",
+			Long: `Moves sandboxes and computers from <workspace> to the workspace whose id you give with --to.
+Name each one with --id (repeatable). Deployments, databases and buckets cannot be
+moved yet; the command only moves what the platform accepts and reports how many moved.`,
+			Example: "  miosa workspace transfer old --to new --id <sandbox-id> --id <computer-id>",
+			Method:  "POST", Path: "/workspaces/{0}/transfer", Args: []Arg{w},
+			Flags: []Flag{
+				{Name: "to", Usage: "Id of the workspace to move them to (miosa workspace list)", Field: "target_workspace_id", Required: true},
+				{Name: "id", Type: "strings", Usage: "Id of a sandbox or computer to move (repeatable)", Field: "resource_ids", Required: true},
+			},
+			Human: func(cmd *cobra.Command, _ []string, resp any) error {
+				printerFor(cmd).Line("Moved %v of the machines you named", lookupPath(resp, "data.moved_count"))
+				return nil
+			},
+		},
+		{
 			Use: "stats <workspace>", Short: "Counts of machines, deployments and databases",
 			Method: "GET", Path: "/workspaces/{0}/stats", Args: []Arg{w},
 		},
@@ -714,6 +764,33 @@ func newWorkspaceUseCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// printScheduleRun shows one run: its state and exit code, then what it
+// printed. The runs list holds only the summary; the output is per run.
+func printScheduleRun(cmd *cobra.Command, _ []string, resp any) error {
+	run, _ := resp.(map[string]any)
+	if data, ok := run["data"].(map[string]any); ok {
+		run = data
+	}
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "state %v, exit %v, %v ms\n", run["state"], valueOr(run["exit_code"], "-"), valueOr(run["duration_ms"], "-"))
+	for _, stream := range []string{"stdout", "stderr"} {
+		if text, _ := run[stream].(string); text != "" {
+			fmt.Fprintf(out, "--- %s ---\n%s", stream, text)
+			if !strings.HasSuffix(text, "\n") {
+				fmt.Fprintln(out)
+			}
+		}
+	}
+	return nil
+}
+
+func valueOr(v any, fallback string) any {
+	if v == nil {
+		return fallback
+	}
+	return v
 }
 
 // legacyCronCmd keeps the old spelling working; the glossary calls these

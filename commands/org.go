@@ -53,6 +53,12 @@ one are locked to that organization and cannot bill another.`,
 	}
 	cmd.AddCommand(
 		&cobra.Command{
+			Use:   "limits",
+			Short: "Same as 'miosa limits': who pays and whether a create can start",
+			Args:  cobra.NoArgs,
+			RunE:  runLimits,
+		},
+		&cobra.Command{
 			Use:     "list",
 			Aliases: []string{"ls"},
 			Short:   "List the organizations you can bill",

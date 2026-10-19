@@ -597,3 +597,16 @@ func mustJSON(v interface{}) string {
 	b, _ := json.Marshal(v)
 	return string(b)
 }
+
+func TestInfoShowsLostReason(t *testing.T) {
+	newFakeAPI(t, func(c call) (int, string) {
+		return 200, `{"id":"sb1","name":"gone","state":"lost","lost_reason":"checkpoint unreadable"}`
+	})
+	out, err := run(t, "info", "sb1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "lost") || !strings.Contains(out, "checkpoint unreadable") {
+		t.Errorf("info should explain a lost sandbox:\n%s", out)
+	}
+}

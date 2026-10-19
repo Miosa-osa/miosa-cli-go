@@ -84,6 +84,7 @@ Regenerate with `make docs`.
 - [`miosa runtimes`](#miosa-runtimes) - Show the sandbox runtimes the platform offers
 - [`miosa sandbox`](#miosa-sandbox) - Inspect and resize a sandbox's vCPU and memory
 - [`miosa schedule`](#miosa-schedule) - Scheduled jobs
+- [`miosa secret`](#miosa-secret) - Organization and workspace secrets
 - [`miosa service-account`](#miosa-service-account) - Non-human accounts that own API keys for pipelines and programs
 - [`miosa snapshot`](#miosa-snapshot) - Browse, name, fork and delete snapshots of sandboxes and computers
 - [`miosa ssh`](#miosa-ssh) - Open an SSH session in a sandbox, or run a command over it
@@ -287,8 +288,12 @@ Flags:
 Show the workspace's defaults for new agents (harness, model).
 
 ```
-miosa agent defaults
+miosa agent defaults [flags]
 ```
+
+Flags:
+
+- `--workspace-id string` - Show this workspace's defaults.
 
 #### `miosa agent diff`
 
@@ -984,7 +989,7 @@ canceled.
 
 Flags:
 
-- `--timeout duration` - Give up after this long. (default `15m0s`)
+- `--timeout duration` - Give up after this long (seconds, or a duration like 3m). (default `15m0s`)
 
 ### `miosa billing`
 
@@ -2209,7 +2214,7 @@ miosa connections signin wait <signin-id> [flags]
 Flags:
 
 - `--external-user string` - Act for one of your end users (your own id for them).
-- `--timeout duration` - Give up after this long. (default `15m0s`)
+- `--timeout duration` - Give up after this long (seconds, or a duration like 3m). (default `15m0s`)
 
 #### `miosa connections test`
 
@@ -2416,6 +2421,7 @@ background once the sandbox is ready; watch it with 'miosa info'.
 
 Flags:
 
+- `--always-on` - Keep the sandbox running: no idle pause, and the platform resumes it after a host restart.
 - `--env string` - Environment the sandbox starts from (default: your default environment).
 - `--idle-timeout string` - Pause after this much inactivity: seconds, 15m, 1h.
 - `--meta stringArray` - Metadata, KEY=VALUE (repeatable).
@@ -2674,8 +2680,9 @@ Flags:
 - `--force` - Upload even when the files match the latest version.
 - `--name string` - Deployment name (default: the argument, the repo or the directory name).
 - `--no-promote` - Upload the version without making it live; prints the version to promote later.
-- `--wait` - Wait until the deployment is live, then print its URL.
-- `--wait-timeout duration` - How long --wait may take. (default `10m0s`)
+- `--no-wait` - Return as soon as the deployment is created instead of waiting until it is live.
+- `--wait` - Wait until the deployment is live (the default; kept for scripts).
+- `--wait-timeout duration` - How long to wait for the deployment to go live. (default `10m0s`)
 - `--yes` - Do not ask for confirmation.
 
 #### `miosa deploy builds`
@@ -2751,13 +2758,14 @@ Flags:
 - `--name string` - Deployment name (default: the argument, the repo or the directory name).
 - `--no-auto` - With --forge: do not build automatically on pushes to the branch.
 - `--no-promote` - Upload the version without making it live; prints the version to promote later.
+- `--no-wait` - Return as soon as the deployment is created instead of waiting until it is live.
 - `--port int` - The port the app serves on (--from-sandbox, or --dir with --run-command).
 - `--project string` - With --forge: the project to link the repository through (one repository per project).
 - `--root-directory string` - With --forge: the app's directory inside the repository.
 - `--run-command string` - Command the app starts with (makes the publish dynamic).
 - `--type string` - Runtime to publish as: static, dynamic or docker_deploy (default: static, or dynamic with --run-command).
-- `--wait` - Wait until the deployment is live, then print its URL.
-- `--wait-timeout duration` - How long --wait may take. (default `10m0s`)
+- `--wait` - Wait until the deployment is live (the default; kept for scripts).
+- `--wait-timeout duration` - How long to wait for the deployment to go live. (default `10m0s`)
 - `-y, --yes` - Do not ask for confirmation.
 
 #### `miosa deploy diff`
@@ -3233,8 +3241,9 @@ Flags:
 - `--env stringArray` - Environment variable KEY=VALUE (repeatable).
 - `--force` - Upload even when the files match the latest version.
 - `--no-promote` - Upload the version without making it live; prints the version to promote later.
-- `--wait` - Wait until the new version is live, then print its URL.
-- `--wait-timeout duration` - How long --wait may take. (default `10m0s`)
+- `--no-wait` - Return as soon as the version is uploaded instead of waiting until it is live.
+- `--wait` - Wait until the new version is live (the default; kept for scripts).
+- `--wait-timeout duration` - How long to wait for the version to go live. (default `10m0s`)
 
 #### `miosa deploy redeploy`
 
@@ -7400,6 +7409,14 @@ Flags:
 
 - `--role string` - Role to give: owner, admin or member. (default `member`)
 
+#### `miosa org limits`
+
+Same as 'miosa limits': who pays and whether a create can start.
+
+```
+miosa org limits
+```
+
 #### `miosa org list`
 
 List the organizations you can bill.
@@ -8269,6 +8286,7 @@ A change that cannot apply live is not saved: resize says so and exits 5;
   miosa sandbox resources my-box
   miosa sandbox resize my-box --cpu 4
   miosa sandbox resize my-box --memory 8192
+  miosa sandbox update my-box --always-on
 ```
 
 #### `miosa sandbox resize`
@@ -8317,6 +8335,23 @@ right now, up to what, and why not when they cannot.
 
 Takes a sandbox name, an id, or nothing for the current sandbox.
 
+#### `miosa sandbox update`
+
+Change whether a sandbox is always-on.
+
+```
+miosa sandbox update [sandbox] --always-on[=false] [flags]
+```
+
+Mark a sandbox always-on, or clear the mark.
+
+An always-on sandbox is never paused for inactivity, and the platform resumes
+it by itself after a host restart. --always-on is required.
+
+Flags:
+
+- `--always-on` - Keep the sandbox running (--always-on=false clears it).
+
 ### `miosa schedule`
 
 Scheduled jobs.
@@ -8331,11 +8366,13 @@ Aliases: `schedules`, `schedule-jobs`.
 
 #### `miosa schedule executions`
 
-List past executions.
+List past runs.
 
 ```
 miosa schedule executions <job>
 ```
+
+Aliases: `runs`.
 
 #### `miosa schedule get`
 
@@ -8356,6 +8393,23 @@ miosa schedule list
 ```
 
 Aliases: `ls`.
+
+#### `miosa schedule output`
+
+Show a run's exit code and output.
+
+```
+miosa schedule output <job> <run>
+```
+
+Aliases: `logs`.
+
+Examples:
+
+```
+miosa schedule runs nightly
+miosa schedule output nightly <run-id>
+```
 
 #### `miosa schedule pause`
 
@@ -8396,6 +8450,150 @@ miosa schedule run <job>
 ```
 
 Aliases: `run-now`.
+
+### `miosa secret`
+
+Organization and workspace secrets.
+
+```
+miosa secret
+```
+
+Secrets belong to the organization or to one workspace and are shared to
+workspaces explicitly.
+Lists show names, never values.
+
+```
+  miosa secret ls
+  miosa secret set GHL_TOKEN --value-from-file ./token
+  miosa secret share GHL_TOKEN --workspace staging
+  miosa secret reveal GHL_TOKEN
+```
+
+Aliases: `secrets`, `vault`.
+
+#### `miosa secret get`
+
+Show a secret's metadata and versions (never its value).
+
+```
+miosa secret get <id|name>
+```
+
+#### `miosa secret import`
+
+Load many secrets from a dotenv file.
+
+```
+miosa secret import --file <dotenv> [flags]
+```
+
+Load many names at once.
+Values are read from the file and never echoed; the
+command prints the names it set.
+
+Flags:
+
+- `--file string` - Dotenv file to read.
+- `--scope string` - Org or workspace. (default `org`)
+- `--workspace-id string` - Required with --scope workspace.
+
+#### `miosa secret list`
+
+List secrets (names and metadata, never values).
+
+```
+miosa secret list [flags]
+```
+
+Aliases: `ls`.
+
+Flags:
+
+- `--scope string` - Only this scope: org or workspace.
+- `--workspace-id string` - Only this workspace.
+
+#### `miosa secret reveal`
+
+Print a secret's value (owner or admin only; audited).
+
+```
+miosa secret reveal <id|name>
+```
+
+Print the current value.
+The server allows this only for an owner or admin
+acting as themselves, never for a machine, CI, sandbox or organization key, and
+writes an audit row every time.
+
+#### `miosa secret rm`
+
+Delete a secret and all of its versions.
+
+```
+miosa secret rm <id|name> [flags]
+```
+
+Aliases: `delete`.
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
+
+#### `miosa secret set`
+
+Create a secret, or rotate an existing one.
+
+```
+miosa secret set <name> [flags]
+```
+
+Create or rotate.
+A rotation adds a version and keeps the name, the scope,
+the shares and (unless --description is passed) the description.
+
+The value can come from --value, --value-from-file, or standard input when it is
+piped: printf %s "$SECRET" | miosa secret set NAME
+
+Flags:
+
+- `--description string` - What it is for.
+- `--scope string` - Org or workspace. (default `org`)
+- `--value string` - The value (prefer --value-from-file or stdin).
+- `--value-from-file string` - Read the value from a file.
+- `--workspace-id string` - Required with --scope workspace.
+
+#### `miosa secret share`
+
+Share a secret with workspaces.
+
+```
+miosa secret share <id|name> [flags]
+```
+
+Flags:
+
+- `--workspace stringSlice` - Workspace id to share with (repeatable).
+
+#### `miosa secret unshare`
+
+Stop sharing a secret with a workspace.
+
+```
+miosa secret unshare <id|name> [flags]
+```
+
+Flags:
+
+- `--workspace string` - Workspace id to stop sharing with.
+
+#### `miosa secret versions`
+
+List a secret's versions (numbers and dates, never values).
+
+```
+miosa secret versions <id|name>
+```
 
 ### `miosa service-account`
 
@@ -8813,13 +9011,107 @@ Flags:
 
 #### `miosa storage get`
 
-Show a bucket.
+Show a bucket, or download one of its objects.
 
 ```
-miosa storage get <bucket>
+miosa storage get <bucket> [key] [file]
 ```
+
+Download an object to a file (default: the key's base name).
+Use - to write to
+standard output.
+
+```
+  miosa storage get builds App.dmg
+  miosa storage get assets brand/logo.png -
+
+```
+With only a bucket, show the bucket.
 
 Aliases: `show`.
+
+#### `miosa storage import-notion`
+
+Turn a Notion export zip in a bucket into clean Markdown.
+
+```
+miosa storage import-notion <bucket> [flags]
+```
+
+Reads a Notion export zip (Settings, Export, Markdown and CSV) from a bucket
+and writes a clean Markdown tree back to the same bucket: Notion's 32 character
+ids are dropped from every name, database CSVs become tables that link to their
+row pages, and links between pages point at the new paths. manifest.json lists
+every file with its source path and Notion id.
+
+Upload the zip first (miosa storage put).
+Nothing is written when the zip is
+refused.
+Running it again rewrites the same files.
+
+Flags:
+
+- `--prefix string` - Where the tree goes (default notion/).
+- `--source string` - Key of the export zip in the bucket.
+
+Examples:
+
+```
+miosa storage import-notion docs --source exports/notion.zip
+  miosa storage import-notion docs --source exports/notion.zip --prefix wiki/
+```
+
+#### `miosa storage keys`
+
+S3 keys for a bucket.
+
+```
+miosa storage keys
+```
+
+Per-bucket keys for S3 clients (aws s3, SDKs).
+The secret is shown once, at creation.
+
+Aliases: `key`.
+
+##### `miosa storage keys create`
+
+Create an S3 key (the secret is shown once).
+
+```
+miosa storage keys create <bucket> [flags]
+```
+
+Flags:
+
+- `--expires-at string` - Expiry as an RFC 3339 time.
+- `--name string` - Label for the key. (default `cli`)
+- `--prefix string` - Only keys under this prefix.
+- `--read-write` - Allow writes and deletes (default: read only).
+
+##### `miosa storage keys list`
+
+List a bucket's keys (no secrets).
+
+```
+miosa storage keys list <bucket>
+```
+
+Aliases: `ls`.
+
+##### `miosa storage keys revoke`
+
+Revoke a key.
+
+```
+miosa storage keys revoke <bucket> <id> [flags]
+```
+
+Aliases: `rm`.
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
 
 #### `miosa storage list`
 
@@ -8846,6 +9138,50 @@ Flags:
 - `-n, --limit int` - How many.
 - `--prefix string` - Only keys with this prefix.
 
+#### `miosa storage presign`
+
+Make a temporary URL for one object.
+
+```
+miosa storage presign <bucket> <key> [flags]
+```
+
+Print a signed URL that reads (GET) or writes (PUT) one object without an API
+key, for up to 7 days.
+A private bucket refuses presigned URLs.
+
+```
+  miosa storage presign builds App.dmg --ttl 10m
+  miosa storage presign builds incoming.bin --method PUT
+```
+
+Flags:
+
+- `--method string` - GET to read, PUT to upload. (default `GET`)
+- `--ttl string` - How long the URL works: seconds or a duration (10m, 2h). (default `1h`)
+
+#### `miosa storage put`
+
+Upload a file to a bucket.
+
+```
+miosa storage put <bucket> <file> [key] [flags]
+```
+
+Upload a local file.
+The key defaults to the file name.
+Files over 256 MiB go up
+in 64 MiB parts automatically (the object appears only when every part is in).
+
+```
+  miosa storage put assets ./logo.png brand/logo.png
+  miosa storage put builds ./App.dmg
+```
+
+Flags:
+
+- `--content-type string` - Content type (default: from the file extension).
+
 #### `miosa storage rm`
 
 Delete a bucket.
@@ -8859,6 +9195,18 @@ Aliases: `delete`.
 Flags:
 
 - `-y, --yes` - Do not ask for confirmation.
+
+#### `miosa storage rm-object`
+
+Delete one object.
+
+```
+miosa storage rm-object <bucket> <key> [flags]
+```
+
+Flags:
+
+- `-y, --yes` - Accepted for scripts; deleting one object does not ask.
 
 ### `miosa tag`
 
@@ -9117,26 +9465,6 @@ Example:
   miosa url            # uses current sandbox
 ```
 
-#### `miosa url update`
-
-Update URL visibility for a sandbox.
-
-```
-miosa url update [name|id] [flags]
-```
-
-Update the visibility (auth policy) for a sandbox's public URL.
-
-```
-  --auth public    Anyone with the URL can access
-  --auth tenant    Only authenticated tenant members can access
-  --auth key       Access requires a secret key in the URL
-```
-
-Flags:
-
-- `--auth string` - Auth policy: public, tenant, or key. (default `tenant`)
-
 ### `miosa usage`
 
 Show runtime, time left and estimated cost.
@@ -9253,7 +9581,7 @@ Exits 0 when reached, non-zero on timeout or if the sandbox lands in the error s
 Flags:
 
 - `--for string` - State to wait for: ready, running, paused, destroyed. (default `ready`)
-- `--timeout duration` - Give up after this long. (default `3m0s`)
+- `--timeout duration` - Give up after this long (seconds, or a duration like 3m). (default `3m0s`)
 
 ### `miosa webhook`
 
@@ -9590,6 +9918,59 @@ Counts of machines, deployments and databases.
 
 ```
 miosa workspace stats <workspace>
+```
+
+#### `miosa workspace transfer`
+
+Move machines to another workspace.
+
+```
+miosa workspace transfer <workspace> [flags]
+```
+
+Moves sandboxes and computers from <workspace> to the workspace whose id you give with --to.
+Name each one with --id (repeatable).
+Deployments, databases and buckets cannot be
+moved yet; the command only moves what the platform accepts and reports how many moved.
+
+Flags:
+
+- `--id stringArray` - Id of a sandbox or computer to move (repeatable).
+- `--to string` - Id of the workspace to move them to (miosa workspace list).
+
+Examples:
+
+```
+miosa workspace transfer old --to new --id <sandbox-id> --id <computer-id>
+```
+
+#### `miosa workspace update`
+
+Rename a workspace or change its description and labels.
+
+```
+miosa workspace update <workspace> [flags]
+```
+
+Changes the name, slug or description of a workspace, and sets labels on it
+(--meta key=value, repeatable): the entity it belongs to, an owner, tags.
+The labels you
+give replace the ones it has, so pass all of them.
+Machines, deployments and data stay
+where they are.
+
+Flags:
+
+- `--description string` - What the workspace is for.
+- `--meta stringArray` - Label key=value (repeatable).
+- `--name string` - New name.
+- `--slug string` - New slug.
+
+Examples:
+
+```
+miosa workspace update acme --name 'Acme Inc' --description 'Client delivery'
+  miosa workspace update acme --meta entity=lunivate --meta owner=roberto
 ```
 
 #### `miosa workspace usage`

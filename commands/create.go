@@ -17,6 +17,7 @@ type createOptions struct {
 	waitTimeout time.Duration
 	ttl         string
 	idle        string
+	alwaysOn    bool
 	meta        []string
 }
 
@@ -72,6 +73,7 @@ background once the sandbox is ready; watch it with 'miosa info'.`,
 	cmd.Flags().DurationVar(&opts.waitTimeout, "wait-timeout", 3*time.Minute, "How long --wait may take")
 	cmd.Flags().StringVar(&opts.ttl, "ttl", "", "Time to live: seconds, 90m, 2h or 2d (default: the plan's)")
 	cmd.Flags().StringVar(&opts.idle, "idle-timeout", "", "Pause after this much inactivity: seconds, 15m, 1h")
+	cmd.Flags().BoolVar(&opts.alwaysOn, "always-on", false, "Keep the sandbox running: no idle pause, and the platform resumes it after a host restart")
 	cmd.Flags().StringArrayVar(&opts.meta, "meta", nil, "Metadata, KEY=VALUE (repeatable)")
 	cmd.Flags().StringVar(&template, "template", "miosa-sandbox", "Sandbox template, for example miosa-sandbox, nextjs, static-html, or fastapi-auth")
 	cmd.Flags().StringVar(&workspace, "workspace", "", "Workspace slug to assign the sandbox to")
@@ -143,6 +145,7 @@ func runCreate(cmd *cobra.Command, args []string, size, template, workspace, run
 		}
 		input.IdleTimeoutSec = n
 	}
+	input.AlwaysOn = opts.alwaysOn
 	if len(opts.meta) > 0 {
 		input.Metadata = map[string]string{}
 		for _, kv := range opts.meta {

@@ -40,14 +40,14 @@ func TestPushWithNoChangesUploadsNothingAndForceUploads(t *testing.T) {
 	dir := t.TempDir()
 	writeStaticSite(t, dir)
 
-	out, err := run(t, "deploy", "push", "my-site", "--dir", dir)
+	out, err := run(t, "deploy", "push", "my-site", "--dir", dir, "--no-wait")
 	if err != nil || !strings.Contains(out, "No changes since version 2") {
 		t.Fatalf("want the no-change line: %v\n%s", err, out)
 	}
 	if len(f.find("POST", "/deployments/my-site/drop/sessions")) != 0 {
 		t.Fatal("nothing may be uploaded")
 	}
-	if out, err := run(t, "deploy", "push", "my-site", "--dir", dir, "--force"); err != nil {
+	if out, err := run(t, "deploy", "push", "my-site", "--dir", dir, "--force", "--no-wait"); err != nil {
 		t.Fatalf("--force: %v\n%s", err, out)
 	}
 	if len(f.find("POST", "/deployments/my-site/drop/sessions")) != 1 {
@@ -57,7 +57,7 @@ func TestPushWithNoChangesUploadsNothingAndForceUploads(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<h1>changed</h1>"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := run(t, "deploy", "push", "my-site", "--dir", dir); err != nil {
+	if _, err := run(t, "deploy", "push", "my-site", "--dir", dir, "--no-wait"); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.find("POST", "/deployments/my-site/drop/sessions")) != 2 {
@@ -101,20 +101,20 @@ func TestDeployCreateForgeUpdateAndRedeployCommitSendTheRightBodies(t *testing.T
 		"PATCH /deployments/" + depID:              `{"data":{"id":"` + depID + `","name":"My App"}}`,
 		"POST /deployments/" + depID + "/redeploy": `{"data":{}}`,
 	})
-	if out, err := run(t, "deploy", "create", "--forge", "acme/site", "--branch", "main"); err != nil {
+	if out, err := run(t, "deploy", "create", "--forge", "acme/site", "--branch", "main", "--no-wait"); err != nil {
 		t.Fatalf("create --forge: %v\n%s", err, out)
 	}
 	c := f.find("POST", "/deployments")[0]
 	if c.Body["repo_provider"] != "forge" || c.Body["forge_repository"] != "acme/site" || c.Body["branch"] != "main" || c.Body["auto_deploy"] != true || c.Body["name"] != "site" {
 		t.Fatalf("create body = %+v", c.Body)
 	}
-	if out, err := run(t, "deploy", "create", "--forge", "acme/site", "--type", "static", "--root-directory", "public"); err != nil {
+	if out, err := run(t, "deploy", "create", "--forge", "acme/site", "--type", "static", "--root-directory", "public", "--no-wait"); err != nil {
 		t.Fatalf("create --forge --type static: %v\n%s", err, out)
 	}
 	if c := f.find("POST", "/deployments")[1]; c.Body["deployment_type"] != "static" || c.Body["root_directory"] != "public" {
 		t.Fatalf("--type and --root-directory must be sent with --forge: %+v", c.Body)
 	}
-	if _, err := run(t, "deploy", "create", "--forge", "acme/site", "--type", "docker_deploy"); err == nil {
+	if _, err := run(t, "deploy", "create", "--forge", "acme/site", "--type", "docker_deploy", "--no-wait"); err == nil {
 		t.Fatal("--type docker_deploy with --forge must refuse")
 	}
 	if out, err := run(t, "deploy", "update", "my-app", "--forge", "acme/site", "--no-auto"); err != nil {
@@ -154,5 +154,31 @@ func TestVersionsRmOnAVersionIDAloneFindsItsDeployment(t *testing.T) {
 	}
 	if _, err := run(t, "deploy", "versions", "rm", "3", "-y"); err == nil || !strings.Contains(err.Error(), "no deployment to work on") {
 		t.Fatalf("a version number needs a deployment: %v", err)
+	}
+}
+
+// optimal-qa parity audit (2026-10-16): `schedule executions` showed a blank
+// STATUS (the API field is state) and no way to see what a run printed.
+func TestScheduleRunsShowStateExitAndOutput(t *testing.T) {
+	row := `{"id":"r1","state":"failed","exit_code":3,"duration_ms":11,"started_at":"2026-10-16T12:54:38Z","stdout":"hello-from-cron\n","stderr":"to-stderr\n"}`
+	fakeRoutes(t, map[string]any{
+		"GET /cron-jobs/j1/executions":    `{"data":[` + row + `]}`,
+		"GET /cron-jobs/j1/executions/r1": `{"data":` + row + `}`,
+	})
+	out, err := run(t, "schedule", "runs", "j1")
+	if err != nil {
+		t.Fatalf("schedule runs: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "failed") || !strings.Contains(out, "3") {
+		t.Fatalf("runs must show state and exit code:\n%s", out)
+	}
+	out, err = run(t, "schedule", "output", "j1", "r1")
+	if err != nil {
+		t.Fatalf("schedule output: %v\n%s", err, out)
+	}
+	for _, want := range []string{"state failed, exit 3", "--- stdout ---\nhello-from-cron", "--- stderr ---\nto-stderr"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
 	}
 }

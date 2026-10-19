@@ -111,6 +111,7 @@ agents:read scope.`,
 		Op{
 			Use: "defaults", Short: "Show the workspace's defaults for new agents (harness, model)",
 			Method: "GET", Path: "/agents/defaults",
+			Flags: []Flag{{Name: "workspace-id", Usage: "Show this workspace's defaults", Field: "workspace_id"}},
 		},
 	)
 	// 'harnesses' lists; its subcommands change the defaults new agents start with.

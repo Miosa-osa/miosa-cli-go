@@ -56,7 +56,8 @@ type deployFlags struct {
 	buildCommand string
 	env          []string
 	domain       string
-	wait         bool
+	wait         bool // kept so existing scripts that pass --wait still parse; waiting is the default
+	noWait       bool
 	waitTimeout  time.Duration
 	yes          bool
 	noPromote    bool
@@ -77,8 +78,9 @@ func bindDeploySourceFlags(cmd *cobra.Command, f *deployFlags, createOnly bool) 
 	fs.StringArrayVar(&f.env, "env", nil, "Environment variable KEY=VALUE (repeatable)")
 	fs.StringVar(&f.domain, "domain", "", "Custom domain to attach (then add the DNS record it shows)")
 	fs.StringVar(&f.deployment, "deployment", "", "Push a new version to this existing deployment (id, name or hostname)")
-	fs.BoolVar(&f.wait, "wait", false, "Wait until the deployment is live, then print its URL")
-	fs.DurationVar(&f.waitTimeout, "wait-timeout", 10*time.Minute, "How long --wait may take")
+	fs.BoolVar(&f.wait, "wait", false, "Wait until the deployment is live (the default; kept for scripts)")
+	fs.BoolVar(&f.noWait, "no-wait", false, "Return as soon as the deployment is created instead of waiting until it is live")
+	fs.DurationVar(&f.waitTimeout, "wait-timeout", 10*time.Minute, "How long to wait for the deployment to go live")
 	fs.BoolVar(&f.noPromote, "no-promote", false, "Upload the version without making it live; prints the version to promote later")
 	fs.BoolVar(&f.force, "force", false, "Upload even when the files match the latest version")
 	if createOnly {
@@ -167,8 +169,9 @@ latest version uploads nothing; --force uploads anyway.`,
 	fs := cmd.Flags()
 	fs.StringVar(&f.dir, "dir", "", "Local directory to upload (default: the current directory)")
 	fs.StringArrayVar(&f.env, "env", nil, "Environment variable KEY=VALUE (repeatable)")
-	fs.BoolVar(&f.wait, "wait", false, "Wait until the new version is live, then print its URL")
-	fs.DurationVar(&f.waitTimeout, "wait-timeout", 10*time.Minute, "How long --wait may take")
+	fs.BoolVar(&f.wait, "wait", false, "Wait until the new version is live (the default; kept for scripts)")
+	fs.BoolVar(&f.noWait, "no-wait", false, "Return as soon as the version is uploaded instead of waiting until it is live")
+	fs.DurationVar(&f.waitTimeout, "wait-timeout", 10*time.Minute, "How long to wait for the version to go live")
 	fs.BoolVar(&f.noPromote, "no-promote", false, "Upload the version without making it live; prints the version to promote later")
 	fs.BoolVar(&f.force, "force", false, "Upload even when the files match the latest version")
 	return cmd
@@ -229,7 +232,7 @@ func runDeployCreate(cmd *cobra.Command, args []string, flags *deployFlags) erro
 	}
 
 	var httpTimeout time.Duration
-	if f.wait {
+	if f.shouldWait() {
 		httpTimeout = f.waitTimeout + 30*time.Second
 	}
 	c, _, err := buildClientTimeout(httpTimeout)
@@ -267,11 +270,13 @@ func runDeployCreate(cmd *cobra.Command, args []string, flags *deployFlags) erro
 		out.Domain = f.domain
 	}
 
-	if f.wait {
+	if f.shouldWait() && out.Promoted != nil && !*out.Promoted {
+		// An uploaded version that was not promoted never goes live: there is nothing to wait for.
+	} else if f.shouldWait() {
 		if !isJSON() {
 			p.Line("Waiting for %s to go live...", orDefault(out.Name, out.ID))
 		}
-		state, url, err := pollDeployment(cmd.Context(), c, out.ID, f.waitTimeout)
+		state, url, err := pollDeployment(cmd.Context(), c, out.ID, f.waitTimeout, phasePrinter(p))
 		out.State = state
 		if url != "" {
 			out.URL = url
@@ -283,6 +288,11 @@ func runDeployCreate(cmd *cobra.Command, args []string, flags *deployFlags) erro
 
 	return renderDeploy(p, out)
 }
+
+// shouldWait is whether the command blocks until the deployment is live. It does by default: publishing takes
+// time (a build, a runtime, the route, the HTTPS certificate), and returning earlier would hand back a URL that
+// does not work yet. --no-wait skips it, and a version uploaded with --no-promote never goes live.
+func (f *deployFlags) shouldWait() bool { return !f.noWait && !f.noPromote }
 
 // deployOutcome is the shape the command prints, whatever the source.
 type deployOutcome struct {
@@ -310,6 +320,8 @@ type deployResponse struct {
 	Slug      string `json:"slug"`
 	State     string `json:"state"`
 	PublicURL string `json:"public_url"`
+	// Publish is how far the current publish has got; nil from a server that predates the phases.
+	Publish *publishStatus `json:"publish"`
 }
 
 // ─── source: sandbox ──────────────────────────────────────────────────────────
@@ -318,7 +330,10 @@ type sandboxDeployResponse struct {
 	DeploymentID string `json:"deployment_id"`
 	URL          string `json:"url"`
 	State        string `json:"state"`
-	Data         struct {
+	// EnvApplied is true when the server stored the env sent with the publish
+	// (it froze into the first release). An older server leaves it false.
+	EnvApplied bool `json:"env_applied"`
+	Data       struct {
 		Deployment deployResponse `json:"deployment"`
 		URL        string         `json:"url"`
 	} `json:"data"`
@@ -352,6 +367,11 @@ func deployFromSandbox(ctx context.Context, c *client.Client, p *output.Printer,
 	if f.domain != "" {
 		body["domain"] = f.domain
 	}
+	// The env goes with the publish so the first release carries it; setting it
+	// afterwards cut a second release (QA 2026-10-16).
+	if len(env) > 0 {
+		body["env"] = env
+	}
 	if !isJSON() {
 		p.Line("Publishing %s...", f.fromSandbox)
 	}
@@ -372,7 +392,8 @@ func deployFromSandbox(ctx context.Context, c *client.Client, p *output.Printer,
 	if out.ID == "" {
 		return nil, fmt.Errorf("the server accepted the publish but returned no deployment id")
 	}
-	if len(env) > 0 {
+	if len(env) > 0 && !resp.EnvApplied {
+		// A server that predates env on the publish ignored it: set it as before.
 		if err := setDeploymentEnv(ctx, c, out.ID, env); err != nil {
 			return nil, err
 		}
@@ -684,12 +705,92 @@ func addDeploymentDomain(ctx context.Context, c *client.Client, id, hostname str
 	return c.API.Post(ctx, "/deployments/"+id+"/domains", map[string]any{"hostname": hostname}, nil)
 }
 
-// pollDeployment waits until a deployment is running (live) or failed and
-// returns its final state and public URL.
-func pollDeployment(ctx context.Context, c *client.Client, id string, timeout time.Duration) (string, string, error) {
+// publishPhase and publishStatus are the `publish` object of GET /deployments/:id: the real phases between a
+// build starting and the app answering over verified HTTPS.
+type publishPhase struct {
+	Name       string `json:"name"`
+	State      string `json:"state"`
+	StartedAt  string `json:"started_at"`
+	FinishedAt string `json:"finished_at"`
+}
+
+type publishStatus struct {
+	AttemptID  string         `json:"attempt_id"`
+	Status     string         `json:"status"`
+	Phase      string         `json:"phase"`
+	Phases     []publishPhase `json:"phases"`
+	WaitReason string         `json:"wait_reason"`
+	Failed     *struct {
+		Phase  string `json:"phase"`
+		Reason string `json:"reason"`
+	} `json:"failed"`
+}
+
+// phaseLabels are what each phase is called on the terminal.
+var phaseLabels = map[string]string{
+	"build":       "build",
+	"runtime":     "runtime started",
+	"route":       "route published",
+	"certificate": "HTTPS certificate",
+	"reachable":   "reachable",
+	"live":        "live",
+}
+
+// phasePrinter prints each phase the moment it finishes, with how long it took, and the wait reason when it
+// changes. Nothing is printed in JSON mode, which only wants the final result.
+func phasePrinter(p *output.Printer) func(prev, cur *publishStatus, elapsed time.Duration) {
+	return func(prev, cur *publishStatus, elapsed time.Duration) {
+		if isJSON() || cur == nil {
+			return
+		}
+		done := map[string]string{}
+		if prev != nil {
+			for _, ph := range prev.Phases {
+				done[ph.Name] = ph.State
+			}
+		}
+		for _, ph := range cur.Phases {
+			if ph.State == done[ph.Name] || (ph.State != "done" && ph.State != "skipped" && ph.State != "failed") {
+				continue
+			}
+			label := phaseLabels[ph.Name]
+			switch ph.State {
+			case "done":
+				p.Line("  %-18s done      %s", label, phaseTook(ph))
+			case "skipped":
+				p.Line("  %-18s skipped", label)
+			case "failed":
+				p.Line("  %-18s FAILED    %s", label, phaseTook(ph))
+			}
+		}
+		if cur.WaitReason != "" && (prev == nil || prev.WaitReason != cur.WaitReason) {
+			p.Line("  ... %s (%s)", cur.WaitReason, elapsed.Round(time.Second))
+		}
+	}
+}
+
+// phaseTook is how long a phase ran, "-" when its timestamps are not both known.
+func phaseTook(ph publishPhase) string {
+	start, err1 := time.Parse(time.RFC3339Nano, ph.StartedAt)
+	end, err2 := time.Parse(time.RFC3339Nano, ph.FinishedAt)
+	if err1 != nil || err2 != nil || end.Before(start) {
+		return "-"
+	}
+	return end.Sub(start).Round(100 * time.Millisecond).String()
+}
+
+// pollDeployment waits until a deployment is live and returns its final state and public URL.
+//
+// "Live" is the server's word: `publish.status == "live"` is set only after the control plane saw the app answer
+// over verified HTTPS. A server that does not report `publish` yet (older than the phases) is judged by its
+// state, as before. A failed publish returns an error naming the phase and the reason, so the command exits
+// non-zero. onPhase, when set, is called after every poll with the previous and the current status.
+func pollDeployment(ctx context.Context, c *client.Client, id string, timeout time.Duration, onPhase ...func(prev, cur *publishStatus, elapsed time.Duration)) (string, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	started := time.Now()
 	var last deployResponse
+	var prev *publishStatus
 	for {
 		var resp struct {
 			Data deployResponse `json:"data"`
@@ -698,15 +799,37 @@ func pollDeployment(ctx context.Context, c *client.Client, id string, timeout ti
 			return last.State, last.PublicURL, err
 		}
 		last = resp.Data
-		switch last.State {
-		case "running":
-			return last.State, last.PublicURL, nil
-		case "failed":
-			return last.State, last.PublicURL, fmt.Errorf("the deployment is in the failed state; run 'miosa deploy logs %s' to see why", orDefault(last.Name, id))
+		for _, fn := range onPhase {
+			fn(prev, last.Publish, time.Since(started))
+		}
+		prev = last.Publish
+
+		if pub := last.Publish; pub != nil {
+			switch pub.Status {
+			case "live":
+				return last.State, last.PublicURL, nil
+			case "failed":
+				reason, phase := "unknown reason", "publish"
+				if pub.Failed != nil {
+					reason, phase = pub.Failed.Reason, pub.Failed.Phase
+				}
+				return last.State, last.PublicURL, fmt.Errorf("publishing failed at %s: %s (run 'miosa deploy logs %s' for the build and app output)", phaseLabels[phase], reason, orDefault(last.Name, id))
+			}
+		} else {
+			switch last.State {
+			case "running":
+				return last.State, last.PublicURL, nil
+			case "failed":
+				return last.State, last.PublicURL, fmt.Errorf("the deployment is in the failed state; run 'miosa deploy logs %s' to see why", orDefault(last.Name, id))
+			}
 		}
 		select {
 		case <-ctx.Done():
-			return last.State, last.PublicURL, fmt.Errorf("timed out after %s waiting for the deployment to go live (last state: %s)", timeout, orDash(last.State))
+			waiting := ""
+			if last.Publish != nil && last.Publish.WaitReason != "" {
+				waiting = ", " + last.Publish.WaitReason
+			}
+			return last.State, last.PublicURL, fmt.Errorf("timed out after %s waiting for the deployment to go live (last state: %s%s)", timeout, orDash(last.State), waiting)
 		case <-time.After(pollEvery):
 		}
 	}

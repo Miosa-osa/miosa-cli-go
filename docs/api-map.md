@@ -86,6 +86,7 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa cron executions` | GET | `/cron-jobs/{0}/executions` |
 | `miosa cron get` | GET | `/cron-jobs/{0}` |
 | `miosa cron list` | GET | `/cron-jobs` |
+| `miosa cron output` | GET | `/cron-jobs/{0}/executions/{1}` |
 | `miosa cron pause` | POST | `/cron-jobs/{0}/pause` |
 | `miosa cron resume` | POST | `/cron-jobs/{0}/resume` |
 | `miosa cron rm` | DELETE | `/cron-jobs/{0}` |
@@ -323,9 +324,11 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa runtimes list` | GET | `/sandboxes/runtimes` |
 | `miosa sandbox resize` | PATCH | `/sandboxes/{0}/resources` |
 | `miosa sandbox resources` | GET | `/sandboxes/{0}/resources` |
+| `miosa sandbox update` | PATCH | `/sandboxes/{0}` |
 | `miosa schedule executions` | GET | `/cron-jobs/{0}/executions` |
 | `miosa schedule get` | GET | `/cron-jobs/{0}` |
 | `miosa schedule list` | GET | `/cron-jobs` |
+| `miosa schedule output` | GET | `/cron-jobs/{0}/executions/{1}` |
 | `miosa schedule pause` | POST | `/cron-jobs/{0}/pause` |
 | `miosa schedule resume` | POST | `/cron-jobs/{0}/resume` |
 | `miosa schedule rm` | DELETE | `/cron-jobs/{0}` |
@@ -335,14 +338,13 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa service-account new` | POST | `/service-accounts` |
 | `miosa service-account rm` | DELETE | `/service-accounts/{0}` |
 | `miosa service-account update` | PATCH | `/service-accounts/{0}` |
-| `miosa services create` | POST | `/sandboxes/{0}/services` |
-| `miosa services get` | GET | `/sandboxes/{0}/services/{1}` |
-| `miosa services list` | GET | `/sandboxes/{0}/services` |
-| `miosa services logs` | GET | `/sandboxes/{0}/services/{1}/logs` |
-| `miosa services restart` | POST | `/sandboxes/{0}/services/{1}/restart` |
 | `miosa stop` | POST | `/sandboxes/{0}/stop` |
 | `miosa storage create` | POST | `/storage/buckets` |
 | `miosa storage get` | GET | `/storage/buckets/{0}` |
+| `miosa storage import-notion` | POST | `/storage/buckets/{0}/imports/notion` |
+| `miosa storage keys create` | POST | `/storage/buckets/{0}/credentials` |
+| `miosa storage keys list` | GET | `/storage/buckets/{0}/credentials` |
+| `miosa storage keys revoke` | DELETE | `/storage/buckets/{0}/credentials/{1}` |
 | `miosa storage list` | GET | `/storage/buckets` |
 | `miosa storage objects` | GET | `/storage/buckets/{0}/objects` |
 | `miosa storage rm` | DELETE | `/storage/buckets/{0}` |
@@ -386,4 +388,6 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa workspace inventory` | GET | `/workspaces/{0}/inventory` |
 | `miosa workspace members` | GET | `/workspaces/{0}/members` |
 | `miosa workspace stats` | GET | `/workspaces/{0}/stats` |
+| `miosa workspace transfer` | POST | `/workspaces/{0}/transfer` |
+| `miosa workspace update` | PATCH | `/workspaces/{0}` |
 | `miosa workspace usage` | GET | `/workspaces/{0}/usage` |

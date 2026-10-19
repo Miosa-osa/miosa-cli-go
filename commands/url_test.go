@@ -65,47 +65,17 @@ func TestURLCommand_JSONOutput(t *testing.T) {
 	}
 }
 
-func TestURLUpdate_ValidAuthDoesNotFallbackToComputers(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/computers/") {
-			t.Fatalf("url update must not call computer API: %s", r.URL.Path)
-		}
-		http.Error(w, "not found", http.StatusNotFound)
-	}))
-	defer srv.Close()
-	cleanup := setupEnv(t, srv)
-	defer cleanup()
-
-	_, err := run(t, "url", "update", "abc123", "--auth", "public")
-	if err == nil {
-		t.Fatal("expected unsupported native sandbox visibility error")
-	}
-}
-
-func TestURLUpdate_InvalidAuth(t *testing.T) {
+func TestURLHasNoUpdateSubcommand(t *testing.T) {
+	// 'url update' used to ship and answer "not available yet". Changing a
+	// preview's visibility is 'preview share' / 'preview unshare'.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("server should not be called for invalid auth policy")
+		t.Error("no request may be made")
 	}))
 	defer srv.Close()
 	cleanup := setupEnv(t, srv)
 	defer cleanup()
 
-	_, err := run(t, "url", "update", "abc123", "--auth", "badpolicy")
-	if err == nil {
-		t.Fatal("expected error for invalid auth policy")
-	}
-}
-
-func TestURLCommand_NoSandbox(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("server should not be called when no sandbox specified")
-	}))
-	defer srv.Close()
-	cleanup := setupEnv(t, srv)
-	defer cleanup()
-
-	_, err := run(t, "url")
-	if err == nil {
-		t.Fatal("expected error when no sandbox specified")
+	if _, err := run(t, "url", "update", "abc123", "--auth", "public"); err == nil {
+		t.Fatal("url update must not exist")
 	}
 }

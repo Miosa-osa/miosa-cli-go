@@ -3,7 +3,6 @@ package commands
 import (
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -18,18 +17,14 @@ import (
 //
 // It was called `miosa services` (also service, svc) until 2.3.13. That name is
 // moving to project Services (tasks/specs/cli-noun-plan-services-2026-10-16.md):
-// 2.3.13 keeps the old names working with a stderr notice naming the date they
-// stop (2026-10-31, at least 14 days so scripts in CI can move); the first
-// release on or after it refuses them with the rewritten command, and the one
-// after gives `service` to project Services.
+// 2.3.13 kept the old names working with a stderr notice, 2.3.14 refuses them
+// with the rewritten command, and the next minor gives `service` to project
+// Services.
 
 var serviceCols = []Col{
 	{Head: "NAME", Path: "name"}, {Head: "STATUS", Path: "status"}, {Head: "PID", Path: "pid"},
 	{Head: "COMMAND", Path: "command"}, {Head: "ID", Path: "id", Fmt: "short"},
 }
-
-// noDeprecationNoticeEnv silences the notice for CI that fails on stderr.
-const noDeprecationNoticeEnv = "MIOSA_NO_DEPRECATION_NOTICE"
 
 func newDaemonCmd() *cobra.Command {
 	return daemonGroup("daemon", "daemon", nil, `A daemon is a named background process in a sandbox that outlives your session: its
@@ -42,16 +37,23 @@ everywhere (the current one is used).
   miosa daemon restart web`)
 }
 
-// newServicesCmd is the pre-2.3.13 name: hidden, same requests and output, and
-// a stderr notice naming the command to use instead.
+// newServicesCmd is the old name, refused since 2.3.14 (step two of the noun
+// plan): every form exits 2 and prints the daemon command to run instead, so a
+// script fails loudly rather than reaching project Services when `service`
+// takes that meaning. Flags are not parsed, so any old command line lands here.
 func newServicesCmd() *cobra.Command {
-	cmd := daemonGroup("services", "service", []string{"service", "svc"}, `Renamed to 'miosa daemon'. This name keeps working, with a notice on standard
-error, and will stop working on or after 2026-10-31. Set MIOSA_NO_DEPRECATION_NOTICE=1 to
-silence the notice.`)
-	cmd.Hidden = true
-	cmd.Short = "Renamed to 'miosa daemon'"
-	warnRenamed(cmd)
-	return cmd
+	return &cobra.Command{
+		Use:                "services",
+		Aliases:            []string{"service", "svc"},
+		Short:              "Renamed to 'miosa daemon'",
+		Hidden:             true,
+		DisableFlagParsing: true,
+		Args:               cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return usagef("'miosa %s' was renamed to 'miosa daemon'; run: %s",
+				cmd.CalledAs(), strings.Join(append([]string{"miosa", "daemon"}, args...), " "))
+		},
+	}
 }
 
 // daemonGroup builds the command under `use`; noun is the word its messages use.
@@ -92,25 +94,6 @@ func daemonGroup(use, noun string, aliases []string, long string) *cobra.Command
 	)
 	cmd.AddCommand(newServicesStopCmd(use, noun, "stop", "Stop a "+noun, []string{"delete", "rm"}))
 	return cmd
-}
-
-// warnRenamed prints, before every subcommand of a renamed group runs, the
-// command to use instead. Standard error only: stdout and --json are unchanged.
-func warnRenamed(group *cobra.Command) {
-	for _, sub := range group.Commands() {
-		run := sub.RunE
-		if run == nil {
-			continue
-		}
-		sub.RunE = func(cmd *cobra.Command, args []string) error {
-			if os.Getenv(noDeprecationNoticeEnv) == "" {
-				fmt.Fprintf(cmd.ErrOrStderr(),
-					"miosa: 'miosa %s' is now 'miosa daemon'; use 'miosa daemon %s'. The old name will stop working on or after 2026-10-31.\n",
-					group.Name(), strings.Join(append([]string{cmd.Name()}, args...), " "))
-			}
-			return run(cmd, args)
-		}
-	}
 }
 
 var serviceDetail = []Col{

@@ -261,3 +261,47 @@ func TestSandboxResources_JSON(t *testing.T) {
 		t.Errorf("resources.cpu = %v, want 2", res["cpu"])
 	}
 }
+
+func TestSandboxUpdate_RequiresAFlag(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("update must not call the API without a field to change: %s %s", r.Method, r.URL.Path)
+		http.Error(w, "unexpected", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	cleanup := setupEnv(t, srv)
+	defer cleanup()
+
+	_, err := run(t, "sandbox", "update", sandboxResizeID)
+	if err == nil || commands.ExitCode(err) != commands.ExitUsage {
+		t.Fatalf("want a usage error, got %v", err)
+	}
+}
+
+func TestSandboxUpdate_SendsAlwaysOn(t *testing.T) {
+	for _, tc := range []struct {
+		arg  string
+		want bool
+	}{{"--always-on", true}, {"--always-on=false", false}} {
+		var gotMethod, gotPath string
+		var gotBody map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotMethod, gotPath = r.Method, r.URL.Path
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"` + sandboxResizeID + `"}`))
+		}))
+		cleanup := setupEnv(t, srv)
+
+		if _, err := run(t, "sandbox", "update", sandboxResizeID, tc.arg); err != nil {
+			t.Fatalf("%s: unexpected error: %v", tc.arg, err)
+		}
+		if gotMethod != http.MethodPatch || gotPath != "/sandboxes/"+sandboxResizeID {
+			t.Fatalf("%s: request %s %s", tc.arg, gotMethod, gotPath)
+		}
+		if gotBody["always_on"] != tc.want {
+			t.Errorf("%s: always_on = %v, want %v", tc.arg, gotBody["always_on"], tc.want)
+		}
+		cleanup()
+		srv.Close()
+	}
+}

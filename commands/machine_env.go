@@ -133,6 +133,9 @@ Example:
 			p.Line("%s (%s)", sb.Name, sb.ID)
 			p.Line("  Kind:     sandbox")
 			p.Line("  Status:   %s", sb.State)
+			if sb.LostReason != "" {
+				p.Line("  Lost:     %s (it cannot be brought back; destroy it to clean up)", sb.LostReason)
+			}
 			p.Line("  Size:     %s", sb.Size)
 			p.Line("  Template: %s", sb.TemplateID)
 			printMachineEnv(p, sb.MachineEnvironment)

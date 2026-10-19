@@ -402,7 +402,7 @@ func newSigninWaitCmd() *cobra.Command {
 		},
 	}
 	addScopeFlags(cmd, &scope, false)
-	cmd.Flags().DurationVar(&timeout, "timeout", 15*time.Minute, "Give up after this long")
+	timeoutVar(cmd.Flags(), &timeout, 15*time.Minute, "Give up after this long")
 	return cmd
 }
 

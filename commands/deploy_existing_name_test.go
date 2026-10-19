@@ -50,7 +50,7 @@ func TestDeployUnlinkedFolderWithAnExistingNamePushesInsteadOfDuplicating(t *tes
 	dir := t.TempDir()
 	writeStaticSite(t, dir)
 
-	out, err := run(t, "deploy", "create", "--dir", dir, "--name", "taken-site")
+	out, err := run(t, "deploy", "create", "--dir", dir, "--name", "taken-site", "--no-wait")
 	if err != nil {
 		t.Fatalf("deploy: %v (out=%q)", err, out)
 	}
@@ -75,7 +75,7 @@ func TestDeployPushWritesTheFolderLink(t *testing.T) {
 	dir := t.TempDir()
 	writeStaticSite(t, dir)
 
-	if out, err := run(t, "deploy", "push", "my-site", "--dir", dir); err != nil {
+	if out, err := run(t, "deploy", "push", "my-site", "--dir", dir, "--no-wait"); err != nil {
 		t.Fatalf("deploy push: %v (out=%q)", err, out)
 	}
 	if got := readLink(t, dir)["deployment_id"]; got != "d3" {
@@ -86,7 +86,7 @@ func TestDeployPushWritesTheFolderLink(t *testing.T) {
 // A repository deploy under an existing name is refused, not duplicated.
 func TestDeployGitWithAnExistingNameRefuses(t *testing.T) {
 	f := existingNameAPI(t)
-	out, err := run(t, "deploy", "create", "--git", "https://github.com/acme/taken-site", "--name", "taken-site")
+	out, err := run(t, "deploy", "create", "--git", "https://github.com/acme/taken-site", "--name", "taken-site", "--no-wait")
 	if err == nil || !strings.Contains(err.Error(), "redeploy") {
 		t.Fatalf("must refuse and point at redeploy: %v (out=%q)", err, out)
 	}

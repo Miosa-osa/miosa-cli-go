@@ -35,10 +35,10 @@ func TestBareDeployInAGitFolderNamedLikeAnUploadDeploymentPushesToIt(t *testing.
 	}
 	chdir(t, dir)
 
-	if _, err := run(t, "deploy"); err == nil || !strings.Contains(err.Error(), "already exists") || !strings.Contains(err.Error(), "--yes") {
+	if _, err := run(t, "deploy", "--no-wait"); err == nil || !strings.Contains(err.Error(), "already exists") || !strings.Contains(err.Error(), "--yes") {
 		t.Fatalf("off a terminal it must name the existing deployment and ask for --yes: %v", err)
 	}
-	out, err := run(t, "deploy", "--yes")
+	out, err := run(t, "deploy", "--yes", "--no-wait")
 	if err != nil {
 		t.Fatalf("deploy --yes: %v (out=%q)", err, out)
 	}
@@ -65,7 +65,7 @@ func TestPushWithADirInsideTheProjectLinksTheProjectFolder(t *testing.T) {
 	writeStaticSite(t, dist)
 	chdir(t, project)
 
-	if out, err := run(t, "deploy", "push", "my-site", "--dir", "dist"); err != nil {
+	if out, err := run(t, "deploy", "push", "my-site", "--dir", "dist", "--no-wait"); err != nil {
 		t.Fatalf("push: %v (out=%q)", err, out)
 	}
 	if got := readLink(t, project)["deployment_id"]; got != "d3" {
@@ -147,7 +147,7 @@ func TestPushToAnExistingDeploymentPrintsItsName(t *testing.T) {
 	}
 	writeStaticSite(t, dir)
 	chdir(t, dir)
-	out, err := run(t, "deploy", "--yes")
+	out, err := run(t, "deploy", "--yes", "--no-wait")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}

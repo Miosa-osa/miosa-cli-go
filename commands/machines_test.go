@@ -276,7 +276,7 @@ func TestListFiltersAndPagination(t *testing.T) {
 	if q.Get("state") != "running" || q.Get("template_id") != "t" || q.Get("search") != "on" || q.Get("tags[env]") != "prod" || q.Get("limit") != "1" {
 		t.Fatalf("query = %v", q)
 	}
-	if !strings.Contains(out, "Showing 1 of 2") || !strings.Contains(out, "--page 2") {
+	if !strings.Contains(out, "showing 1 of 2, use --all") || !strings.Contains(out, "--page 2") {
 		t.Fatalf("pagination hint missing:\n%s", out)
 	}
 
@@ -347,6 +347,28 @@ func TestCreateWaitsAndSendsOptions(t *testing.T) {
 	}
 	if _, err := run(t, "create", "x", "--ttl", "never"); err == nil || commands.ExitCode(err) != commands.ExitUsage {
 		t.Fatalf("bad ttl: %v", err)
+	}
+}
+
+func TestCreateAlwaysOnIsSentOnlyWhenAsked(t *testing.T) {
+	f := newFakeAPI(t, func(c call) (int, string) {
+		if c.is("POST", "/sandboxes") {
+			return 201, `{"id":"` + boxID + `","name":"web","state":"running","ready":true,"always_on":true}`
+		}
+		return 404, `{}`
+	})
+	if _, err := run(t, "create", "plain"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(t, "create", "keeper", "--always-on"); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.find("POST", "/sandboxes")
+	if _, sent := calls[0].Body["always_on"]; sent {
+		t.Errorf("always_on must be omitted by default: %v", calls[0].Body)
+	}
+	if calls[1].Body["always_on"] != true {
+		t.Errorf("--always-on must send always_on=true: %v", calls[1].Body)
 	}
 }
 
@@ -540,37 +562,27 @@ func TestDaemonCommands(t *testing.T) {
 	}
 }
 
-// 2.3.13 renamed `services` to `daemon` (tasks/specs/cli-noun-plan-services-2026-10-16.md).
-// The old names keep working for one release: same requests, same stdout and
-// --json, and one notice on standard error naming the command to use.
-func TestServicesIsARenamedAliasOfDaemon(t *testing.T) {
-	daemonRoutes(t)
-	want, _, err := runSplit(t, "daemon", "list", "my-box", "--json")
-	if err != nil {
-		t.Fatal(err)
+// 2.3.13 renamed `services` to `daemon`; 2.3.14 refuses the old names
+// (tasks/specs/cli-noun-plan-services-2026-10-16.md): exit 2, the daemon
+// command to run instead, and no request.
+func TestServicesIsRefusedWithTheDaemonCommand(t *testing.T) {
+	f := daemonRoutes(t)
+	cases := map[string][]string{
+		"miosa daemon list my-box":                   {"services", "list", "my-box"},
+		"miosa daemon logs web -n 5":                 {"svc", "logs", "web", "-n", "5"},
+		"miosa daemon create --name web --command x": {"service", "create", "--name", "web", "--command", "x"},
 	}
-	for _, alias := range []string{"services", "service", "svc"} {
-		out, stderr, err := runSplit(t, alias, "list", "my-box", "--json")
-		if err != nil {
-			t.Fatalf("%s: %v", alias, err)
+	for want, args := range cases {
+		out, stderr, err := runSplit(t, args...)
+		if err == nil || commands.ExitCode(err) != commands.ExitUsage {
+			t.Fatalf("%v: want exit 2, got %v", args, err)
 		}
-		if out != want {
-			t.Fatalf("%s stdout differs:\n%s\nwant\n%s", alias, out, want)
-		}
-		if !strings.Contains(stderr, "is now 'miosa daemon'; use 'miosa daemon list my-box'. The old name will stop working on or after 2026-10-31.") {
-			t.Fatalf("%s notice = %q", alias, stderr)
+		if !strings.Contains(err.Error(), "run: "+want) || out != "" {
+			t.Fatalf("%v: err=%v stdout=%q stderr=%q", args, err, out, stderr)
 		}
 	}
-	if out, stderr, err := runSplit(t, "services", "logs", "my-box", "web", "--tail", "20"); err != nil || out != "ready\n" || stderr == "" {
-		t.Fatalf("logs through the old name: %v %q %q", err, out, stderr)
-	}
-	if out, _, err := runSplit(t, "services", "stop", "my-box", "web"); err != nil || !strings.Contains(out, "Stopped service") {
-		t.Fatalf("the old name keeps its wording: %v %s", err, out)
-	}
-
-	t.Setenv("MIOSA_NO_DEPRECATION_NOTICE", "1")
-	if _, stderr, err := runSplit(t, "svc", "list", "my-box"); err != nil || stderr != "" {
-		t.Fatalf("notice not silenced: %v %q", err, stderr)
+	if f.count() != 0 {
+		t.Fatalf("a refused old name must make no request: %+v", f.calls)
 	}
 }
 

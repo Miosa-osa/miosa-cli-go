@@ -1,7 +1,10 @@
 package commands
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -116,7 +119,7 @@ func runInSandbox(cmd *cobra.Command, nameOrID string, in miosa.CommandInput, ti
 			body["timeout"] = in.TimeoutSeconds
 		}
 		if err := c.API.Post(cmd.Context(), "/computers/"+url.PathEscape(target)+"/exec", body, &res); err != nil {
-			return die(err)
+			return execFailure(cmd, err, timeout)
 		}
 		exitCode, stdout, stderr = res.ExitCode, res.Stdout, res.Stderr
 		if stdout == "" {
@@ -125,7 +128,7 @@ func runInSandbox(cmd *cobra.Command, nameOrID string, in miosa.CommandInput, ti
 	} else {
 		res, err := c.SDK.Commands.Run(cmd.Context(), lookupComputerID(target), in)
 		if err != nil {
-			return die(err)
+			return execFailure(cmd, err, timeout)
 		}
 		exitCode, stdout, stderr = res.ExitCode, res.Stdout, res.Stderr
 		if stdout == "" {
@@ -141,6 +144,29 @@ func runInSandbox(cmd *cobra.Command, nameOrID string, in miosa.CommandInput, ti
 		return &ExitError{Code: exitCode}
 	}
 	return nil
+}
+
+// execTimeoutCode is the exit status when the command did not finish in time
+// (the same 124 as timeout(1)).
+const execTimeoutCode = 124
+
+// execFailure reports a failed exec. When the request ran out of time, the CLI
+// stops waiting and exits 124 with a clear line, even if a background child
+// still holds the command's output open on the machine.
+func execFailure(cmd *cobra.Command, err error, timeout int) error {
+	if timeout > 0 && isTimeoutErr(err) {
+		fmt.Fprintf(cmd.ErrOrStderr(), "miosa: the command did not finish within %ds; stopped waiting (it may still be running on the machine)\n", timeout)
+		return &ExitError{Code: execTimeoutCode}
+	}
+	return die(err)
+}
+
+func isTimeoutErr(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // resolveExecTarget says which machine a reference names and so which route
@@ -169,7 +195,7 @@ func resolveExecTarget(cmd *cobra.Command, c *client.Client, ref string) (string
 // timeout plus headroom, never below the default request timeout.
 func execRequestTimeout(cmdTimeout int) time.Duration {
 	d := time.Duration(globalFlags.Timeout) * time.Second
-	if want := time.Duration(cmdTimeout+30) * time.Second; cmdTimeout > 0 && want > d {
+	if want := time.Duration(cmdTimeout+5) * time.Second; cmdTimeout > 0 && want > d {
 		d = want
 	}
 	if cmdTimeout == 0 && d < 90*time.Second {

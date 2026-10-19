@@ -20,7 +20,7 @@ func init() {
 // scopeResources are the resources a key can be scoped to.
 var scopeResources = []string{
 	"projects", "events", "products", "sandboxes", "previews", "deployments", "domains", "databases", "env", "osa", "cloud",
-	"egress", "agent_runtime_profiles", "agents", "project_auth", "project_integrations", "billing", "storage", "cron_jobs",
+	"egress", "agent_runtime_profiles", "agents", "project_auth", "project_integrations", "billing", "storage", "cron_jobs", "secrets",
 }
 
 // keyPresets expand to scope lists. They are conveniences: pass --scope for exact control.
