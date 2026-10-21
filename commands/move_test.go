@@ -14,8 +14,9 @@ import (
 const otherWS = "9c0f5a52-3b1d-4d7e-9a55-0a1b2c3d4e5f"
 
 const (
-	moveDB     = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-	moveBucket = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	moveDB      = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	moveBucket  = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	moveWebhook = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 )
 
 type moveServer struct {
@@ -36,7 +37,9 @@ func (m *moveServer) handler(t *testing.T) http.Handler {
 			w.Write([]byte(`{"data":[{"id":"` + moveDB + `","name":"shared"},{"id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","name":"only-db"}]}`))
 		case "GET /storage/buckets":
 			w.Write([]byte(`{"data":[{"id":"` + moveBucket + `","name":"shared"}]}`))
-		case "GET /databases/" + moveDB, "GET /databases/cccccccc-cccc-4ccc-8ccc-cccccccccccc", "GET /storage/buckets/" + moveBucket:
+		case "GET /webhooks":
+			w.Write([]byte(`{"data":[{"id":"` + moveWebhook + `","name":"hook-1"}]}`))
+		case "GET /databases/" + moveDB, "GET /databases/cccccccc-cccc-4ccc-8ccc-cccccccccccc", "GET /storage/buckets/" + moveBucket, "GET /webhooks/" + moveWebhook:
 			w.Write([]byte(`{"data":{"id":"x","workspace_id":"` + otherWS + `"}}`))
 		case "POST /workspaces/" + otherWS + "/move":
 			raw, _ := io.ReadAll(r.Body)
@@ -200,5 +203,114 @@ func TestMoveVolumeScheduleAndAgentUseTheirOwnRoutes(t *testing.T) {
 		if posted[c.path]["target_workspace_id"] != wsID {
 			t.Errorf("%s: want target_workspace_id %s on %s, got %v", c.kind, wsID, c.path, posted[c.path])
 		}
+	}
+}
+
+func TestMoveMovesAWebhookThroughItsOwnRoute(t *testing.T) {
+	fake := &moveServer{}
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/webhooks/") {
+			gotPath = r.URL.Path
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"data":{"type":"webhook","id":"` + moveWebhook + `"}}`))
+			return
+		}
+		fake.handler(t).ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	setupEnv(t, srv)
+
+	out, err := run(t, "move", "hook-1", "--type", "webhook", "--to-workspace", "staging")
+	if err != nil {
+		t.Fatalf("move failed: %v\n%s", err, out)
+	}
+	if gotPath != "/webhooks/"+moveWebhook+"/move" {
+		t.Fatalf("posted to %q, want the webhook move route", gotPath)
+	}
+	if !strings.Contains(out, "Moved webhook hook-1") {
+		t.Fatalf("output = %q", out)
+	}
+}
+
+const moveDep = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+
+// transferServer knows one deployment "my-app" in otherWS and the workspace
+// "staging" in the same organization, and records the transfer request.
+func transferServer(t *testing.T, posted *map[string]any, gotPath *string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/bill-to":
+			w.Write([]byte(`{"data":{"options":[{"id":"t-1","slug":"acme","name":"Acme","viewing":true}]}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/workspaces":
+			w.Write([]byte(`{"data":[{"id":"` + wsID + `","name":"Staging","slug":"staging"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/deployments":
+			w.Write([]byte(`{"data":[{"id":"` + moveDep + `","name":"my-app","slug":"my-app"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/deployments/my-app":
+			w.Write([]byte(`{"data":{"id":"` + moveDep + `","name":"my-app"}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/deployments/"+moveDep:
+			w.Write([]byte(`{"data":{"id":"` + moveDep + `","name":"my-app","workspace_id":"` + otherWS + `"}}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "cross-org-transfer"):
+			raw, _ := io.ReadAll(r.Body)
+			var b map[string]any
+			_ = json.Unmarshal(raw, &b)
+			*posted = b
+			*gotPath = r.URL.Path
+			w.Write([]byte(`{"data":{"billing_switched_at":"2026-10-20T12:00:00Z","transferred":[{"type":"deployment","id":"` + moveDep + `"}]}}`))
+		default:
+			http.Error(w, `{"error":"not found"}`, 404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestMoveTransfersADeploymentToAnotherOrganization(t *testing.T) {
+	var posted map[string]any
+	var gotPath string
+	srv := transferServer(t, &posted, &gotPath)
+	setupEnv(t, srv)
+	writeConfigFile(t, "api_key = \"msk_u_test\"\nactive_org = \"acme\"\n")
+
+	out, err := run(t, "move", "my-app", "--type", "deployment", "--to-org", "acme-eu",
+		"--to-workspace", "staging", "--confirm", "my-app")
+	if err != nil {
+		t.Fatalf("transfer failed: %v\n%s", err, out)
+	}
+	if gotPath != "/workspaces/"+otherWS+"/cross-org-transfer" {
+		t.Fatalf("posted to %q, want the source workspace transfer route", gotPath)
+	}
+	if posted["target_org_id"] != "acme-eu" || posted["target_workspace_id"] != wsID || posted["confirm"] != "my-app" {
+		t.Fatalf("body = %v", posted)
+	}
+	resources, _ := posted["resources"].([]any)
+	if len(resources) != 1 || resources[0].(map[string]any)["type"] != "deployment" {
+		t.Fatalf("resources = %v", posted["resources"])
+	}
+	if !strings.Contains(out, "billing switched at 2026-10-20T12:00:00Z") {
+		t.Fatalf("the billing switch must be reported: %q", out)
+	}
+}
+
+func TestMoveTransferNeedsTheNameAndADifferentOrganization(t *testing.T) {
+	var posted map[string]any
+	var gotPath string
+	srv := transferServer(t, &posted, &gotPath)
+	setupEnv(t, srv)
+	writeConfigFile(t, "api_key = \"msk_u_test\"\nactive_org = \"acme\"\n")
+
+	if out, err := run(t, "move", "my-app", "--type", "deployment", "--to-org", "acme-eu", "--to-workspace", "staging"); err == nil {
+		t.Fatalf("must ask for --confirm:\n%s", out)
+	}
+	if out, err := run(t, "move", "my-app", "--type", "deployment", "--to-org", "acme-eu", "--to-workspace", "staging", "--confirm", "other-app"); err == nil {
+		t.Fatalf("a mismatched --confirm must be refused:\n%s", out)
+	}
+	if out, err := run(t, "move", "my-app", "--type", "deployment", "--to-org", "acme", "--to-workspace", "staging", "--confirm", "my-app"); err == nil {
+		t.Fatalf("the current organization must be refused as a transfer:\n%s", out)
+	}
+	if gotPath != "" {
+		t.Fatalf("nothing may be sent, posted %q", gotPath)
 	}
 }

@@ -206,18 +206,25 @@ func TestCreateCommand_CanonicalSizes(t *testing.T) {
 }
 
 func TestCreateCommand_WorkspaceUsesCanonicalSlug(t *testing.T) {
+	const clinicIQWS = "33333333-3333-4333-8333-333333333333"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// --workspace is resolved to an id before the create.
+		if r.Method == http.MethodGet && r.URL.Path == "/workspaces" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[{"id":"` + clinicIQWS + `","slug":"clinic-iq","name":"Clinic IQ"}]}`))
+			return
+		}
 		var body miosa.CreateSandboxInput
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if body.WorkspaceSlug != "clinic-iq" {
-			t.Fatalf("workspace_slug = %q, want clinic-iq", body.WorkspaceSlug)
+		if body.WorkspaceID != clinicIQWS {
+			t.Fatalf("workspace_id = %q, want clinic-iq's id", body.WorkspaceID)
 		}
 		if body.Metadata != nil {
 			t.Fatalf("workspace must not be hidden in metadata: %#v", body.Metadata)
 		}
-		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		w.Write(fakeSandbox("abc123", "my-box"))
 	}))

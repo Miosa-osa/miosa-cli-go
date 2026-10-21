@@ -18,12 +18,18 @@ func sandboxCreateBody(t *testing.T) (*httptest.Server, *string, func()) {
 	t.Helper()
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// The create resolves --workspace (slug, name or id) to an id first.
+		if r.Method == http.MethodGet && r.URL.Path == "/workspaces" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(twoWorkspacesForCli))
+			return
+		}
 		var body miosa.CreateSandboxInput
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body.WorkspaceSlug != "" {
-			got = body.WorkspaceSlug
+		if body.WorkspaceID != "" {
+			got = body.WorkspaceID
 		}
-		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		w.Write(fakeSandbox("abc123", "my-box"))
 	}))
@@ -43,8 +49,8 @@ func TestCreateUsesTheProfileDefaultWorkspace(t *testing.T) {
 	if _, err := run(t, "create", "my-box"); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if *got != "clips" {
-		t.Fatalf("workspace_slug = %q, want clips", *got)
+	if *got != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("workspace_id = %q, want clips", *got)
 	}
 }
 
@@ -59,8 +65,8 @@ func TestCreateFlagBeatsTheProfileDefaultWorkspace(t *testing.T) {
 	if _, err := run(t, "create", "my-box", "--workspace", "other"); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if *got != "other" {
-		t.Fatalf("workspace_slug = %q, want other", *got)
+	if *got != "22222222-2222-4222-8222-222222222222" {
+		t.Fatalf("workspace_id = %q, want other", *got)
 	}
 }
 
@@ -76,7 +82,7 @@ func TestCreateUsesMiosaWorkspaceOverTheProfile(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	if *got != "env-ws" {
-		t.Fatalf("workspace_slug = %q, want env-ws", *got)
+		t.Fatalf("workspace_id = %q, want env-ws", *got)
 	}
 }
 
@@ -92,12 +98,13 @@ func TestCreateIgnoresTheBuiltInDefaultWorkspace(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	if *got != "" {
-		t.Fatalf("workspace_slug = %q, want none", *got)
+		t.Fatalf("workspace_id = %q, want none", *got)
 	}
 }
 
 func TestDbCreateUsesTheProfileDefaultWorkspace(t *testing.T) {
 	f := fakeRoutes(t, map[string]any{
+		"GET /workspaces": twoWorkspacesForCli,
 		"POST /databases": resp{201, `{"data":{"id":"db1","name":"app-db"}}`},
 	})
 	t.Setenv("MIOSA_WORKSPACE", "")
@@ -107,7 +114,7 @@ func TestDbCreateUsesTheProfileDefaultWorkspace(t *testing.T) {
 		t.Fatalf("db create: %v\n%s", err, out)
 	}
 	calls := f.find("POST", "/databases")
-	if len(calls) != 1 || calls[0].Body["workspace_slug"] != "clips" {
+	if len(calls) != 1 || calls[0].Body["workspace_id"] != "11111111-1111-4111-8111-111111111111" {
 		t.Fatalf("body = %+v", calls)
 	}
 }

@@ -20,9 +20,10 @@ func newComputerCmd() *cobra.Command {
 
 func newComputerCreateCmd() *cobra.Command {
 	var (
-		size     string
-		template string
-		envFlags machineEnvFlags
+		size      string
+		template  string
+		workspace string
+		envFlags  machineEnvFlags
 	)
 	cmd := &cobra.Command{
 		Use:   "create <name>",
@@ -57,6 +58,10 @@ Examples:
 			if err != nil {
 				return die(err)
 			}
+			workspaceID, err := createWorkspaceID(cmd, c.API, workspace)
+			if err != nil {
+				return die(err)
+			}
 			if !isJSON() {
 				p.Line("Creating computer…")
 			}
@@ -67,6 +72,7 @@ Examples:
 				Environment:  envName,
 				NoEnv:        noEnv,
 				SetupFile:    setup,
+				WorkspaceID:  workspaceID,
 			})
 			if err != nil {
 				return die(err)
@@ -77,6 +83,7 @@ Examples:
 			p.Success("Created computer %q (%s)", comp.Name, comp.ID)
 			p.Line("  Status:   %s", comp.Status)
 			p.Line("  Size:     %s", comp.Size)
+			_ = reportWorkspaceLanding(cmd, comp.ComputerData)
 			if envName != "" || noEnv || comp.Environment != "" || setup != "" {
 				printMachineEnv(p, comp.MachineEnvironment)
 			}
@@ -85,6 +92,7 @@ Examples:
 	}
 	cmd.Flags().StringVar(&size, "size", "small", "Computer size: xs, small, medium, large, or xl")
 	cmd.Flags().StringVar(&template, "template", "miosa-desktop", "Computer template type (miosa-desktop by default)")
+	cmd.Flags().StringVar(&workspace, "workspace", "", workspaceFlagUsage)
 	envFlags.bind(cmd, "computer")
 	return cmd
 }

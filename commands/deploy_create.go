@@ -67,6 +67,8 @@ type deployFlags struct {
 	rootDir      string
 	force        bool   // push even when nothing changed since the latest version
 	aiAccess     string // allow | block: whether agents may read the published site
+	workspace    string // --workspace: where a new deployment lands (not used with --from-sandbox)
+	workspaceID  string // the resolved id, sent as workspace_id
 }
 
 // bindDeploySourceFlags binds the flags that shape the deployment. The bare
@@ -99,6 +101,7 @@ func bindDeploySourceFlags(cmd *cobra.Command, f *deployFlags, createOnly bool) 
 		fs.StringVar(&f.project, "project", "", "With --forge: the project to link the repository through (one repository per project)")
 		fs.BoolVar(&f.noAuto, "no-auto", false, "With --forge: do not build automatically on pushes to the branch")
 		fs.StringVar(&f.rootDir, "root-directory", "", "With --forge: the app's directory inside the repository")
+		fs.StringVar(&f.workspace, "workspace", "", workspaceFlagUsage)
 	}
 }
 
@@ -244,6 +247,15 @@ func runDeployCreate(cmd *cobra.Command, args []string, flags *deployFlags) erro
 	if err != nil {
 		return die(err)
 	}
+	if f.fromSandbox == "" {
+		// A publish from a sandbox lands where the sandbox is; every other
+		// source creates a deployment and honours --workspace and the default.
+		if f.workspaceID, err = createWorkspaceID(cmd, c.API, f.workspace); err != nil {
+			return die(err)
+		}
+	} else if f.workspace != "" {
+		return usagef("--workspace does not apply with --from-sandbox: the deployment takes the sandbox's workspace")
+	}
 	p := printerFor(cmd)
 
 	var out *deployOutcome
@@ -268,6 +280,14 @@ func runDeployCreate(cmd *cobra.Command, args []string, flags *deployFlags) erro
 		return die(err)
 	}
 
+	// Report where it actually landed: the create answer carries it on most
+	// routes, and one GET settles the rest, including a fallback to the
+	// organization's default workspace. A sandbox publish skips it: the
+	// deployment takes the sandbox's workspace.
+	if out.WorkspaceID == "" && out.Source != "sandbox" {
+		out.WorkspaceID = deploymentWorkspace(cmd, c, out.ID)
+	}
+
 	if f.domain != "" && out.Source != "sandbox" {
 		if err := addDeploymentDomain(cmd.Context(), c, out.ID, f.domain); err != nil {
 			return die(err)
@@ -288,7 +308,7 @@ func runDeployCreate(cmd *cobra.Command, args []string, flags *deployFlags) erro
 		// An uploaded version that was not promoted never goes live: there is nothing to wait for.
 	} else if f.shouldWait() {
 		if !isJSON() {
-			p.Line("Waiting for %s to go live...", orDefault(out.Name, out.ID))
+			p.Line("Waiting for %s to go live (%s)...", orDefault(out.Name, "deployment"), out.ID)
 		}
 		state, url, err := pollDeployment(cmd.Context(), c, out.ID, f.waitTimeout, phasePrinter(p))
 		out.State = state
@@ -327,17 +347,42 @@ type deployOutcome struct {
 	// Existing is true when this run pushed to a deployment that was already
 	// there (a linked folder, or --deployment) instead of creating one.
 	Existing bool
+	// WorkspaceID is where the deployment actually landed, read back from the
+	// API so a fallback to the default workspace is visible.
+	WorkspaceID string
 }
 
 // deployResponse is the deployment object the API returns inside "data".
 type deployResponse struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Slug      string `json:"slug"`
-	State     string `json:"state"`
-	PublicURL string `json:"public_url"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	State       string `json:"state"`
+	PublicURL   string `json:"public_url"`
+	WorkspaceID string `json:"workspace_id"`
 	// Publish is how far the current publish has got; nil from a server that predates the phases.
 	Publish *publishStatus `json:"publish"`
+	// Failure is the coded reason a deployment failed or is failing
+	// ({code, stage, message}); a timed-out --wait should show it.
+	Failure *deployFailure `json:"failure"`
+}
+
+// deployFailure is the deployment document's failure object.
+type deployFailure struct {
+	Code    string `json:"code"`
+	Stage   string `json:"stage"`
+	Message string `json:"message"`
+}
+
+func (f *deployFailure) String() string {
+	if f == nil {
+		return ""
+	}
+	stage := orDefault(f.Stage, "deploy")
+	if f.Message == "" {
+		return fmt.Sprintf("%s at %s", orDefault(f.Code, "failure"), stage)
+	}
+	return fmt.Sprintf("%s at %s: %s", orDefault(f.Code, "failure"), stage, f.Message)
 }
 
 // ─── source: sandbox ──────────────────────────────────────────────────────────
@@ -362,6 +407,17 @@ func deployFromSandbox(ctx context.Context, c *client.Client, p *output.Printer,
 	}
 	name := firstNonEmpty(f.name, f.fromSandbox)
 	body := map[string]any{"name": name}
+	// --deployment publishes a new version of that deployment. The sandbox route
+	// takes an id only, and a publish that quietly fell back to a create left the
+	// customer with a deployment they never asked for (FounderOS, 2026-10-20), so
+	// the reference is resolved first and a miss is an error, never a create.
+	if f.deployment != "" {
+		depID, err := resolveDeploymentRef(ctx, c, f.deployment)
+		if err != nil {
+			return nil, err
+		}
+		body["deployment_id"] = depID
+	}
 	if f.dir != "" {
 		body["output_path"] = f.dir
 	}
@@ -397,13 +453,14 @@ func deployFromSandbox(ctx context.Context, c *client.Client, p *output.Printer,
 	}
 	d := resp.Data.Deployment
 	out := &deployOutcome{
-		ID:     firstNonEmpty(d.ID, resp.DeploymentID),
-		Name:   firstNonEmpty(d.Name, name),
-		Slug:   d.Slug,
-		State:  firstNonEmpty(d.State, resp.State),
-		URL:    firstNonEmpty(d.PublicURL, resp.URL),
-		Source: "sandbox",
-		Domain: f.domain,
+		ID:          firstNonEmpty(d.ID, resp.DeploymentID),
+		Name:        firstNonEmpty(d.Name, name),
+		Slug:        d.Slug,
+		State:       firstNonEmpty(d.State, resp.State),
+		URL:         firstNonEmpty(d.PublicURL, resp.URL),
+		Source:      "sandbox",
+		Domain:      f.domain,
+		WorkspaceID: d.WorkspaceID,
 	}
 	if out.ID == "" {
 		return nil, fmt.Errorf("the server accepted the publish but returned no deployment id")
@@ -415,6 +472,23 @@ func deployFromSandbox(ctx context.Context, c *client.Client, p *output.Printer,
 		}
 	}
 	return out, nil
+}
+
+// resolveDeploymentRef turns the --deployment argument (an id, name, slug or
+// hostname) into the id the sandbox publish route takes. The route resolves ids
+// only; every other form goes through the read route that already accepts names,
+// so the behaviour matches 'deploy get'.
+func resolveDeploymentRef(ctx context.Context, c *client.Client, ref string) (string, error) {
+	var resp struct {
+		Data deployResponse `json:"data"`
+	}
+	if err := c.API.Get(ctx, "/deployments/"+url.PathEscape(ref), nil, &resp); err != nil {
+		return "", fmt.Errorf("--deployment %s: %w", ref, err)
+	}
+	if resp.Data.ID == "" {
+		return "", fmt.Errorf("--deployment %s: the server returned no deployment id", ref)
+	}
+	return resp.Data.ID, nil
 }
 
 // ─── source: git ──────────────────────────────────────────────────────────────
@@ -449,6 +523,9 @@ func deployFromGit(ctx context.Context, c *client.Client, p *output.Printer, f *
 	if len(env) > 0 {
 		body["env"] = env
 	}
+	if f.workspaceID != "" {
+		body["workspace_id"] = f.workspaceID
+	}
 	if id, name, found, err := existingDeploymentByName(ctx, c, f.name); err != nil {
 		return nil, err
 	} else if found {
@@ -469,6 +546,7 @@ func deployFromGit(ctx context.Context, c *client.Client, p *output.Printer, f *
 		URL:           resp.Data.PublicURL,
 		Source:        "git",
 		WebhookSecret: resp.WebhookSecret,
+		WorkspaceID:   firstNonEmpty(resp.Data.WorkspaceID, f.workspaceID),
 	}
 	if out.ID == "" {
 		return nil, fmt.Errorf("the server created the deployment but returned no id")
@@ -598,7 +676,7 @@ func deployFromDir(ctx context.Context, c *client.Client, p *output.Printer, f *
 	var sid, depID string
 	if createNew {
 		var session dropSessionResponse
-		if err := c.API.Post(ctx, "/deployments/drop/sessions", map[string]any{"name": f.name}, &session); err != nil {
+		if err := c.API.Post(ctx, "/deployments/drop/sessions", dropSessionBody(f), &session); err != nil {
 			return nil, err
 		}
 		sid, depID = session.Data.SessionID, session.Data.DeploymentID
@@ -612,7 +690,7 @@ func deployFromDir(ctx context.Context, c *client.Client, p *output.Printer, f *
 			if err := staleLink(p, f, *fromLink); err != nil {
 				return nil, err
 			}
-			err = c.API.Post(ctx, "/deployments/drop/sessions", map[string]any{"name": f.name}, &session)
+			err = c.API.Post(ctx, "/deployments/drop/sessions", dropSessionBody(f), &session)
 			depID, target, linkedName, createNew = session.Data.DeploymentID, session.Data.DeploymentID, f.name, true
 		}
 		if err != nil {
@@ -814,6 +892,11 @@ func pollDeployment(ctx context.Context, c *client.Client, id string, timeout ti
 			Data deployResponse `json:"data"`
 		}
 		if err := c.API.Get(ctx, "/deployments/"+id, nil, &resp); err != nil {
+			// The poll's own deadline is not a server error: report it as the timeout it is, with the
+			// deployment id and whatever reason the last poll carried.
+			if ctx.Err() != nil {
+				return last.State, last.PublicURL, waitTimeoutError(id, last, timeout)
+			}
 			return last.State, last.PublicURL, err
 		}
 		last = resp.Data
@@ -838,19 +921,40 @@ func pollDeployment(ctx context.Context, c *client.Client, id string, timeout ti
 			case "running":
 				return last.State, last.PublicURL, nil
 			case "failed":
-				return last.State, last.PublicURL, fmt.Errorf("the deployment is in the failed state; run 'miosa deploy logs %s' to see why", orDefault(last.Name, id))
+				// The document carries the reason; print it instead of sending the user to
+				// the logs for a code the API already returned (FounderOS, 2026-10-20).
+				if last.Failure != nil {
+					return last.State, last.PublicURL, fmt.Errorf("deployment %s failed - %s; run 'miosa deploy logs %s' for the build and app output", id, last.Failure.String(), orDefault(last.Name, id))
+				}
+				return last.State, last.PublicURL, fmt.Errorf("deployment %s is in the failed state; run 'miosa deploy logs %s' to see why", id, orDefault(last.Name, id))
 			}
 		}
 		select {
 		case <-ctx.Done():
-			waiting := ""
-			if last.Publish != nil && last.Publish.WaitReason != "" {
-				waiting = ", " + last.Publish.WaitReason
-			}
-			return last.State, last.PublicURL, fmt.Errorf("timed out after %s waiting for the deployment to go live (last state: %s%s)", timeout, orDash(last.State), waiting)
+			return last.State, last.PublicURL, waitTimeoutError(id, last, timeout)
 		case <-time.After(pollEvery):
 		}
 	}
+}
+
+// waitTimeoutError is the sentence a --wait run ends with when it gave up: the deployment, the
+// state it was last in, and whatever reason the API had recorded. A timeout is not a failure, so it
+// never claims one, and it always names the id the command printed.
+func waitTimeoutError(id string, last deployResponse, timeout time.Duration) error {
+	waiting := ""
+	if last.Publish != nil && last.Publish.WaitReason != "" {
+		waiting = ", " + last.Publish.WaitReason
+	}
+
+	failure := ""
+	if last.Failure != nil {
+		failure = ", failure: " + last.Failure.String()
+	}
+
+	return fmt.Errorf(
+		"deployment %s timed out after %s waiting to go live (last state: %s%s%s); 'miosa deploy get %s' and 'miosa deploy logs %s' show what it is doing",
+		id, timeout, orDash(last.State), waiting, failure, id, orDefault(last.Name, id),
+	)
 }
 
 // deployEnvMap turns repeated KEY=VALUE flags into a map.
@@ -985,6 +1089,9 @@ func renderDeploy(p *output.Printer, out *deployOutcome) error {
 		if out.WebhookSecret != "" {
 			m["webhook_secret"] = out.WebhookSecret
 		}
+		if out.WorkspaceID != "" {
+			m["workspace_id"] = out.WorkspaceID
+		}
 		return p.JSON(m)
 	}
 	if out.Promoted != nil && !*out.Promoted {
@@ -996,6 +1103,9 @@ func renderDeploy(p *output.Printer, out *deployOutcome) error {
 		p.Success("Created deployment %q (%s)", out.Name, out.ID)
 	}
 	rows := [][2]string{{"State", out.State}, {"Source", out.Source}}
+	if out.WorkspaceID != "" {
+		rows = append(rows, [2]string{"Workspace", out.WorkspaceID})
+	}
 	if out.Slug != "" {
 		rows = append(rows, [2]string{"Slug", out.Slug})
 	}
@@ -1302,6 +1412,9 @@ func deployFromForge(ctx context.Context, c *client.Client, p *output.Printer, f
 	if len(env) > 0 {
 		body["env"] = env
 	}
+	if f.workspaceID != "" {
+		body["workspace_id"] = f.workspaceID
+	}
 	if !isJSON() {
 		p.Line("Creating deployment %q from Forge repository %s...", f.name, f.forge)
 	}
@@ -1313,12 +1426,13 @@ func deployFromForge(ctx context.Context, c *client.Client, p *output.Printer, f
 		return nil, err
 	}
 	out := &deployOutcome{
-		ID:     resp.Data.ID,
-		Name:   firstNonEmpty(resp.Data.Name, f.name),
-		Slug:   resp.Data.Slug,
-		State:  firstNonEmpty(resp.Data.State, "building"),
-		URL:    resp.Data.PublicURL,
-		Source: "forge",
+		ID:          resp.Data.ID,
+		Name:        firstNonEmpty(resp.Data.Name, f.name),
+		Slug:        resp.Data.Slug,
+		State:       firstNonEmpty(resp.Data.State, "building"),
+		URL:         resp.Data.PublicURL,
+		Source:      "forge",
+		WorkspaceID: firstNonEmpty(resp.Data.WorkspaceID, f.workspaceID),
 	}
 	if out.ID == "" {
 		return nil, fmt.Errorf("the server created the deployment but returned no id")
@@ -1414,4 +1528,31 @@ func localFileManifest(root string) (map[string]string, error) {
 		return nil
 	})
 	return out, err
+}
+
+// dropSessionBody opens a new upload deployment: its name, and the workspace
+// when one was chosen.
+func dropSessionBody(f *deployFlags) map[string]any {
+	body := map[string]any{"name": f.name}
+	if f.workspaceID != "" {
+		body["workspace_id"] = f.workspaceID
+	}
+	return body
+}
+
+// deploymentWorkspace reads back the workspace a deployment landed in. It is
+// best effort: a create must not fail because the answer could not be read.
+func deploymentWorkspace(cmd *cobra.Command, c *client.Client, id string) string {
+	if id == "" {
+		return ""
+	}
+	var resp struct {
+		Data struct {
+			WorkspaceID string `json:"workspace_id"`
+		} `json:"data"`
+	}
+	if err := c.API.Get(cmd.Context(), "/deployments/"+url.PathEscape(id), nil, &resp); err != nil {
+		return ""
+	}
+	return resp.Data.WorkspaceID
 }

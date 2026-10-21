@@ -84,6 +84,11 @@ func runDBRestore(cmd *cobra.Command, ref, backup, toNew string, yes bool) error
 	targetID := sourceID
 	body := map[string]any{"backup_id": backup}
 	if toNew != "" {
+		// Check the backup BEFORE a database is created for it: a refused recover must not leave a
+		// new, running database behind.
+		if err := requireCompletedBackup(ctx, c.API.Get, sourceID, backup); err != nil {
+			return die(err)
+		}
 		body["allow_overwrite"] = true
 		targetID, err = createRestoreTarget(ctx, cmd, c.API, source, toNew)
 		if err != nil {
@@ -103,6 +108,12 @@ func runDBRestore(cmd *cobra.Command, ref, backup, toNew string, yes bool) error
 		ID string `json:"id"`
 	}
 	if err := c.API.Post(ctx, "/databases/"+url.PathEscape(targetID)+"/restore", body, &started); err != nil {
+		if toNew != "" {
+			// The restore was refused after the target was created: do not leave it running.
+			if delErr := c.API.Delete(ctx, "/databases/"+url.PathEscape(targetID), nil, nil); delErr != nil {
+				return die(fmt.Errorf("%w (the new database %s was created and could not be removed: %v; remove it with 'miosa db delete %s')", err, targetID, delErr, targetID))
+			}
+		}
 		return die(err)
 	}
 	if !isJSON() {
@@ -164,6 +175,26 @@ func resolveBackupRef(ctx context.Context, get apiGetter, databaseID, ref string
 	default:
 		return "", usagef("%q matches %d backups; use more of the id (see 'miosa db backups')", ref, len(matches))
 	}
+}
+
+// requireCompletedBackup refuses a backup that is not finished. A backup the list does not show is
+// left to the API to answer.
+func requireCompletedBackup(ctx context.Context, get apiGetter, databaseID, backupID string) error {
+	var list struct {
+		Data []struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+		} `json:"data"`
+	}
+	if err := get(ctx, "/databases/"+url.PathEscape(databaseID)+"/backups", nil, &list); err != nil {
+		return err
+	}
+	for _, b := range list.Data {
+		if b.ID == backupID && b.State != "completed" {
+			return usagef("backup %s is %s, not completed: wait for it to finish (see 'miosa db backups')", shortRef(backupID), b.State)
+		}
+	}
+	return nil
 }
 
 func newestCompletedBackup(ctx context.Context, get apiGetter, databaseID string) (string, error) {

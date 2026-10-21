@@ -92,6 +92,7 @@ Regenerate with `make docs`.
 - [`miosa sandbox`](#miosa-sandbox) - Inspect and resize a sandbox's vCPU and memory
 - [`miosa schedule`](#miosa-schedule) - Scheduled jobs
 - [`miosa secret`](#miosa-secret) - Organization and workspace secrets
+- [`miosa service`](#miosa-service) - Create and operate web services, workers, private services and static sites
 - [`miosa service-account`](#miosa-service-account) - Non-human accounts that own API keys for pipelines and programs
 - [`miosa snapshot`](#miosa-snapshot) - Browse, name, fork and delete snapshots of sandboxes and computers
 - [`miosa ssh`](#miosa-ssh) - Open an SSH session in a sandbox, or run a command over it
@@ -2014,6 +2015,7 @@ Flags:
 - `--setup-file string` - Shell script (UTF-8, max 64KB) run in the background once the computer is ready.
 - `--size string` - Computer size: xs, small, medium, large, or xl. (default `small`)
 - `--template string` - Computer template type (miosa-desktop by default). (default `miosa-desktop`)
+- `--workspace string` - Workspace slug, name or id (default: $MIOSA_WORKSPACE, then the profile's default workspace).
 
 #### `miosa computer get`
 
@@ -2875,7 +2877,7 @@ Flags:
 - `--region string` - Pin to a region.
 - `--size string` - Size: tiny, xs, small, medium or large (tiny|xs|small|medium|large).
 - `--version string` - Engine version (default: the engine's current one).
-- `--workspace string` - Workspace slug (default: the profile's default workspace).
+- `--workspace string` - Workspace slug, name or id (default: $MIOSA_WORKSPACE, then the profile's default workspace).
 
 #### `miosa db get`
 
@@ -3117,6 +3119,7 @@ Flags:
 - `--type string` - Runtime to publish as: static, dynamic or docker_deploy (default: static, or dynamic with --run-command).
 - `--wait` - Wait until the deployment is live (the default; kept for scripts).
 - `--wait-timeout duration` - How long to wait for the deployment to go live. (default `10m0s`)
+- `--workspace string` - Workspace slug, name or id (default: $MIOSA_WORKSPACE, then the profile's default workspace).
 - `-y, --yes` - Do not ask for confirmation.
 
 #### `miosa deploy diff`
@@ -4725,6 +4728,9 @@ The admin keys come from --local-key/--cloud-key or MIOSA_ENGINE_LOCAL_KEY and
 MIOSA_ENGINE_CLOUD_KEY.
 The relay takes a MIOSA API key with engine:sync, from
 --api-key or MIOSA_API_KEY.
+With --grant it mints a short-lived engine:sync key
+for this run instead: the grant is audited, the key lives in memory only, and
+it expires on its own.
 No key is ever printed.
 
 Flags:
@@ -4733,6 +4739,7 @@ Flags:
 - `--cloud string` - Cloud Engine URL (defaults to the second positional argument).
 - `--cloud-key string` - Admin key for the cloud Engine (env: MIOSA_ENGINE_CLOUD_KEY).
 - `--engine-id string` - Managed Engine database id on the relay.
+- `--grant` - Mint a short-lived engine:sync key for this run instead of using --api-key (audited, never stored).
 - `--local string` - Local Engine URL (defaults to the first positional argument).
 - `--local-key string` - Admin key for the local Engine (env: MIOSA_ENGINE_LOCAL_KEY).
 - `--no-run` - Wire the peers but do not run a sync cycle now.
@@ -4752,7 +4759,8 @@ miosa engine sync status <local> [cloud] [flags]
 Reads the sync status of both sides.
 In relay mode it reads the cloud
 through MIOSA and reports the migration and version the cloud expects, so a
-schema mismatch is visible before a push fails.
+schema mismatch is visible before a push fails. --grant mints a short-lived
+engine:sync key for this run instead of taking one from --api-key.
 
 Flags:
 
@@ -4760,6 +4768,7 @@ Flags:
 - `--cloud string` - Cloud Engine URL (defaults to the second positional argument).
 - `--cloud-key string` - Admin key for the cloud Engine (env: MIOSA_ENGINE_CLOUD_KEY).
 - `--engine-id string` - Managed Engine database id on the relay.
+- `--grant` - Mint a short-lived engine:sync key for this run instead of using --api-key (audited, never stored).
 - `--local string` - Local Engine URL (defaults to the first positional argument).
 - `--local-key string` - Admin key for the local Engine (env: MIOSA_ENGINE_LOCAL_KEY).
 - `--relay string` - MIOSA relay base URL; enables relay mode.
@@ -8417,7 +8426,7 @@ Move a resource to another workspace of the same organization.
 ```
 <resource> is a name or id.
 Without --type the resource is looked up among
-sandbox, computer, deployment, database, bucket, volume, schedule, agent, project; a name that matches more than one kind
+sandbox, computer, deployment, database, bucket, volume, schedule, agent, webhook, project; a name that matches more than one kind
 needs --type.
 A move changes ownership and scope only: names, hostnames,
 connection strings and object URLs keep working, and the data is untouched.
@@ -8426,14 +8435,23 @@ running database, deployment or machine must be stopped first.
 Moving needs
 admin rights in both workspaces.
 
+Cross-organization transfer (deployments today) takes the target organization
+and the resource's name, and bills the target organization from the transfer:
+
+```
+  miosa move my-app --to-org acme-eu --to-workspace production --confirm my-app
+```
+
 Flags:
 
 - `--accept-env-changes` - Move a deployment even though the target's workspace variables differ.
+- `--confirm string` - The resource's name, required for a cross-organization transfer.
 - `--detach-from-project` - Leave its project behind (deployments, databases, buckets).
 - `--dry-run` - Run every check and show the plan without moving anything (deployments, databases, buckets).
 - `--project string` - Project of the target workspace to put it in (deployments, databases, buckets).
+- `--to-org string` - Transfer to this organization (id or slug); needs --to-workspace and --confirm.
 - `--to-workspace string` - The workspace to move it to (slug, name or id).
-- `--type string` - Kind of resource: sandbox, computer, deployment, database, bucket, volume, schedule, agent, project.
+- `--type string` - Kind of resource: sandbox, computer, deployment, database, bucket, volume, schedule, agent, webhook, project.
 
 ### `miosa notifications`
 
@@ -9323,6 +9341,142 @@ miosa project list
 
 Aliases: `ls`.
 
+#### `miosa project target`
+
+Deploy targets of a project (production, staging, ...).
+
+```
+miosa project target
+```
+
+Every project has a default Deploy target; the first read creates 'production'.
+Services, variables and releases live inside one Deploy target.
+
+```
+  miosa project target list shop
+  miosa project target create shop staging
+  miosa project target duplicate shop production --name staging
+  miosa project target rm shop staging --yes
+```
+
+Aliases: `targets`.
+
+##### `miosa project target create`
+
+Create a Deploy target.
+
+```
+miosa project target create <project> <name> [flags]
+```
+
+Flags:
+
+- `--kind string` - Environment kind.
+- `--slug string` - URL slug (default: from the name).
+
+##### `miosa project target duplicate`
+
+Copy an environment's services and variables.
+
+```
+miosa project target duplicate <project> <environment> [flags]
+```
+
+Copy a Deploy target's services and variables into a new one.
+Secrets are
+generated again and no data or managed database is copied.
+
+```
+  miosa project target duplicate shop production --name staging
+```
+
+Flags:
+
+- `--name string` - Name for the new environment.
+
+##### `miosa project target list`
+
+List a project's Deploy targets.
+
+```
+miosa project target list <project>
+```
+
+Aliases: `ls`.
+
+##### `miosa project target rm`
+
+Delete an environment.
+
+```
+miosa project target rm <project> <environment> [flags]
+```
+
+Delete a non-default Deploy target.
+Its services stop.
+
+Aliases: `delete`.
+
+Flags:
+
+- `--yes` - Do not ask for confirmation.
+
+#### `miosa project vars`
+
+Shared variables of a Deploy target.
+
+```
+miosa project vars
+```
+
+Shared variables are visible to every service in an environment.
+A service reads
+one as ${{shared.NAME}}.
+
+```
+  miosa project vars list cliniciq
+  miosa project vars set cliniciq API_BASE=https://api.acme.dev
+  miosa project vars unset cliniciq API_BASE
+```
+
+##### `miosa project vars list`
+
+List shared variables (values masked).
+
+```
+miosa project vars list <project> [flags]
+```
+
+Aliases: `ls`.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
+##### `miosa project vars set`
+
+Set shared variables.
+
+```
+miosa project vars set <project> KEY=VALUE [KEY=VALUE...] [flags]
+```
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
+##### `miosa project vars unset`
+
+Delete shared variables.
+
+```
+miosa project vars unset <project> <NAME>[,NAME...] [flags]
+```
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
 ### `miosa prompt`
 
 Run an agent on a sandbox or computer and follow it.
@@ -10123,6 +10277,532 @@ List a secret's versions (numbers and dates, never values).
 ```
 miosa secret versions <id|name>
 ```
+
+### `miosa service`
+
+Create and operate web services, workers, private services and static sites.
+
+```
+miosa service
+```
+
+Services are the apps a project runs: a web service, a worker, a private service or
+a static site, each with releases, variables and an optional public address.
+
+<project> is a name, slug or id; <service> is a name, slug or id.
+The API only
+resolves services by id, so the CLI looks the name up first.
+
+```
+  miosa service create cliniciq API --type web --repo https://github.com/acme/api
+  miosa service deploy cliniciq API --wait
+  miosa service logs cliniciq API
+  miosa service scale cliniciq API --replicas 4
+  miosa service vars set cliniciq API DATABASE_URL='${{Postgres.DATABASE_URL}}'
+  miosa service domains cliniciq API
+
+```
+'miosa services' and 'miosa svc' are aliases of this group.
+A named background
+process inside a sandbox is 'miosa daemon', a different product.
+
+Aliases: `services`, `svc`.
+
+#### `miosa service cancel`
+
+Cancel a queued or building release.
+
+```
+miosa service cancel <project> <service> <release> [flags]
+```
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
+#### `miosa service connection`
+
+Show a database service's connection URLs.
+
+```
+miosa service connection <project> <service> [flags]
+```
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
+#### `miosa service create`
+
+Create a service.
+
+```
+miosa service create <project> <name> [flags]
+```
+
+Create a web service, worker, private service, static site, Schedule or database
+service.
+A web or static service gets a public address unless --no-public is given.
+
+```
+  miosa service create cliniciq API --type web --repo https://github.com/acme/api
+  miosa service create cliniciq Jobs --type worker --repo https://github.com/acme/api --start-command "node worker.js"
+  miosa service create cliniciq Cache --type private --image redis:7
+  miosa service create cliniciq Nightly --type schedule --repo https://github.com/acme/api --schedule "0 3 * * *"
+```
+
+Flags:
+
+- `--branch string` - Git branch (default: the repository default).
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--dockerfile string` - Dockerfile path (needs Services build cells).
+- `--env stringArray` - Variable KEY=VALUE (repeatable); a value may be a ${{...}} reference.
+- `--image string` - Container image reference.
+- `--no-public` - Do not give a web or static service a public address.
+- `--port int` - Port the container listens on (--image only).
+- `--region string` - Region: us-west, us-east or us-mia.
+- `--replicas int` - Replicas to run (1-50).
+- `--repo string` - Git repository URL.
+- `--root-dir string` - Directory inside the repository to build.
+- `--schedule string` - Five field schedule expression (with --type schedule).
+- `--slug string` - URL label (default: from the name).
+- `--start-command string` - Command the service starts with.
+- `--type string` - Service type: web, worker, private, static, schedule, database. (default `web`)
+
+#### `miosa service delete`
+
+Delete a service.
+
+```
+miosa service delete <project> <service> [flags]
+```
+
+Delete a service and stop its replicas.
+The service disappears from reads at once.
+
+Aliases: `rm`.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--yes` - Do not ask for confirmation.
+
+#### `miosa service deploy`
+
+Build and release a service.
+
+```
+miosa service deploy <project> <service> [flags]
+```
+
+Queue a release.
+With no source flag the service's own source is rebuilt.
+With
+--dir a local directory is uploaded as the source.
+
+```
+  miosa service deploy cliniciq API
+  miosa service deploy cliniciq API --dir . --message "fix the header" --wait
+  miosa service deploy cliniciq API --repo https://github.com/acme/api --branch main
+```
+
+Flags:
+
+- `--branch string` - Git branch.
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--dir string` - Upload this local directory as the source.
+- `--image string` - Deploy this container image.
+- `--message string` - Release message.
+- `--port int` - Port the container listens on (--image only).
+- `--repo string` - Build this git repository URL.
+- `--root-dir string` - Directory inside the repository to build.
+- `--timeout duration` - How long --wait may take. (default `10m0s`)
+- `--wait` - Wait until the release is live or fails.
+
+#### `miosa service domains`
+
+Show a service's addresses.
+
+```
+miosa service domains <project> <service> [flags]
+```
+
+Show the private address every service has and the public address it may have.
+
+```
+  miosa service domains cliniciq API
+  miosa service domains enable cliniciq API --label api
+  miosa service domains disable cliniciq API
+```
+
+Aliases: `domain`.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
+##### `miosa service domains disable`
+
+Remove a service's public address.
+
+```
+miosa service domains disable <project> <service> [flags]
+```
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
+##### `miosa service domains enable`
+
+Give a service a public address.
+
+```
+miosa service domains enable <project> <service> [flags]
+```
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--label string` - Host label (default: the service slug).
+
+#### `miosa service get`
+
+Show one service.
+
+```
+miosa service get <project> <service> [flags]
+```
+
+Aliases: `show`.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
+#### `miosa service list`
+
+List a project's services.
+
+```
+miosa service list <project> [flags]
+```
+
+Aliases: `ls`.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
+#### `miosa service logs`
+
+Show a release's events and failure reason.
+
+```
+miosa service logs <project> <service> [flags]
+```
+
+Show what happened to a release: every state transition, and the reason a release
+failed.
+The newest release is used unless --release names one (a release number or id).
+
+Build and runtime logs stream once the log route ships (Railway parity row 12);
+until then this reads the release events, which carry the failure reason.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--follow` - Stream new events (not available yet).
+- `--release string` - Release number or id (default: the newest).
+
+#### `miosa service promote`
+
+Serve this release again (the API's rollback).
+
+```
+miosa service promote <project> <service> <release> [flags]
+```
+
+Queue a release that serves an earlier release's built image with its frozen
+source and settings. 'promote' is the same operation; the Services API calls it
+rollback.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--yes` - Do not ask for confirmation.
+
+#### `miosa service release`
+
+Show one release.
+
+```
+miosa service release <project> <service> <release> [flags]
+```
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
+#### `miosa service releases`
+
+List a service's releases.
+
+```
+miosa service releases <project> <service> [flags]
+```
+
+Aliases: `history`.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
+#### `miosa service restart`
+
+Restart a service.
+
+```
+miosa service restart <project> <service> [flags]
+```
+
+Queue a release that restarts the service.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
+#### `miosa service rollback`
+
+Serve this release's built image again.
+
+```
+miosa service rollback <project> <service> <release> [flags]
+```
+
+Queue a release that serves an earlier release's built image with its frozen
+source and settings. 'promote' is the same operation; the Services API calls it
+rollback.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--yes` - Do not ask for confirmation.
+
+#### `miosa service runs`
+
+Show a Schedule's recent runs.
+
+```
+miosa service runs <project> <service> [flags]
+```
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--output` - Also print each run's output.
+
+#### `miosa service scale`
+
+Change replicas or region.
+
+```
+miosa service scale <project> <service> [flags]
+```
+
+Change the replica count or the region and queue a release that applies it.
+
+```
+  miosa service scale cliniciq API --replicas 4
+  miosa service scale cliniciq API --region us-east
+```
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--region string` - Region: us-west, us-east or us-mia.
+- `--replicas int` - Replicas to run (1-50).
+
+#### `miosa service settings`
+
+Show what each service setting does today.
+
+```
+miosa service settings <project>
+```
+
+Every setting is 'enforced' (it takes effect), 'stored' (saved but not applied
+yet) or 'unsupported'.
+Read this before relying on a setting.
+
+#### `miosa service start`
+
+Start a stopped service.
+
+```
+miosa service start <project> <service> [flags]
+```
+
+Start a stopped service and queue a release.
+A service that is already running is a conflict.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
+#### `miosa service stop`
+
+Stop a service now.
+
+```
+miosa service stop <project> <service> [flags]
+```
+
+Stop every active release now.
+Fails if a replica cannot be stopped, so the service is never reported stopped while it still runs.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--yes` - Do not ask for confirmation.
+
+#### `miosa service templates`
+
+List project templates (add Postgres, Redis, a web app).
+
+```
+miosa service templates
+```
+
+##### `miosa service templates apply`
+
+Apply a template to a project.
+
+```
+miosa service templates apply <project> <slug> [flags]
+```
+
+Create the template's services and variables in a Deploy target.
+
+```
+  miosa service templates apply cliniciq nextjs-postgres
+  miosa service templates apply cliniciq redis
+```
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--no-deploy` - Create the services without deploying them.
+
+#### `miosa service update`
+
+Change a service's name or settings.
+
+```
+miosa service update <project> <service> [flags]
+```
+
+Change a service's name, start command, replicas or region.
+Settings are merged:
+only the flags you pass change.
+
+```
+  miosa service update cliniciq API --replicas 3
+  miosa service update cliniciq API --name backend --start-command "node dist/server.js"
+```
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--name string` - New name.
+- `--region string` - Region: us-west, us-east or us-mia.
+- `--replicas int` - Replicas to run (1-50).
+- `--start-command string` - Command the service starts with.
+
+#### `miosa service vars`
+
+Variables of a service.
+
+```
+miosa service vars
+```
+
+Variables are sealed at rest and never printed except by 'reveal'.
+A value may be a
+reference: ${{Postgres.DATABASE_URL}} (another service), ${{shared.API_BASE}} (an
+environment shared variable), ${{NAME}} (another variable of this service) or
+${{secret(32)}} (a generated secret).
+
+```
+  miosa service vars list cliniciq API
+  miosa service vars set cliniciq API DATABASE_URL='${{Postgres.DATABASE_URL}}' NODE_ENV=production
+  miosa service vars effective cliniciq API
+  miosa service vars reveal cliniciq API DATABASE_URL
+```
+
+##### `miosa service vars effective`
+
+Show the variables a deploy would receive, references resolved.
+
+```
+miosa service vars effective <project> <service> [flags]
+```
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
+##### `miosa service vars list`
+
+List a service's variables (values masked).
+
+```
+miosa service vars list <project> <service> [flags]
+```
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
+##### `miosa service vars reveal`
+
+Print one variable's value.
+
+```
+miosa service vars reveal <project> <service> <NAME> [flags]
+```
+
+Print one variable's plaintext.
+Needs the env:reveal scope and a person acting
+as themselves; a sealed variable is never revealed.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
+##### `miosa service vars set`
+
+Set variables.
+
+```
+miosa service vars set <project> <service> KEY=VALUE [KEY=VALUE...] [flags]
+```
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
+##### `miosa service vars unset`
+
+Delete variables.
+
+```
+miosa service vars unset <project> <service> <NAME>[,NAME...] [flags]
+```
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
 
 ### `miosa service-account`
 
@@ -11579,6 +12259,29 @@ List the people in a workspace.
 ```
 miosa workspace members <workspace>
 ```
+
+#### `miosa workspace rename`
+
+Rename a workspace.
+
+```
+miosa workspace rename <workspace> <new-name> [flags]
+```
+
+Rename a workspace; --slug also changes its slug.
+
+```
+  miosa workspace rename staging "Staging EU"
+  miosa workspace rename staging "Staging EU" --slug staging-eu
+
+```
+The slug appears in URLs and, where an organization maps workspaces to another
+system by slug, is the key of that mapping: changing it can break the mapping,
+so the command warns when the slug really changed.
+
+Flags:
+
+- `--slug string` - New slug.
 
 #### `miosa workspace retire`
 

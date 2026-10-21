@@ -17,8 +17,9 @@ import (
 const builtinDefaultWorkspace = "default"
 
 // defaultWorkspaceRef is the workspace a create lands in when the command does
-// not name one: $MIOSA_WORKSPACE, then the selected profile's
-// default_workspace. It returns "" when neither names a real choice.
+// not name one: $MIOSA_WORKSPACE, then the acting organization's
+// default_workspaces entry, then the profile's flat default_workspace. It
+// returns "" when none names a real choice.
 func defaultWorkspaceRef() string {
 	if v := strings.TrimSpace(os.Getenv("MIOSA_WORKSPACE")); v != "" {
 		return v
@@ -27,6 +28,14 @@ func defaultWorkspaceRef() string {
 	if err != nil {
 		return ""
 	}
+	// The acting organization's own choice wins: `workspace use` in one
+	// organization must not change what another organization creates into.
+	org, _ := effectiveOrg()
+	if org != "" {
+		if ws := strings.TrimSpace(cfg.DefaultWorkspaces[org]); ws != "" && ws != builtinDefaultWorkspace {
+			return ws
+		}
+	}
 	ws := strings.TrimSpace(cfg.DefaultWorkspace)
 	if ws == "" || ws == builtinDefaultWorkspace {
 		return ""
@@ -34,9 +43,10 @@ func defaultWorkspaceRef() string {
 	return ws
 }
 
-// settleBucketWorkspace is the Before hook of 'storage create': an explicit
-// --workspace-id wins, otherwise --workspace or the shell/profile default.
-func settleBucketWorkspace(cmd *cobra.Command, c *api.Client) error {
+// settleCreateWorkspace is the Before hook of a declarative create that takes
+// both --workspace and the older --workspace-id: an explicit --workspace-id
+// wins, otherwise --workspace or the shell/profile default.
+func settleCreateWorkspace(cmd *cobra.Command, c *api.Client) error {
 	if fl := cmd.Flags().Lookup("workspace-id"); fl != nil && fl.Changed {
 		return settleWorkspace("workspace-id", false)(cmd, c)
 	}

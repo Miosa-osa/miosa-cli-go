@@ -347,15 +347,15 @@ the Engine-specific flags and an idempotent name.`,
 				{Name: "version", Usage: "Engine version (default: the engine's current one)", Field: "engine_version"},
 				{Name: "size", Usage: "Size: tiny, xs, small, medium or large", Enum: []string{"tiny", "xs", "small", "medium", "large"}},
 				{Name: "extensions", Type: "strings", Usage: "PostgreSQL extensions to enable at create, comma separated"},
-				{Name: "workspace", Usage: "Workspace slug (default: the profile's default workspace)", Field: "workspace_slug"},
+				{Name: "workspace", Usage: workspaceFlagUsage, Field: "workspace_id"},
 				{Name: "workspace-id", Usage: "Workspace id", Field: "workspace_id", Hidden: true},
 				{Name: "region", Usage: "Pin to a region"},
 				{Name: "class", Usage: "Data classification: public, internal, confidential or restricted", Field: "classification", Enum: []string{"public", "internal", "confidential", "restricted"}},
 			},
-			WorkspaceField: "workspace_slug",
-			After:          reportWorkspaceLanding,
-			Body:           func(a []string, body map[string]any) (map[string]any, error) { body["name"] = a[0]; return body, nil },
-			Detail:         []Col{{Head: "Name", Path: "name"}, {Head: "Id", Path: "id"}, {Head: "Engine", Path: "engine"}, {Head: "Version", Path: "engine_version"}, {Head: "State", Path: "state"}, {Head: "Memory (MB)", Path: "memory_mb"}, {Head: "Workspace", Path: "workspace_id"}},
+			Before: settleCreateWorkspace,
+			After:  reportWorkspaceLanding,
+			Body:   func(a []string, body map[string]any) (map[string]any, error) { body["name"] = a[0]; return body, nil },
+			Detail: []Col{{Head: "Name", Path: "name"}, {Head: "Id", Path: "id"}, {Head: "Engine", Path: "engine"}, {Head: "Version", Path: "engine_version"}, {Head: "State", Path: "state"}, {Head: "Memory (MB)", Path: "memory_mb"}, {Head: "Workspace", Path: "workspace_id"}},
 		},
 		Op{Use: "start <database>", Short: "Start a stopped database", Method: "POST", Path: "/databases/{0}/start", Args: []Arg{d}, Done: "Starting {0}"},
 		Op{Use: "stop <database>", Short: "Stop a database", Method: "POST", Path: "/databases/{0}/stop", Args: []Arg{d}, Confirm: "Stop database {0}?", Done: "Stopping {0}"},
@@ -390,7 +390,7 @@ func storageCmd() *cobra.Command {
 		Op{
 			Use: "create <name>", Short: "Create a bucket", Method: "POST", Path: "/storage/buckets", Args: []Arg{idArg("name")},
 			Flags:  []Flag{{Name: "visibility", Usage: "Who can read objects", Default: "private", Enum: []string{"private", "public"}}, {Name: "region", Usage: "Region"}, {Name: "workspace", Usage: "Workspace slug or id (default: $MIOSA_WORKSPACE, then the profile's default workspace)", Field: "workspace_id"}, {Name: "workspace-id", Usage: "Workspace id", Field: "workspace_id", Hidden: true}, {Name: "class", Usage: "Data classification: public, internal, confidential or restricted", Field: "classification", Enum: []string{"public", "internal", "confidential", "restricted"}}},
-			Before: settleBucketWorkspace,
+			Before: settleCreateWorkspace,
 			After:  reportWorkspaceLanding,
 			Body:   func(a []string, body map[string]any) (map[string]any, error) { body["name"] = a[0]; return body, nil },
 		},
@@ -627,7 +627,7 @@ create from; 'custom' lists the templates your organization built.
 }
 
 func projectCmd() *cobra.Command {
-	return group("project", "Projects group resources inside a workspace", "<project> is a name, slug or id.", []string{"projects"},
+	cmd := group("project", "Projects group resources inside a workspace", "<project> is a name, slug or id.", []string{"projects"},
 		Op{
 			Use: "list", Aliases: []string{"ls"}, Short: "List projects", Method: "GET", Path: "/projects",
 			Cols: []Col{{Head: "NAME", Path: "name"}, {Head: "SLUG", Path: "slug"}, {Head: "ID", Path: "id", Fmt: "short"}, {Head: "WORKSPACE", Path: "workspace_id", Fmt: "short"}, {Head: "DEFAULT", Path: "is_default"}},
@@ -645,6 +645,9 @@ else the organization's default workspace, else its only workspace.`,
 			Before: settleProjectWorkspace,
 		},
 	)
+	cmd.AddCommand(projectVarsCmd())
+	cmd.AddCommand(projectEnvironmentCmd())
+	return cmd
 }
 
 // ─── billing, audit, alerts, notifications ────────────────────────────────────
@@ -903,14 +906,32 @@ func newWorkspaceUseCmd() *cobra.Command {
 			if ws.Slug == "" {
 				ws.Slug = args[0]
 			}
-			cfg.DefaultWorkspace = ws.Slug
+			// One entry per organization: `workspace use` here must not change
+			// what another organization creates into. The flat field stays for
+			// a single-organization profile and for older config files.
+			org, _ := effectiveOrg()
+			if org == "" {
+				org = orDefault(cfg.ActiveOrg, cfg.Tenant)
+			}
+			if org != "" {
+				if cfg.DefaultWorkspaces == nil {
+					cfg.DefaultWorkspaces = map[string]string{}
+				}
+				cfg.DefaultWorkspaces[org] = ws.Slug
+			} else {
+				cfg.DefaultWorkspace = ws.Slug
+			}
 			if err := saveCurrentConfig(cfg); err != nil {
 				return die(err)
 			}
 			if isJSON() {
-				return p.JSON(map[string]string{"default_workspace": ws.Slug, "id": ws.ID})
+				return p.JSON(map[string]string{"default_workspace": ws.Slug, "org": org, "id": ws.ID})
 			}
-			p.Success("Default workspace is now %q", ws.Slug)
+			if org != "" {
+				p.Success("Default workspace for %s is now %q", org, ws.Slug)
+			} else {
+				p.Success("Default workspace is now %q", ws.Slug)
+			}
 			return nil
 		},
 	}

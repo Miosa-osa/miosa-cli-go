@@ -354,3 +354,99 @@ func TestDeployCreateFromSandboxSendsBuildCommandForAServer(t *testing.T) {
 		t.Fatalf("build_command not sent: %+v", b)
 	}
 }
+
+// A sandbox publish with --deployment publishes a new version of that
+// deployment. It used to ignore the flag, create a second deployment named
+// after the sandbox and leave it building with no build (FounderOS, 2026-10-20).
+func TestDeployFromSandboxHonoursDeployment(t *testing.T) {
+	f := newFakeAPI(t, func(c call) (int, string) {
+		switch {
+		case c.is("GET", "/sandboxes/by-name/box-1"):
+			return 200, `{"id":"sbx-1"}`
+		case c.is("GET", "/deployments/founderos-command"):
+			return 200, `{"data":{"id":"d9","name":"founderos-command","slug":"founderos-command","state":"running","public_url":"https://d9.miosa.app"}}`
+		case c.is("POST", "/sandboxes/sbx-1/deploy"):
+			return 201, `{"deployment_id":"d9","url":"https://d9.miosa.app","state":"building",
+"data":{"deployment":{"id":"d9","name":"founderos-command","slug":"founderos-command","state":"building","public_url":"https://d9.miosa.app"}}}`
+		case c.is("GET", "/deployments/d9"):
+			// The create polls the deployment by id until it is live.
+			return 200, `{"data":{"id":"d9","name":"founderos-command","slug":"founderos-command","state":"running","public_url":"https://d9.miosa.app"}}`
+		}
+		return 404, `{"error":{"code":"NOT_FOUND","message":"no route"}}`
+	})
+
+	if _, err := run(t, "deploy", "create", "--deployment", "founderos-command",
+		"--from-sandbox", "box-1", "-y"); err != nil {
+		t.Fatalf("deploy create --deployment: %v", err)
+	}
+
+	deploy := f.find("POST", "/sandboxes/sbx-1/deploy")
+	if len(deploy) != 1 {
+		t.Fatalf("expected one sandbox deploy call, got %d", len(deploy))
+	}
+	if deploy[0].Body["deployment_id"] != "d9" {
+		t.Fatalf("--deployment was not sent as deployment_id: %+v", deploy[0].Body)
+	}
+	if created := f.find("POST", "/deployments/drop/sessions"); len(created) != 0 {
+		t.Fatalf("a publish with --deployment must not create a deployment, got %d create calls", len(created))
+	}
+}
+
+// A --deployment that does not resolve is an error before anything is
+// published: the customer asked for an existing deployment, so publishing to a
+// different one is worse than stopping.
+func TestDeployFromSandboxUnknownDeploymentFails(t *testing.T) {
+	f := newFakeAPI(t, func(c call) (int, string) {
+		switch {
+		case c.is("GET", "/sandboxes/by-name/box-1"):
+			return 200, `{"id":"sbx-1"}`
+		}
+		return 404, `{"error":{"code":"NOT_FOUND","message":"deployment not found"}}`
+	})
+
+	_, err := run(t, "deploy", "create", "--deployment", "missing-thing",
+		"--from-sandbox", "box-1", "-y")
+	if err == nil {
+		t.Fatal("expected an error for an unknown --deployment")
+	}
+	if !strings.Contains(err.Error(), "--deployment missing-thing") {
+		t.Fatalf("error should name the flag and the reference, got: %v", err)
+	}
+	if deploy := f.find("POST", "/sandboxes/sbx-1/deploy"); len(deploy) != 0 {
+		t.Fatalf("nothing should be published when --deployment does not resolve, got %d calls", len(deploy))
+	}
+}
+
+// A --wait that times out must leave the user with the deployment id and the
+// reason the API had recorded. It used to print neither, so a stuck publish was
+// undiagnosable (FounderOS, batch F).
+func TestDeployCreateWaitTimeoutNamesTheDeployment(t *testing.T) {
+	newFakeAPI(t, func(c call) (int, string) {
+		switch {
+		case c.is("GET", "/sandboxes/by-name/box-1"):
+			return 200, `{"id":"sbx-1"}`
+		case c.is("POST", "/sandboxes/sbx-1/deploy"):
+			return 201, `{"deployment_id":"d1","url":"https://d1.miosa.app","state":"building",
+"data":{"deployment":{"id":"d1","name":"my-app","slug":"my-app","state":"building","public_url":"https://d1.miosa.app"}}}`
+		case c.is("GET", "/deployments/d1"):
+			return 200, `{"data":{"id":"d1","name":"my-app","slug":"my-app","state":"building","public_url":"https://d1.miosa.app",
+"failure":{"code":"healthcheck_timeout","stage":"deploy","message":"the app never answered on port 3000"}}}`
+		}
+		return 404, `{"error":{"code":"NOT_FOUND","message":"no route"}}`
+	})
+
+	out, err := run(t, "deploy", "create", "my-app", "--from-sandbox", "box-1",
+		"--wait", "--wait-timeout", "1s")
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if !strings.Contains(err.Error(), "d1") {
+		t.Fatalf("the timeout should name the deployment, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "healthcheck_timeout") {
+		t.Fatalf("the timeout should carry the recorded failure, got: %v", err)
+	}
+	if !strings.Contains(out, "d1") {
+		t.Fatalf("the deployment id should be printed before waiting, got stdout: %q", out)
+	}
+}

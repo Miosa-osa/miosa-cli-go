@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"sort"
@@ -47,6 +48,28 @@ var movables = []movable{
 	{"volume", "/volumes", "", resolveByRewrite("/volumes")},
 	{"schedule", "/cron-jobs", "", resolveByRewrite("/cron-jobs")},
 	{"agent", "/agents", "", func(ctx context.Context, c *api.Client, ref string) (string, error) { return c.ResolveAgent(ctx, ref) }},
+	{"webhook", "/webhooks", "", func(ctx context.Context, c *api.Client, ref string) (string, error) {
+		if api.IsUUID(ref) {
+			return ref, nil
+		}
+		// Webhooks are not a named resource the resolver knows; match the name
+		// against the list, and leave an unknown reference to the probe.
+		var out struct {
+			Data []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"data"`
+		}
+		if err := c.Get(ctx, "/webhooks", nil, &out); err != nil {
+			return "", err
+		}
+		for _, hook := range out.Data {
+			if hook.Name == ref {
+				return hook.ID, nil
+			}
+		}
+		return ref, nil
+	}},
 	{"project", "/projects", "", resolveByRewrite("/projects")},
 }
 
@@ -59,7 +82,7 @@ func movableKinds() []string {
 }
 
 func newMoveCmd() *cobra.Command {
-	var toWorkspace, kind, project string
+	var toWorkspace, toOrg, confirm, kind, project string
 	var detach, acceptEnv, dryRun bool
 	cmd := &cobra.Command{
 		Use:   "move <resource>",
@@ -74,13 +97,21 @@ func newMoveCmd() *cobra.Command {
 needs --type. A move changes ownership and scope only: names, hostnames,
 connection strings and object URLs keep working, and the data is untouched. A
 running database, deployment or machine must be stopped first. Moving needs
-admin rights in both workspaces.`,
+admin rights in both workspaces.
+
+Cross-organization transfer (deployments today) takes the target organization
+and the resource's name, and bills the target organization from the transfer:
+
+  miosa move my-app --to-org acme-eu --to-workspace production --confirm my-app`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if strings.TrimSpace(toWorkspace) == "" {
 				return usagef("say where to move it: --to-workspace <workspace>")
 			}
-			return runMove(cmd, args[0], kind, toWorkspace, moveOptions{project: project, detach: detach, acceptEnv: acceptEnv, dryRun: dryRun})
+			return runMove(cmd, args[0], kind, toWorkspace, moveOptions{
+				project: project, detach: detach, acceptEnv: acceptEnv, dryRun: dryRun,
+				toOrg: toOrg, confirm: confirm,
+			})
 		},
 	}
 	cmd.Flags().StringVar(&toWorkspace, "to-workspace", "", "The workspace to move it to (slug, name or id)")
@@ -88,12 +119,15 @@ admin rights in both workspaces.`,
 	cmd.Flags().BoolVar(&detach, "detach-from-project", false, "Leave its project behind (deployments, databases, buckets)")
 	cmd.Flags().BoolVar(&acceptEnv, "accept-env-changes", false, "Move a deployment even though the target's workspace variables differ")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Run every check and show the plan without moving anything (deployments, databases, buckets)")
+	cmd.Flags().StringVar(&toOrg, "to-org", "", "Transfer to this organization (id or slug); needs --to-workspace and --confirm")
+	cmd.Flags().StringVar(&confirm, "confirm", "", "The resource's name, required for a cross-organization transfer")
 	cmd.Flags().StringVar(&kind, "type", "", "Kind of resource: "+strings.Join(movableKinds(), ", "))
 	return cmd
 }
 
 type moveOptions struct {
 	project                   string
+	toOrg, confirm            string
 	detach, acceptEnv, dryRun bool
 }
 
@@ -121,6 +155,10 @@ func runMove(cmd *cobra.Command, ref, kind, toWorkspace string, opts moveOptions
 	found, err := findMovable(ctx, c.API, ref, kind)
 	if err != nil {
 		return err
+	}
+
+	if opts.toOrg != "" {
+		return runTransfer(cmd, c.API, found, target, opts)
 	}
 
 	var resp map[string]any
@@ -163,7 +201,7 @@ func runMove(cmd *cobra.Command, ref, kind, toWorkspace string, opts moveOptions
 }
 
 type movableMatch struct {
-	kind, route, id, bulk, workspaceID string
+	kind, route, id, bulk, workspaceID, name string
 }
 
 // findMovable looks the reference up among the movable kinds (or only `kind`)
@@ -183,7 +221,10 @@ func findMovable(ctx context.Context, c *api.Client, ref, kind string) (movableM
 		if err := c.Get(ctx, m.route+"/"+url.PathEscape(id), nil, &probe); err != nil {
 			continue
 		}
-		matches = append(matches, movableMatch{kind: m.kind, route: m.route, id: id, bulk: m.bulk, workspaceID: workspaceIDOf(probe)})
+		matches = append(matches, movableMatch{
+			kind: m.kind, route: m.route, id: id, bulk: m.bulk,
+			workspaceID: workspaceIDOf(probe), name: nameOf(probe),
+		})
 	}
 	switch len(matches) {
 	case 0:
@@ -203,17 +244,87 @@ func findMovable(ctx context.Context, c *api.Client, ref, kind string) (movableM
 	return movableMatch{}, usagef("%q is more than one kind of resource (%s): add --type", ref, strings.Join(kinds, ", "))
 }
 
-// workspaceIDOf reads the workspace_id off a resource response, bare or under data.
-func workspaceIDOf(resp any) string {
+// nameOf reads a resource's name off a probe response, bare or under data.
+func nameOf(resp any) string {
 	m, ok := resp.(map[string]any)
 	if !ok {
 		return ""
+	}
+	if d, ok := m["data"].(map[string]any); ok {
+		m = d
+	}
+	name, _ := m["name"].(string)
+	return name
+}
+
+// runTransfer posts a cross-organization transfer for one resource. The target
+// organization and workspace are resolved by the API; the caller confirms by the
+// resource's name, and the response carries when billing switched.
+func runTransfer(cmd *cobra.Command, c *api.Client, found movableMatch, target string, opts moveOptions) error {
+	if found.kind != "deployment" {
+		return usagef("a cross-organization transfer supports deployments today; %s is not transferable yet", found.kind)
+	}
+	name := orDefault(found.name, opts.confirm)
+	if strings.TrimSpace(opts.confirm) == "" {
+		return usagef("confirm the transfer by the resource's name: --confirm %s", name)
+	}
+	if name != "" && strings.TrimSpace(opts.confirm) != name {
+		return usagef("--confirm %q does not match the resource's name %q", opts.confirm, name)
+	}
+	if current, _ := effectiveOrg(); current != "" && strings.EqualFold(current, opts.toOrg) {
+		return usagef("--to-org %q is the current organization; use --to-workspace for a move inside it", opts.toOrg)
+	}
+	if found.workspaceID == "" {
+		return die(fmt.Errorf("could not tell which workspace %s %s is in", found.kind, found.name))
+	}
+
+	body := map[string]any{
+		"target_org_id":       opts.toOrg,
+		"target_workspace_id": target,
+		"resources":           []map[string]any{{"type": found.kind, "id": found.id}},
+		"confirm":             opts.confirm,
+	}
+	var resp map[string]any
+	if err := c.Post(cmd.Context(), "/workspaces/"+url.PathEscape(found.workspaceID)+"/cross-org-transfer", body, &resp); err != nil {
+		return die(err)
+	}
+	p := printerFor(cmd)
+	if isJSON() {
+		return p.JSON(resp)
+	}
+	switched := ""
+	if data, ok := resp["data"].(map[string]any); ok {
+		switched, _ = data["billing_switched_at"].(string)
+	}
+	p.Success("Transferred %s %s to %s; billing switched at %s", found.kind, orDefault(found.name, found.id), opts.toOrg, orDefault(switched, "the transfer"))
+	return nil
+}
+
+// workspaceIDOf reads the workspace_id off a resource response, bare or under
+// data. A typed struct (an SDK result handed straight to a create's landing
+// line) is read by round-tripping it through JSON.
+func workspaceIDOf(resp any) string {
+	m, ok := resp.(map[string]any)
+	if !ok {
+		b, err := json.Marshal(resp)
+		if err != nil {
+			return ""
+		}
+		if err := json.Unmarshal(b, &m); err != nil {
+			return ""
+		}
 	}
 	if id, _ := m["workspace_id"].(string); id != "" {
 		return id
 	}
 	if d, ok := m["data"].(map[string]any); ok {
 		if id, _ := d["workspace_id"].(string); id != "" {
+			return id
+		}
+	}
+	// An agent schedule answers with the trigger under "schedule".
+	if s, ok := m["schedule"].(map[string]any); ok {
+		if id, _ := s["workspace_id"].(string); id != "" {
 			return id
 		}
 	}

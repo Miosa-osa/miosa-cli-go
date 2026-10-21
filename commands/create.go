@@ -142,7 +142,14 @@ func runCreate(cmd *cobra.Command, args []string, size, template, workspace, run
 		workspace = defaultWorkspaceRef()
 	}
 	if workspace != "" {
-		input.WorkspaceSlug = workspace
+		// --workspace takes a slug, a name or an id. The create route takes an
+		// id (workspace_id); sending the reference as workspace_slug failed
+		// WORKSPACE_NOT_FOUND for anything but a literal slug.
+		id, err := c.API.ResolveWorkspace(cmd.Context(), workspace)
+		if err != nil {
+			return usagef("workspace %q: %v", workspace, err)
+		}
+		input.WorkspaceID = id
 	}
 	if len(opts.tag) > 0 {
 		tags, err := parseTagFlags(opts.tag)
@@ -219,6 +226,7 @@ func runCreate(cmd *cobra.Command, args []string, size, template, workspace, run
 	p.Line("  Status:   %s", sandbox.State)
 	p.Line("  Size:     %s", sandbox.Size)
 	p.Line("  Template: %s", sandbox.TemplateID)
+	_ = reportWorkspaceLanding(cmd, sandbox.SandboxData)
 	if envName != "" || noEnv || sandbox.Environment != "" || setup != "" {
 		printMachineEnv(p, sandbox.MachineEnvironment)
 	}

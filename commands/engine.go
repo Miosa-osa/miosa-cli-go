@@ -37,6 +37,7 @@ type engineSyncFlags struct {
 	relay     string
 	engineID  string
 	miosaKey  string
+	grant     bool
 	since     int
 }
 
@@ -52,6 +53,7 @@ type engineSyncOptions struct {
 	relayURL     string
 	engineID     string
 	miosaKey     string
+	grant        bool
 	since        int
 }
 
@@ -323,7 +325,9 @@ before it applies anything.
 
 The admin keys come from --local-key/--cloud-key or MIOSA_ENGINE_LOCAL_KEY and
 MIOSA_ENGINE_CLOUD_KEY. The relay takes a MIOSA API key with engine:sync, from
---api-key or MIOSA_API_KEY. No key is ever printed.`,
+--api-key or MIOSA_API_KEY. With --grant it mints a short-lived engine:sync key
+for this run instead: the grant is audited, the key lives in memory only, and
+it expires on its own. No key is ever printed.`,
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := engineSyncOptions{
@@ -338,7 +342,11 @@ MIOSA_ENGINE_CLOUD_KEY. The relay takes a MIOSA API key with engine:sync, from
 				relayURL:     firstNonEmpty(f.relay, os.Getenv("MIOSA_RELAY_URL")),
 				engineID:     f.engineID,
 				miosaKey:     firstNonEmpty(f.miosaKey, os.Getenv("MIOSA_API_KEY")),
+				grant:        f.grant,
 				since:        f.since,
+			}
+			if err := grantRelayKey(cmd, &opts); err != nil {
+				return die(err)
 			}
 			if err := opts.validate(); err != nil {
 				return die(err)
@@ -361,6 +369,7 @@ MIOSA_ENGINE_CLOUD_KEY. The relay takes a MIOSA API key with engine:sync, from
 	pf.StringVar(&f.relay, "relay", "", "MIOSA relay base URL (for example https://api.miosa.ai/api/v1); enables relay mode")
 	pf.StringVar(&f.engineID, "engine-id", "", "Managed Engine database id on the relay")
 	pf.StringVar(&f.miosaKey, "api-key", "", "MIOSA API key with engine:sync (env: MIOSA_API_KEY)")
+	pf.BoolVar(&f.grant, "grant", false, "Mint a short-lived engine:sync key for this run instead of using --api-key (audited, never stored)")
 	pf.IntVar(&f.since, "since", 0, "Ledger sequence to pull from on both sides")
 
 	cmd.AddCommand(newEngineSyncStatusCmd())
@@ -375,7 +384,8 @@ func newEngineSyncStatusCmd() *cobra.Command {
 		Short: "Show sync status and open conflicts on both Engines",
 		Long: `Reads the sync status of both sides. In relay mode it reads the cloud
 through MIOSA and reports the migration and version the cloud expects, so a
-schema mismatch is visible before a push fails.`,
+schema mismatch is visible before a push fails. --grant mints a short-lived
+engine:sync key for this run instead of taking one from --api-key.`,
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := engineSyncOptions{
@@ -388,7 +398,11 @@ schema mismatch is visible before a push fails.`,
 				relayURL:     firstNonEmpty(f.relay, os.Getenv("MIOSA_RELAY_URL")),
 				engineID:     f.engineID,
 				miosaKey:     firstNonEmpty(f.miosaKey, os.Getenv("MIOSA_API_KEY")),
+				grant:        f.grant,
 				since:        f.since,
+			}
+			if err := grantRelayKey(cmd, &opts); err != nil {
+				return die(err)
 			}
 			if err := opts.validate(); err != nil {
 				return die(err)
@@ -409,7 +423,64 @@ schema mismatch is visible before a push fails.`,
 	pf.StringVar(&f.relay, "relay", "", "MIOSA relay base URL; enables relay mode")
 	pf.StringVar(&f.engineID, "engine-id", "", "Managed Engine database id on the relay")
 	pf.StringVar(&f.miosaKey, "api-key", "", "MIOSA API key with engine:sync (env: MIOSA_API_KEY)")
+	pf.BoolVar(&f.grant, "grant", false, "Mint a short-lived engine:sync key for this run instead of using --api-key (audited, never stored)")
 	return cmd
+}
+
+// grantRelayKey mints a short-lived engine:sync key for this run when --grant
+// is set and no key was given. The key lives in memory for the length of the
+// command; it is never printed or written to the profile. The server audits
+// every grant and revokes the previous relay key for the tenant.
+func grantRelayKey(cmd *cobra.Command, o *engineSyncOptions) error {
+	if !o.grant {
+		return nil
+	}
+	if !o.relayMode() {
+		return fmt.Errorf("--grant applies to relay mode: add --relay and --engine-id")
+	}
+	if strings.TrimSpace(o.miosaKey) != "" {
+		return nil
+	}
+	key, expiresAt, err := mintRelayKey(cmd.Context())
+	if err != nil {
+		return err
+	}
+	o.miosaKey = key
+	if !isJSON() {
+		if expiresAt.IsZero() {
+			printerFor(cmd).Line("relay key granted (short-lived; not stored)")
+		} else {
+			printerFor(cmd).Line("relay key granted, expires %s (not stored)", expiresAt.UTC().Format(time.RFC3339))
+		}
+	}
+	return nil
+}
+
+func mintRelayKey(ctx context.Context) (string, time.Time, error) {
+	c, _, err := buildClient()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	var resp struct {
+		Key       string   `json:"key"`
+		Scopes    []string `json:"scopes"`
+		ExpiresAt string   `json:"expires_at"`
+	}
+	if err := c.API.Post(ctx, "/cli/relay-keys", map[string]any{"confirm": "engine:sync"}, &resp); err != nil {
+		// A server that predates the relay-key route answers 404. Say what to
+		// do instead of printing a bare "not found" for a route the user
+		// cannot see.
+		if api.IsStatus(err, http.StatusNotFound) {
+			return "", time.Time{}, fmt.Errorf(
+				"this server does not support relay key grants yet; pass --api-key with a key that has engine:sync")
+		}
+		return "", time.Time{}, fmt.Errorf("mint relay key: %w", err)
+	}
+	if strings.TrimSpace(resp.Key) == "" {
+		return "", time.Time{}, fmt.Errorf("mint relay key: the server returned no key")
+	}
+	expiresAt, _ := time.Parse(time.RFC3339, resp.ExpiresAt)
+	return resp.Key, expiresAt, nil
 }
 
 func (o engineSyncOptions) validate() error {
@@ -420,8 +491,8 @@ func (o engineSyncOptions) validate() error {
 		if strings.TrimSpace(o.relayURL) == "" || strings.TrimSpace(o.engineID) == "" {
 			return fmt.Errorf("relay mode needs --relay (for example https://api.miosa.ai/api/v1) and --engine-id")
 		}
-		if strings.TrimSpace(o.miosaKey) == "" {
-			return fmt.Errorf("relay mode needs a MIOSA key with engine:sync: --api-key or MIOSA_API_KEY")
+		if strings.TrimSpace(o.miosaKey) == "" && !o.grant {
+			return fmt.Errorf("relay mode needs a MIOSA key with engine:sync: --api-key, MIOSA_API_KEY, or --grant to mint one for this run")
 		}
 		if strings.TrimSpace(o.localURL) == "" || strings.TrimSpace(o.localKey) == "" {
 			return fmt.Errorf("relay mode still needs the local Engine URL and its admin key")

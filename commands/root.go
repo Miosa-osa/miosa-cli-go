@@ -188,7 +188,7 @@ func init() {
 		newCheckpointCmd(),
 		newRestoreCmd(),
 		newDaemonCmd(),
-		newServicesCmd(),
+		serviceCmd(),
 		newPolicyCmd(),
 		newCatalogCmd(),
 		newRuntimesCmd(),

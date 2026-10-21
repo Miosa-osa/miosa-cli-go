@@ -19,6 +19,7 @@ func newWorkspaceCmd() *cobra.Command {
 	cmd.AddCommand(
 		newWorkspaceCreateCmd(),
 		newWorkspaceListCmd(),
+		newWorkspaceRenameCmd(),
 		newWorkspaceDeleteCmd(),
 		newWorkspaceRetireCmd(),
 	)
@@ -148,4 +149,55 @@ func runWorkspaceDelete(cmd *cobra.Command, args []string, yes bool) error {
 		fmt.Fprintf(p.Writer(), "  released %v %s\n", released[k], k)
 	}
 	return nil
+}
+
+// newWorkspaceRenameCmd renames a workspace and, with --slug, changes its slug.
+func newWorkspaceRenameCmd() *cobra.Command {
+	var slug string
+	cmd := &cobra.Command{
+		Use:   "rename <workspace> <new-name>",
+		Short: "Rename a workspace",
+		Long: `Rename a workspace; --slug also changes its slug.
+
+  miosa workspace rename staging "Staging EU"
+  miosa workspace rename staging "Staging EU" --slug staging-eu
+
+The slug appears in URLs and, where an organization maps workspaces to another
+system by slug, is the key of that mapping: changing it can break the mapping,
+so the command warns when the slug really changed.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p := printerFor(cmd)
+			c, _, err := buildClient()
+			if err != nil {
+				return die(err)
+			}
+			id, err := c.API.ResolveWorkspace(cmd.Context(), args[0])
+			if err != nil {
+				return usagef("workspace %q: %v", args[0], err)
+			}
+			body := map[string]any{"name": args[1]}
+			if slug != "" {
+				body["slug"] = slug
+			}
+			var resp map[string]any
+			if err := c.API.Patch(cmd.Context(), "/workspaces/"+url.PathEscape(id), body, &resp); err != nil {
+				return die(err)
+			}
+			if isJSON() {
+				return p.JSON(resp)
+			}
+			ws, _ := resp["data"].(map[string]any)
+			if ws == nil {
+				ws = resp
+			}
+			p.Success("Renamed workspace to %q (%s)", formatValue(ws["name"], args[1]), formatValue(ws["slug"], ""))
+			if slug != "" {
+				p.Line("The slug changed to %q: anything that maps workspaces by slug (an Engine workspace, a CI variable) must be updated.", formatValue(ws["slug"], slug))
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&slug, "slug", "", "New slug")
+	return cmd
 }

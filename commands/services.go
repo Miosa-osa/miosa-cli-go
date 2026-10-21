@@ -15,11 +15,10 @@ import (
 // routes since the daemon routes (/sandboxes/:id/services) only create, list,
 // show, restart and read logs.
 //
-// It was called `miosa services` (also service, svc) until 2.3.13. That name is
-// moving to project Services (tasks/specs/cli-noun-plan-services-2026-10-16.md):
-// 2.3.13 kept the old names working with a stderr notice, 2.3.14 refuses them
-// with the rewritten command, and the next minor gives `service` to project
-// Services.
+// It was called `miosa services` (also service, svc) until 2.3.13. Those names
+// were tombstoned in 2.3.14 (tasks/specs/cli-noun-plan-services-2026-10-16.md);
+// `service` and `services` now mean project Services (commands/service.go), and
+// `miosa daemon` is the only name for a sandbox process.
 
 var serviceCols = []Col{
 	{Head: "NAME", Path: "name"}, {Head: "STATUS", Path: "status"}, {Head: "PID", Path: "pid"},
@@ -35,25 +34,6 @@ everywhere (the current one is used).
   miosa daemon list
   miosa daemon logs web --tail 50
   miosa daemon restart web`)
-}
-
-// newServicesCmd is the old name, refused since 2.3.14 (step two of the noun
-// plan): every form exits 2 and prints the daemon command to run instead, so a
-// script fails loudly rather than reaching project Services when `service`
-// takes that meaning. Flags are not parsed, so any old command line lands here.
-func newServicesCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:                "services",
-		Aliases:            []string{"service", "svc"},
-		Short:              "Renamed to 'miosa daemon'",
-		Hidden:             true,
-		DisableFlagParsing: true,
-		Args:               cobra.ArbitraryArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return usagef("'miosa %s' was renamed to 'miosa daemon'; run: %s",
-				cmd.CalledAs(), strings.Join(append([]string{"miosa", "daemon"}, args...), " "))
-		},
-	}
 }
 
 // daemonGroup builds the command under `use`; noun is the word its messages use.

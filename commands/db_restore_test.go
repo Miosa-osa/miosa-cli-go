@@ -19,6 +19,8 @@ type dbServer struct {
 	bodies   map[string]map[string]any
 	newState string
 	backups  string
+	// restoreStatus, when set, is the status the restore route answers instead of 202.
+	restoreStatus int
 }
 
 func (d *dbServer) handler(t *testing.T) http.Handler {
@@ -51,7 +53,14 @@ func (d *dbServer) handler(t *testing.T) http.Handler {
 			w.Write([]byte(`{"id":"22222222-2222-4222-8222-222222222222","name":"app-db-r","state":"provisioning"}`))
 		case "GET /databases/22222222-2222-4222-8222-222222222222":
 			w.Write([]byte(`{"id":"22222222-2222-4222-8222-222222222222","state":"` + d.newState + `"}`))
+		case "DELETE /databases/22222222-2222-4222-8222-222222222222":
+			w.Write([]byte(`{"status":"destroying"}`))
 		case "POST /databases/22222222-2222-4222-8222-222222222222/restore", "POST /databases/" + srcID + "/restore":
+			if d.restoreStatus != 0 {
+				w.WriteHeader(d.restoreStatus)
+				w.Write([]byte(`{"error":{"code":"BACKUP_NOT_COMPLETED","message":"backup is not completed"}}`))
+				break
+			}
 			w.WriteHeader(202)
 			w.Write([]byte(`{"id":"r1","state":"pending"}`))
 		case "GET /databases/22222222-2222-4222-8222-222222222222/restores", "GET /databases/" + srcID + "/restores":
@@ -117,8 +126,10 @@ func TestDBRestoreToNewUsesTheBackupItIsGiven(t *testing.T) {
 	if got := fake.bodies["POST /databases/22222222-2222-4222-8222-222222222222/restore"]["backup_id"]; got != full {
 		t.Errorf("want %s, got %v", full, got)
 	}
-	if fake.has("GET /databases/" + srcID + "/backups") {
-		t.Error("a full id needs no backup list")
+	// A full id is not resolved against the list, but the list is read once to check the backup is
+	// finished before a database is created for it.
+	if !fake.has("GET /databases/" + srcID + "/backups") {
+		t.Error("the backup's state should be checked before the target is created")
 	}
 }
 
@@ -207,5 +218,45 @@ func TestDBRecoverRefusesAnAmbiguousShortBackupID(t *testing.T) {
 	}
 	if fake.has("POST /databases/22222222-2222-4222-8222-222222222222/restore") {
 		t.Fatal("nothing may be restored")
+	}
+}
+
+const newID = "22222222-2222-4222-8222-222222222222"
+
+func TestDBRecoverToNewRefusesAnUnfinishedBackupBeforeCreatingAnything(t *testing.T) {
+	fake := &dbServer{
+		newState: "running",
+		backups:  `{"data":[{"id":"aaaaaaaa-1111-4111-8111-111111111111","state":"running"}]}`,
+	}
+	srv := httptest.NewServer(fake.handler(t))
+	defer srv.Close()
+	setupEnv(t, srv)
+
+	out, err := run(t, "db", "recover", srcID, "--backup", "aaaaaaaa-1111-4111-8111-111111111111", "--to-new", "app-db-r")
+	if err == nil {
+		t.Fatalf("an unfinished backup must be refused, got %q", out)
+	}
+	if fake.has("POST /databases") {
+		t.Error("no database may be created for a backup that cannot be restored yet")
+	}
+	if !strings.Contains(err.Error(), "not completed") {
+		t.Errorf("the error should say the backup is not completed, got %v", err)
+	}
+}
+
+func TestDBRecoverToNewRemovesTheTargetWhenTheRestoreIsRefused(t *testing.T) {
+	fake := &dbServer{newState: "running", restoreStatus: 409}
+	srv := httptest.NewServer(fake.handler(t))
+	defer srv.Close()
+	setupEnv(t, srv)
+
+	if _, err := run(t, "db", "recover", srcID, "--to-new", "app-db-r"); err == nil {
+		t.Fatal("a refused restore must fail the command")
+	}
+	if !fake.has("POST /databases") {
+		t.Fatal("the target should have been created before the restore was attempted")
+	}
+	if !fake.has("DELETE /databases/" + newID) {
+		t.Error("the new database must be deleted when the restore is refused, not left running")
 	}
 }

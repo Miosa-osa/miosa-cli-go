@@ -98,6 +98,13 @@ func runInSandbox(cmd *cobra.Command, nameOrID string, in miosa.CommandInput, ti
 	}
 
 	target, isComputer := resolveExecTarget(cmd, c, nameOrID)
+	// Say where the command runs before its output: the resource's own org and
+	// workspace, not the profile's default.
+	kind := "sandbox"
+	if isComputer {
+		kind = "computer"
+	}
+	printTargetScope(cmd, c.API, kind, target)
 
 	var stdout, stderr string
 	var exitCode int

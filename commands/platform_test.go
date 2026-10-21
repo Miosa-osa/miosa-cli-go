@@ -15,6 +15,7 @@ const (
 	depID = "7f9b1e48-787c-4e91-ad3c-cf746cc3da3d"
 	wsID  = "4dbd11d9-ee87-4b99-a5dc-c6907e37a526"
 	volID = "87d908f0-520a-4028-b2bc-000000000000"
+	tzID  = "5e0a1b2c-3d4e-4f50-8a61-7b8c9d0e1f20"
 )
 
 // platformCase is one command and the request it must produce.
@@ -62,7 +63,7 @@ func TestPlatformCommandsSendTheRightRequests(t *testing.T) {
 		{args: []string{"db", "wake", "d1"}, method: "POST", path: "/databases/d1/wake", reply: `{}`},
 		{args: []string{"db", "connection", "d1"}, method: "GET", path: "/databases/d1/credentials", reply: `{"url":"postgres://u:p@h/db"}`, wantOut: "postgres://"},
 		{args: []string{"db", "logs", "d1", "--tail", "20"}, method: "GET", path: "/databases/d1/logs", reply: `{"logs":[{"t":null,"stream":"stdout","line":"ready to accept connections"}],"count":1}`, query: map[string]string{"lines": "20"}, wantOut: "ready to accept"},
-		{args: []string{"db", "create", "app-db", "--engine", "postgres", "--version", "16", "--size", "small", "--extensions", "vector,pg_trgm", "--workspace", "tz"}, method: "POST", path: "/databases", reply: `{"id":"d9","name":"app-db","engine":"postgresql","engine_version":"16","state":"provisioning","memory_mb":2048}`, body: map[string]any{"name": "app-db", "engine": "postgres", "engine_version": "16", "size": "small", "extensions": []string{"vector", "pg_trgm"}, "workspace_slug": "tz"}, wantOut: "provisioning"},
+		{args: []string{"db", "create", "app-db", "--engine", "postgres", "--version", "16", "--size", "small", "--extensions", "vector,pg_trgm", "--workspace", "tz"}, method: "POST", path: "/databases", reply: `{"id":"d9","name":"app-db","engine":"postgresql","engine_version":"16","state":"provisioning","memory_mb":2048}`, body: map[string]any{"name": "app-db", "engine": "postgres", "engine_version": "16", "size": "small", "extensions": []string{"vector", "pg_trgm"}, "workspace_id": tzID}, wantOut: "provisioning"},
 		{args: []string{"db", "backups", "d1"}, method: "GET", path: "/databases/d1/backups", reply: list(`{"id":"b1b1b1b1-0000-0000-0000-000000000000","state":"completed","size_bytes":2048,"created_at":"2026-10-18T10:00:00Z"}`), wantOut: "2.0 KB"},
 		{args: []string{"db", "backup", "d1"}, method: "POST", path: "/databases/d1/backups", reply: `{}`},
 		{args: []string{"db", "rm", "d1", "-y"}, method: "DELETE", path: "/databases/d1", reply: `{}`, wantOut: "Deleted d1", needsYes: true},
@@ -175,7 +176,7 @@ func TestPlatformCommandsSendTheRightRequests(t *testing.T) {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			routes := map[string]any{
 				"GET /deployments": `{"data":[{"id":"` + depID + `","name":"My App","slug":"my-app"}]}`,
-				"GET /workspaces":  `{"data":[{"id":"` + wsID + `","name":"Acme","slug":"acme"}]}`,
+				"GET /workspaces":  `{"data":[{"id":"` + wsID + `","name":"Acme","slug":"acme"},{"id":"` + tzID + `","name":"Team Zero","slug":"tz"}]}`,
 			}
 			routes[tc.method+" "+tc.path] = tc.reply // the case's own reply wins
 			f := fakeRoutes(t, routes)

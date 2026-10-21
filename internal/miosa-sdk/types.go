@@ -55,6 +55,9 @@ type CreateComputerInput struct {
 	TemplateType string            `json:"template_type,omitempty"`
 	Size         ComputerSize      `json:"size,omitempty"`
 	Metadata     map[string]string `json:"metadata,omitempty"`
+	// WorkspaceID places the computer in this workspace; empty leaves it to
+	// the API's default.
+	WorkspaceID string `json:"workspace_id,omitempty"`
 
 	// Environment names the environment to start from (default when empty).
 	Environment string `json:"environment,omitempty"`

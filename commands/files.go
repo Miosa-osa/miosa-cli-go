@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Miosa-osa/miosa-cli-go/internal/api"
+	"github.com/Miosa-osa/miosa-cli-go/internal/config"
 )
 
 // homeDir is where relative remote paths start, and the only directory shared
@@ -37,6 +38,15 @@ Relative remote paths start in ` + homeDir + `.
   miosa files cp my-box:/workspace/out.json ./out.json
   miosa files cat my-box:/workspace/out.json
   echo hi | miosa files write my-box:/tmp/hi.txt`,
+		// Say where the files live before the command does anything: the
+		// sandbox's own org and workspace, not the profile's default.
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// This hook replaces the root's for files commands, so it must
+			// still resolve --json, the profile and MIOSA_OUTPUT first.
+			applyGlobals(cmd)
+			printFilesTarget(cmd, args)
+			return nil
+		},
 	}
 	cmd.AddCommand(
 		newFilesLsCmd(),
@@ -748,4 +758,35 @@ func newFilesChmodCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// printFilesTarget is the files banner. It never fails the command: a target
+// that cannot be read is left to the command itself to report.
+func printFilesTarget(cmd *cobra.Command, args []string) {
+	if isJSON() {
+		return
+	}
+	ref := ""
+	for _, a := range args {
+		if name, _, remote := parseRemotePath(a); remote {
+			ref = name
+			break
+		}
+	}
+	if ref == "" {
+		cfg, err := config.Load()
+		if err != nil || cfg.CurrentSandbox == "" {
+			return
+		}
+		ref = cfg.CurrentSandbox
+	}
+	c, _, err := buildClient()
+	if err != nil {
+		return
+	}
+	id, err := c.API.ResolveSandbox(cmd.Context(), ref)
+	if err != nil || id == "" {
+		return
+	}
+	printTargetScope(cmd, c.API, "sandbox", id)
 }

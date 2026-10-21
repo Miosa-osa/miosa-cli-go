@@ -21,6 +21,7 @@ type SandboxData struct {
 	ID             string            `json:"id"`
 	TenantID       string            `json:"tenant_id"`
 	OwnerID        string            `json:"owner_id"`
+	WorkspaceID    string            `json:"workspace_id"`
 	Name           string            `json:"name"`
 	State          ComputerStatus    `json:"state"`
 	TemplateID     string            `json:"template_id"`

@@ -562,37 +562,41 @@ func TestDaemonCommands(t *testing.T) {
 	}
 }
 
-// 2.3.13 renamed `services` to `daemon`; 2.3.14 refuses the old names
-// (tasks/specs/cli-noun-plan-services-2026-10-16.md): exit 2, the daemon
-// command to run instead, and no request.
-func TestServicesIsRefusedWithTheDaemonCommand(t *testing.T) {
+// 2.3.13 renamed `services` to `daemon`; 2.3.14 refused the old names; from
+// this release `service` and `services` mean project Services
+// (tasks/specs/cli-noun-plan-services-2026-10-16.md, row N+2). The daemon routes
+// must never be reached by an old command line: it goes to Services and fails
+// loudly instead.
+func TestOldDaemonNamesNeverReachTheDaemonRoutes(t *testing.T) {
 	f := daemonRoutes(t)
-	cases := map[string][]string{
-		"miosa daemon list my-box":                   {"services", "list", "my-box"},
-		"miosa daemon logs web -n 5":                 {"svc", "logs", "web", "-n", "5"},
-		"miosa daemon create --name web --command x": {"service", "create", "--name", "web", "--command", "x"},
-	}
-	for want, args := range cases {
-		out, stderr, err := runSplit(t, args...)
-		if err == nil || commands.ExitCode(err) != commands.ExitUsage {
-			t.Fatalf("%v: want exit 2, got %v", args, err)
-		}
-		if !strings.Contains(err.Error(), "run: "+want) || out != "" {
-			t.Fatalf("%v: err=%v stdout=%q stderr=%q", args, err, out, stderr)
+	// No project exists in this fake, so each line fails before any service call.
+	for _, args := range [][]string{
+		{"services", "list", "my-box"},
+		{"svc", "logs", "web", "-n", "5"},
+		{"service", "create", "my-box", "web", "--repo", "https://github.com/acme/api"},
+	} {
+		if _, _, err := runSplit(t, args...); err == nil {
+			t.Fatalf("%v: want an error, got none", args)
 		}
 	}
-	if f.count() != 0 {
-		t.Fatalf("a refused old name must make no request: %+v", f.calls)
+	if len(f.find("POST", "/sandboxes/sbx-1/services")) != 0 {
+		t.Fatalf("an old daemon command line must not create a sandbox service: %+v", f.calls)
+	}
+	if len(f.find("DELETE", "/sandboxes/sbx-1/processes/s-id")) != 0 {
+		t.Fatalf("an old daemon command line must not stop a sandbox process: %+v", f.calls)
 	}
 }
 
-func TestHelpListsDaemonNotServices(t *testing.T) {
+func TestHelpListsDaemonAndService(t *testing.T) {
 	out, _, err := runSplit(t, "--help")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "\n  daemon ") || strings.Contains(out, "\n  services ") {
-		t.Fatalf("help:\n%s", out)
+	if !strings.Contains(out, "\n  daemon ") {
+		t.Fatalf("help must list the daemon group:\n%s", out)
+	}
+	if !strings.Contains(out, "\n  service ") {
+		t.Fatalf("help must list the Services group:\n%s", out)
 	}
 }
 

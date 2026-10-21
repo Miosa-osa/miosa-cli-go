@@ -32,7 +32,12 @@ type Config struct {
 	APIURL           string `toml:"api_url"`
 	APIKey           string `toml:"api_key"`
 	DefaultWorkspace string `toml:"default_workspace"`
-	CurrentSandbox   string `toml:"current_sandbox"`
+	// DefaultWorkspaces is the default workspace per organization slug, so
+	// `workspace use` in one organization does not change the default another
+	// organization creates into. DefaultWorkspace stays the fallback for a
+	// profile that never chose per organization.
+	DefaultWorkspaces map[string]string `toml:"default_workspaces,omitempty"`
+	CurrentSandbox    string            `toml:"current_sandbox"`
 	// Tenant is the organization slug the key belongs to. Informational: the
 	// key itself decides the tenant.
 	Tenant string `toml:"tenant,omitempty"`
