@@ -124,3 +124,11 @@ func SetLookPathForTest(f func(string) (string, error)) func() {
 
 // WriteErrorForTest prints err the way Execute does.
 func WriteErrorForTest(w io.Writer, err error, asJSON bool) { writeError(w, err, asJSON) }
+
+// SetDeliveryDefaultURLForTest points the Delivery client's default URL (used when FORGE_LOCAL_URL
+// is unset) at url, and returns the function that restores it.
+func SetDeliveryDefaultURLForTest(url string) func() {
+	previous := deliveryDefaultURL
+	deliveryDefaultURL = url
+	return func() { deliveryDefaultURL = previous }
+}

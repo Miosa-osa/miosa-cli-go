@@ -1182,6 +1182,7 @@ uploads. <deployment> is a name, slug or id.
 	}
 	cmd.AddCommand(newDeployCreateCmd())
 	cmd.AddCommand(newDeployPushCmd())
+	cmd.AddCommand(newDeployRedeployCmd())
 	cmd.AddCommand(newDeployPromoteCmd())
 	cmd.AddCommand(newDeployDomainUpdateCmd())
 	cmd.AddCommand(newDeployUpdateCmd())
@@ -1555,4 +1556,106 @@ func deploymentWorkspace(cmd *cobra.Command, c *client.Client, id string) string
 		return ""
 	}
 	return resp.Data.WorkspaceID
+}
+
+// deployBuildResponse is the build a redeploy starts (the API's build document).
+type deployBuildResponse struct {
+	ID           string `json:"id"`
+	State        string `json:"state"`
+	ErrorMessage string `json:"error_message"`
+	LogURL       string `json:"log_url"`
+}
+
+// runDeployRedeploy starts a rebuild and prints the build it started.
+//
+// The old declarative form printed "Redeploying <name>" and nothing else: when the build then failed,
+// the customer saw the previous version still serving and could not tell whether their redeploy had
+// done anything (ClinicIQ v12, FounderOS batch F: "redeploy rebuilds v11"). The build id and state are
+// printed, a build that is already failed is an error naming its reason, and the follow-up commands
+// are named.
+// redeployWaitTimeout is how long `deploy redeploy --wait` follows the deployment, the same default
+// as `deploy create --wait-timeout`.
+const redeployWaitTimeout = 10 * time.Minute
+
+func newDeployRedeployCmd() *cobra.Command {
+	var commit string
+	var wait bool
+
+	cmd := &cobra.Command{
+		Use:   "redeploy <deployment>",
+		Short: "Build and release again from the same source",
+		Long: `Rebuilds the deployment from its configured source and releases the result.
+
+The command prints the build it starts. A failed build marks the deployment failed and records the
+reason: 'miosa deploy get <deployment>' reports it and 'miosa deploy builds <deployment>' lists the
+run. A deployment published from a sandbox has no repository to rebuild, so it re-runs the release it
+already has. An uploaded static site has nothing to rebuild: push a new version with
+'miosa deploy push'.`,
+		Example: "  miosa deploy redeploy my-app\n  miosa deploy redeploy my-app --commit 1a2b3c4d",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDeployRedeploy(cmd, args[0], commit, wait)
+		},
+	}
+
+	fs := cmd.Flags()
+	fs.StringVar(&commit, "commit", "", "Forge deployments: build this commit instead of the branch head")
+	fs.BoolVar(&wait, "wait", false, "Wait until the redeployed version is live (10 minutes)")
+	return cmd
+}
+
+func runDeployRedeploy(cmd *cobra.Command, ref, commit string, wait bool) error {
+	c, _, err := buildClient()
+	if err != nil {
+		return die(err)
+	}
+	body := map[string]any{}
+	if commit != "" {
+		body["commit_sha"] = commit
+	}
+
+	var resp struct {
+		Data deployBuildResponse `json:"data"`
+	}
+	if err := c.API.Post(cmd.Context(), "/deployments/"+url.PathEscape(ref)+"/redeploy", body, &resp); err != nil {
+		return die(err)
+	}
+
+	b := resp.Data
+	p := printerFor(cmd)
+	if !isJSON() {
+		p.Line("Rebuilding %s: build %s %s", ref, shortID(b.ID), orDash(b.State))
+	}
+
+	if b.State == "failed" || b.ErrorMessage != "" {
+		if isJSON() {
+			return p.JSON(map[string]any{"build": b, "deployment": ref})
+		}
+		return fmt.Errorf(
+			"build %s failed: %s ('miosa deploy logs %s' has the output)",
+			shortID(b.ID), orDefault(b.ErrorMessage, "no reason recorded"), ref,
+		)
+	}
+
+	if wait {
+		// --wait follows the deployment, not the build: the build id is not the deployment id, and
+		// a redeploy of a sandbox artifact re-promotes an existing release, so the state is what
+		// tells the caller the new version is actually serving.
+		if !isJSON() {
+			p.Line("Waiting for %s to go live...", ref)
+		}
+		if _, _, err := pollDeployment(cmd.Context(), c, ref, redeployWaitTimeout, phasePrinter(p)); err != nil {
+			return die(err)
+		}
+	}
+
+	if isJSON() {
+		return p.JSON(map[string]any{"build": b, "deployment": ref})
+	}
+	if wait {
+		p.Line("%s is live.", ref)
+		return nil
+	}
+	p.Line("If it fails, 'miosa deploy get %s' reports the reason and 'miosa deploy builds %s' lists the run.", ref, ref)
+	return nil
 }

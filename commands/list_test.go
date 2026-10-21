@@ -62,6 +62,55 @@ func TestListCommand_WithData(t *testing.T) {
 	}
 }
 
+func TestListCommand_AcceptsObjectMetadataValues(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/sandboxes" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"data": [{
+				"id": "abc",
+				"name": "box-object-metadata",
+				"state": "running",
+				"metadata": {"workspace": "default", "data": {"source": "api", "version": 2}},
+				"tags": {"team": "core", "labels": ["a", "b"]},
+				"created_at": "2026-04-18T00:00:00Z"
+			}, {
+				"id": "def",
+				"name": "box-object-workspace",
+				"state": "running",
+				"metadata": {"workspace": {"id": "default"}},
+				"created_at": "2026-04-18T00:00:00Z"
+			}],
+			"meta": {"total": 2, "page": 1, "per_page": 20}
+		}`))
+	}))
+	defer srv.Close()
+	cleanup := setupEnv(t, srv)
+	defer cleanup()
+
+	out, err := run(t, "list")
+	if err != nil {
+		t.Fatalf("structured sandbox metadata or tags must not break list: %v", err)
+	}
+	if !strings.Contains(out, "box-object-metadata") {
+		t.Errorf("expected sandbox in output, got: %s", out)
+	}
+
+	filtered, err := run(t, "list", "--workspace", "default")
+	if err != nil {
+		t.Fatalf("object-shaped metadata must not break workspace filtering: %v", err)
+	}
+	if !strings.Contains(filtered, "box-object-metadata") {
+		t.Errorf("expected string workspace metadata to match the filter, got: %s", filtered)
+	}
+	if strings.Contains(filtered, "box-object-workspace") {
+		t.Errorf("non-string workspace metadata must not match the filter, got: %s", filtered)
+	}
+}
+
 func TestListCommand_JSONOutput(t *testing.T) {
 	sandboxes := []miosa.SandboxData{
 		{ID: "abc", Name: "box-1", State: miosa.StatusRunning, CreatedAt: "2026-04-18T00:00:00Z"},

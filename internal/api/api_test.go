@@ -37,7 +37,7 @@ func TestParseErrorShapes(t *testing.T) {
 		{"flat", 401, `{"error":"Token is invalid","code":"INVALID_TOKEN"}`, nil, "INVALID_TOKEN", "Token is invalid", "", false, 0, "Token is invalid [INVALID_TOKEN]"},
 		{"code only", 404, `{"error":{"code":"NOT_FOUND"}}`, nil, "NOT_FOUND", "", "", false, 0, "Not Found [NOT_FOUND]"},
 		{"request id header", 500, `{"error":{"code":"X","message":"boom","retryable":true}}`, map[string]string{"X-Request-Id": "rid1"}, "X", "boom", "rid1", true, 0, "boom [X] (request_id=rid1)"},
-		{"retry after", 429, `{"error":{"code":"RATE_LIMITED","message":"slow down"}}`, map[string]string{"Retry-After": "2"}, "RATE_LIMITED", "slow down", "", false, 2 * time.Second, "slow down [RATE_LIMITED]"},
+		{"retry after", 429, `{"error":{"code":"RATE_LIMITED","message":"slow down"}}`, map[string]string{"Retry-After": "2"}, "RATE_LIMITED", "slow down", "", false, 2 * time.Second, "slow down [RATE_LIMITED] (retry after 2s)"},
 		{"plain text", 502, `upstream down`, nil, "", "upstream down", "", false, 0, "upstream down"},
 	}
 	for _, tc := range cases {

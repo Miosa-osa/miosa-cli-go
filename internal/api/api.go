@@ -108,6 +108,9 @@ func (e *Error) Error() string {
 	if e.Code != "" && !strings.EqualFold(e.Code, msg) {
 		fmt.Fprintf(&b, " [%s]", e.Code)
 	}
+	if e.Status == http.StatusTooManyRequests && e.RetryAfter > 0 {
+		fmt.Fprintf(&b, " (retry after %s)", e.RetryAfter.Round(time.Second))
+	}
 	if e.RequestID != "" {
 		fmt.Fprintf(&b, " (request_id=%s)", e.RequestID)
 	}

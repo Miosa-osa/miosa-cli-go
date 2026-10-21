@@ -470,28 +470,53 @@ func uploadTree(ctx context.Context, c *api.Client, local string, dst target, ds
 		root = path.Join(dst.path, filepath.Base(filepath.Clean(local)))
 	}
 	var res []copied
-	err = filepath.WalkDir(local, func(p string, d os.DirEntry, werr error) error {
-		if werr != nil {
-			return werr
+	// Symlinks are followed (node_modules links a local package, FounderOS #10: the linked
+	// @miosa/sdk arrived empty); a link back into a folder already being copied is skipped.
+	seen := map[string]bool{}
+	var walk func(dir, remoteRoot string) error
+	walk = func(dir, remoteRoot string) error {
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			if seen[real] {
+				return nil
+			}
+			seen[real] = true
+			// WalkDir does not descend through a link at its root, so a linked folder is walked at its target.
+			if st, lerr := os.Lstat(dir); lerr == nil && st.Mode()&os.ModeSymlink != 0 {
+				dir = real
+			}
 		}
-		rel, _ := filepath.Rel(local, p)
-		remote := target{ref: dst.ref, path: path.Join(root, filepath.ToSlash(rel))}
-		if d.IsDir() {
-			return fsMkdir(ctx, c, remote)
-		}
-		if !d.Type().IsRegular() {
-			return nil // skip sockets, devices; symlinks are not followed
-		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		if err := fsWrite(ctx, c, remote, data); err != nil {
-			return fmt.Errorf("%s: %w", p, err)
-		}
-		res = append(res, copied{From: p, To: remote.path, Bytes: int64(len(data))})
-		return nil
-	})
+		return filepath.WalkDir(dir, func(p string, d os.DirEntry, werr error) error {
+			if werr != nil {
+				return werr
+			}
+			rel, _ := filepath.Rel(dir, p)
+			remote := target{ref: dst.ref, path: path.Join(remoteRoot, filepath.ToSlash(rel))}
+			if d.IsDir() {
+				return fsMkdir(ctx, c, remote)
+			}
+			if d.Type()&os.ModeSymlink != 0 {
+				st, err := os.Stat(p)
+				if err != nil {
+					return nil // a dangling link has nothing to copy
+				}
+				if st.IsDir() {
+					return walk(p, remote.path)
+				}
+			} else if !d.Type().IsRegular() {
+				return nil // sockets, devices
+			}
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			if err := fsWrite(ctx, c, remote, data); err != nil {
+				return fmt.Errorf("%s: %w", p, err)
+			}
+			res = append(res, copied{From: p, To: remote.path, Bytes: int64(len(data))})
+			return nil
+		})
+	}
+	err = walk(local, root)
 	return res, err
 }
 

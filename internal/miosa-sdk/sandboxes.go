@@ -18,37 +18,37 @@ type SandboxesService struct {
 
 // SandboxData is the API representation of a sandbox resource.
 type SandboxData struct {
-	ID             string            `json:"id"`
-	TenantID       string            `json:"tenant_id"`
-	OwnerID        string            `json:"owner_id"`
-	WorkspaceID    string            `json:"workspace_id"`
-	Name           string            `json:"name"`
-	State          ComputerStatus    `json:"state"`
-	TemplateID     string            `json:"template_id"`
-	ImageID        string            `json:"image_id"`
-	CPUCount       int               `json:"cpu_count"`
-	MemoryMB       int               `json:"memory_mb"`
-	DiskSizeMB     int               `json:"disk_size_mb"`
-	BootPath       string            `json:"boot_path"`
-	BootMS         *int              `json:"boot_ms"`
-	EnvdReadyMS    *int              `json:"envd_ready_ms"`
-	TimeoutSec     int               `json:"timeout_sec"`
-	IdleTimeoutSec int               `json:"idle_timeout_sec"`
-	AlwaysOn       bool              `json:"always_on"`
-	LostReason     string            `json:"lost_reason,omitempty"`
-	FailureReason  string            `json:"failure_reason,omitempty"`
-	LastError      string            `json:"last_error,omitempty"`
-	PreviewURL     string            `json:"preview_url"`
-	Ready          bool              `json:"ready"`
-	ReadyAt        string            `json:"ready_at"`
-	ExitCode       *int              `json:"exit_code"`
-	Tags           map[string]string `json:"tags"`
-	Metadata       map[string]any    `json:"metadata"`
-	CreatedAt      string            `json:"created_at"`
-	StartedAt      string            `json:"started_at"`
-	DestroyedAt    string            `json:"destroyed_at"`
-	LastActivityAt string            `json:"last_activity_at"`
-	AgentSessionID string            `json:"agent_session_id"`
+	ID             string         `json:"id"`
+	TenantID       string         `json:"tenant_id"`
+	OwnerID        string         `json:"owner_id"`
+	WorkspaceID    string         `json:"workspace_id"`
+	Name           string         `json:"name"`
+	State          ComputerStatus `json:"state"`
+	TemplateID     string         `json:"template_id"`
+	ImageID        string         `json:"image_id"`
+	CPUCount       int            `json:"cpu_count"`
+	MemoryMB       int            `json:"memory_mb"`
+	DiskSizeMB     int            `json:"disk_size_mb"`
+	BootPath       string         `json:"boot_path"`
+	BootMS         *int           `json:"boot_ms"`
+	EnvdReadyMS    *int           `json:"envd_ready_ms"`
+	TimeoutSec     int            `json:"timeout_sec"`
+	IdleTimeoutSec int            `json:"idle_timeout_sec"`
+	AlwaysOn       bool           `json:"always_on"`
+	LostReason     string         `json:"lost_reason,omitempty"`
+	FailureReason  string         `json:"failure_reason,omitempty"`
+	LastError      string         `json:"last_error,omitempty"`
+	PreviewURL     string         `json:"preview_url"`
+	Ready          bool           `json:"ready"`
+	ReadyAt        string         `json:"ready_at"`
+	ExitCode       *int           `json:"exit_code"`
+	Tags           map[string]any `json:"tags"`
+	Metadata       map[string]any `json:"metadata"`
+	CreatedAt      string         `json:"created_at"`
+	StartedAt      string         `json:"started_at"`
+	DestroyedAt    string         `json:"destroyed_at"`
+	LastActivityAt string         `json:"last_activity_at"`
+	AgentSessionID string         `json:"agent_session_id"`
 
 	// Environment and setup state (miosa-compute docs/api/environments.md).
 	MachineEnvironment
@@ -222,7 +222,7 @@ func normalizeSandboxData(data SandboxData) SandboxData {
 		data.Metadata = map[string]any{}
 	}
 	if data.Tags == nil {
-		data.Tags = map[string]string{}
+		data.Tags = map[string]any{}
 	}
 	return data
 }

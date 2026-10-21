@@ -28,28 +28,29 @@ func init() {
 }
 
 type promptOptions struct {
-	harness     string
-	model       string
-	agent       string
-	chat        string
-	cont        bool
-	newChat     bool
-	sandbox     string
-	computer    string
-	newMachine  bool
-	workspace   string
-	size        string
-	template    string
-	machineKind string
-	afterRun    string
-	reuse       string
-	maxTime     int
-	notifyEmail bool
-	notifyHook  string
-	idem        string
-	file        string
-	noFollow    bool
-	source      string
+	harness      string
+	model        string
+	agent        string
+	chat         string
+	cont         bool
+	newChat      bool
+	sandbox      string
+	computer     string
+	newMachine   bool
+	workspace    string
+	size         string
+	template     string
+	machineKind  string
+	afterRun     string
+	reuse        string
+	maxTime      int
+	externalUser string
+	notifyEmail  bool
+	notifyHook   string
+	idem         string
+	file         string
+	noFollow     bool
+	source       string
 }
 
 func newPromptCmd() *cobra.Command {
@@ -105,6 +106,7 @@ starts a chat and prints its id.
 	f.StringVar(&o.afterRun, "after-run", "", "What happens to a new machine when the run ends: destroy, pause or keep")
 	f.StringVar(&o.reuse, "reuse", "", "New machine lifetime: run (one per run) or chat (one per --chat, files persist)")
 	f.IntVar(&o.maxTime, "max-time", 0, "Stop the run after this many seconds")
+	f.StringVar(&o.externalUser, "external-user", "", "Run as one of your end users (your own id for them): their connections are used")
 	f.BoolVar(&o.notifyEmail, "notify-email", false, "Email you when the run finishes")
 	f.StringVar(&o.notifyHook, "notify-webhook", "", "Webhook id to notify when the run finishes")
 	f.StringVar(&o.idem, "idempotency-key", "", "Replay-safe key: the same key returns the same run")
@@ -203,7 +205,12 @@ func runPrompt(cmd *cobra.Command, args []string, o promptOptions) error {
 		body["model"] = o.model
 	}
 	if o.maxTime > 0 {
+		// timeout is the field the runs API reads; timeout_sec is kept for servers that alias it.
+		body["timeout"] = o.maxTime
 		body["timeout_sec"] = o.maxTime
+	}
+	if o.externalUser != "" {
+		body["external_user_id"] = o.externalUser
 	}
 	if o.agent != "" {
 		id, err := c.API.ResolveAgent(ctx, o.agent)

@@ -450,3 +450,88 @@ func TestDeployCreateWaitTimeoutNamesTheDeployment(t *testing.T) {
 		t.Fatalf("the deployment id should be printed before waiting, got stdout: %q", out)
 	}
 }
+
+// A redeploy prints the build it starts: the old form printed only "Redeploying <name>", so a build
+// that then failed looked like the previous version still serving (ClinicIQ v12, FounderOS batch F).
+// --wait follows the deployment, not the build id the redeploy prints: the build id is not a
+// deployment id, and a sandbox redeploy re-promotes a release rather than building one.
+func TestDeployRedeployWaitsForTheDeploymentToGoLive(t *testing.T) {
+	newFakeAPI(t, func(c call) (int, string) {
+		switch {
+		case c.is("POST", "/deployments/dep-live/redeploy"):
+			return 202, `{"data":{"id":"11112222-3333-4444-8555-666677778888","state":"queued"}}`
+		case c.is("GET", "/deployments/dep-live"):
+			return 200, `{"data":{"id":"dep-live","name":"my-app","state":"running","publish":{"status":"live"}}}`
+		}
+		return 404, `{"error":{"code":"NOT_FOUND","message":"no route"}}`
+	})
+
+	out, err := run(t, "deploy", "redeploy", "dep-live", "--wait")
+	if err != nil {
+		t.Fatalf("deploy redeploy --wait: %v (out=%q)", err, out)
+	}
+	if !strings.Contains(out, "Waiting for dep-live to go live") {
+		t.Fatalf("--wait should say it is waiting, got: %q", out)
+	}
+	if !strings.Contains(out, "dep-live is live.") {
+		t.Fatalf("--wait should end on the live state, got: %q", out)
+	}
+}
+
+func TestDeployRedeployPrintsTheBuild(t *testing.T) {
+	newFakeAPI(t, func(c call) (int, string) {
+		if c.is("POST", "/deployments/my-app/redeploy") {
+			return 202, `{"data":{"id":"11112222-3333-4444-8555-666677778888","state":"queued"}}`
+		}
+		return 404, `{"error":{"code":"NOT_FOUND","message":"no route"}}`
+	})
+
+	out, err := run(t, "deploy", "redeploy", "my-app")
+	if err != nil {
+		t.Fatalf("deploy redeploy: %v (out=%q)", err, out)
+	}
+	if !strings.Contains(out, "11112222") {
+		t.Fatalf("the build id should be printed, got: %q", out)
+	}
+	if !strings.Contains(out, "queued") {
+		t.Fatalf("the build state should be printed, got: %q", out)
+	}
+	if !strings.Contains(out, "deploy get my-app") {
+		t.Fatalf("the follow-up command should be named, got: %q", out)
+	}
+}
+
+func TestDeployRedeployReportsAFailedBuild(t *testing.T) {
+	newFakeAPI(t, func(c call) (int, string) {
+		if c.is("POST", "/deployments/my-app/redeploy") {
+			return 202, `{"data":{"id":"aaaabbbb-3333-4444-8555-666677778888","state":"failed","error_message":"next build exited 1"}}`
+		}
+		return 404, `{"error":{"code":"NOT_FOUND","message":"no route"}}`
+	})
+
+	_, err := run(t, "deploy", "redeploy", "my-app")
+	if err == nil {
+		t.Fatal("a failed build must be an error")
+	}
+	if !strings.Contains(err.Error(), "next build exited 1") {
+		t.Fatalf("the failure reason should be printed, got: %v", err)
+	}
+}
+
+// An INVALID_ID on a deployment path names the deployment list, never the sandbox one.
+func TestInvalidIDOnADeploymentPathNamesTheDeploymentList(t *testing.T) {
+	newFakeAPI(t, func(c call) (int, string) {
+		return 400, `{"error":{"code":"INVALID_ID"}}`
+	})
+
+	_, err := run(t, "deploy", "get", "nope")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "miosa deploy list") {
+		t.Fatalf("the hint should name the deployment list, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "sandbox") {
+		t.Fatalf("the hint must not mention sandboxes on a deployment path, got: %v", err)
+	}
+}

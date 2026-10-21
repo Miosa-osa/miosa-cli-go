@@ -158,13 +158,6 @@ guesses which one you meant.`,
 			Idempotent: true,
 		},
 		Op{
-			Use: "redeploy <deployment>", Short: "Build and release again from the same source",
-			Long:    "Rebuilds the deployment from its configured source (repository branch or sandbox) and releases the result. An uploaded static site has nothing to rebuild: push a new version with 'miosa deploy push' instead.",
-			Example: "  miosa deploy redeploy my-app\n  miosa deploy redeploy my-app --commit 1a2b3c4d",
-			Flags:   []Flag{{Name: "commit", Usage: "Forge deployments: build this commit instead of the branch head", Field: "commit_sha"}},
-			Method:  "POST", Path: "/deployments/{0}/redeploy", Args: []Arg{d}, Done: "Redeploying {0}",
-		},
-		Op{
 			Use: "start <deployment>", Short: "Start a stopped deployment from its last release",
 			Long:    "Brings a stopped deployment back from the release it was serving, at its current size. Nothing is built or uploaded, so it also works for an uploaded deployment, which has no source to redeploy from. A static site is live again at once; a server reads 'building' until its instance is healthy.",
 			Example: "  miosa deploy start my-site",
