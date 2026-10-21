@@ -77,3 +77,53 @@ func TestDeployPurgeCacheAndEnvRm(t *testing.T) {
 		t.Fatalf("versions archive: %v", err)
 	}
 }
+
+func proveServer(t *testing.T, publicURL string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/deployments/app/proof" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+			"ok": true, "public_url": publicURL,
+			"checks": []any{map[string]any{"id": "deployment_row", "ok": true, "message": "exists"}},
+		}})
+	}))
+}
+
+func TestDeployProveChecksThePublicURL(t *testing.T) {
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	defer site.Close()
+	srv := proveServer(t, site.URL)
+	defer srv.Close()
+	defer setupEnv(t, srv)()
+	out, err := run(t, "deploy", "prove", "app")
+	if err != nil || !strings.Contains(out, "public_url_http") || !strings.Contains(out, "answered 200") || !strings.Contains(out, "2 of 2 checks passed") {
+		t.Fatalf("serving site: err=%v\n%s", err, out)
+	}
+}
+
+func TestDeployProveFailsWhenThePublicURLIsDownOrBroken(t *testing.T) {
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(502) }))
+	defer down.Close()
+	srv := proveServer(t, down.URL)
+	defer srv.Close()
+	defer setupEnv(t, srv)()
+	out, err := run(t, "deploy", "prove", "app")
+	if err == nil || !strings.Contains(err.Error(), "1 of 2 checks failed") || !strings.Contains(out, "answered 502") {
+		t.Fatalf("502 must fail the proof: err=%v\n%s", err, out)
+	}
+
+	// A self-signed certificate is what a visitor's browser would refuse.
+	broken := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	defer broken.Close()
+	tlsSrv := proveServer(t, broken.URL)
+	defer tlsSrv.Close()
+	defer setupEnv(t, tlsSrv)()
+	out, err = run(t, "deploy", "prove", "app", "--json")
+	if err == nil || !strings.Contains(out, `"ok": false`) || !strings.Contains(out, "public_url_http") {
+		t.Fatalf("bad certificate must fail the proof: err=%v\n%s", err, out)
+	}
+}

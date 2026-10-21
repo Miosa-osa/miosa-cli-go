@@ -53,6 +53,8 @@ func TestPlatformCommandsSendTheRightRequests(t *testing.T) {
 		{args: []string{"deploy", "domain-rm", "my-app", "d1", "-y"}, method: "DELETE", path: "/deployments/" + depID + "/domains/d1", reply: `{}`, wantOut: "Detached", needsYes: true},
 		// databases
 		{args: []string{"db", "list"}, method: "GET", path: "/databases", reply: list(`{"id":"380330d8-e346-4a0f-950f-000000000000","name":"app-db","engine":"postgresql","state":"running","memory_mb":1024}`), wantOut: "postgresql"},
+		// --workspace takes a slug, name or id and is sent as the workspace_id filter.
+		{args: []string{"db", "list", "--workspace", "acme"}, method: "GET", path: "/databases", reply: list(`{"id":"380330d8-e346-4a0f-950f-000000000000","name":"app-db","engine":"postgresql","state":"running","memory_mb":1024}`), query: map[string]string{"workspace_id": wsID}, wantOut: "postgresql"},
 		{args: []string{"db", "get", "d1"}, method: "GET", path: "/databases/d1", reply: `{"name":"app-db","state":"running","host":"db.example","port":5432}`, wantOut: "db.example"},
 		{args: []string{"db", "start", "d1"}, method: "POST", path: "/databases/d1/start", reply: `{}`, wantOut: "Starting d1"},
 		{args: []string{"db", "stop", "d1", "-y"}, method: "POST", path: "/databases/d1/stop", reply: `{}`, wantOut: "Stopping d1", needsYes: true},
@@ -82,7 +84,7 @@ func TestPlatformCommandsSendTheRightRequests(t *testing.T) {
 		{args: []string{"schedule", "list"}, method: "GET", path: "/cron-jobs", reply: list(`{"id":"c1c1c1c1-0000-0000-0000-000000000000","name":"backup","schedule":"0 2 * * *","status":"active"}`), wantOut: "0 2 * * *"},
 		{args: []string{"schedule", "run", "c1"}, method: "POST", path: "/cron-jobs/c1/run-now", reply: `{}`},
 		{args: []string{"schedule", "pause", "c1"}, method: "POST", path: "/cron-jobs/c1/pause", reply: `{}`},
-		{args: []string{"schedule", "executions", "c1"}, method: "GET", path: "/cron-jobs/c1/executions", reply: list(`{"id":"e1e1e1e1-0000-0000-0000-000000000000","status":"ok"}`), wantOut: "e1e1e1e1"},
+		{args: []string{"schedule", "executions", "c1"}, method: "GET", path: "/cron-jobs/c1/executions", reply: list(`{"id":"e1e1e1e1-0000-0000-0000-000000000000","state":"ok"}`), wantOut: "e1e1e1e1"},
 		{args: []string{"function", "list"}, method: "GET", path: "/functions", reply: list(`{"id":"f1f1f1f1-0000-0000-0000-000000000000","name":"hello","runtime":"node"}`), wantOut: "hello"},
 		{args: []string{"function", "invoke", "f1", "-d", `{"name":"ana"}`}, method: "POST", path: "/functions/f1/invoke", reply: `{"result":"hi ana"}`, body: map[string]any{"payload": map[string]any{"name": "ana"}}, wantOut: "hi ana"},
 		// templates, projects
@@ -100,7 +102,8 @@ func TestPlatformCommandsSendTheRightRequests(t *testing.T) {
 		{args: []string{"billing", "balance"}, method: "GET", path: "/credits/balance", reply: `{"balance_credits":4119098,"lifetime_spent":10}`, wantOut: "4119098"},
 		{args: []string{"billing", "transactions", "-n", "2", "--page", "2"}, method: "GET", path: "/credits/transactions", reply: `{"transactions":[{"type":"spend","amount_credits":-1,"resource_type":"sandbox","description":"runtime"}]}`, query: map[string]string{"per_page": "2", "page": "2"}, wantOut: "runtime"},
 		{args: []string{"billing", "usage"}, method: "GET", path: "/credits/usage", reply: `{"usage":[{"day":"2026-09-15","model":"glm","call_count":3}]}`, wantOut: "glm"},
-		{args: []string{"billing", "spend"}, method: "GET", path: "/usage", reply: `{"results":[{"workspace_id":"5d968ccf-7c64-4ca6-b887-a5b62d1d04fe","credit_cents":12676,"sandbox_seconds":7200}]}`, wantOut: "$126.76"},
+		{args: []string{"billing", "spend"}, method: "GET", path: "/usage", query: map[string]string{"group_by": "workspace_id"}, reply: `{"results":[{"workspace_id":"5d968ccf-7c64-4ca6-b887-a5b62d1d04fe","credit_cents":12676,"sandbox_seconds":7200}]}`, wantOut: "$126.76"},
+		{args: []string{"billing", "spend", "--period", "7d"}, method: "GET", path: "/usage", query: map[string]string{"group_by": "workspace_id", "period": "7d"}, reply: `{"results":[]}`},
 		{args: []string{"billing", "invoices"}, method: "GET", path: "/billing/invoices", reply: `{"data":[]}`},
 		{args: []string{"billing", "upcoming"}, method: "GET", path: "/billing/upcoming", reply: `{"data":{"amount_due_cents":4673,"currency":"usd"}}`, wantOut: "$46.73"},
 		{args: []string{"billing", "plan"}, method: "GET", path: "/tenant/plan", reply: `{"plan":{"name":"enterprise","interval":"month"},"usage":{"sandboxes":1}}`, wantOut: "enterprise"},
@@ -112,6 +115,10 @@ func TestPlatformCommandsSendTheRightRequests(t *testing.T) {
 		{args: []string{"alerts", "list"}, method: "GET", path: "/alerts", reply: `{"data":[]}`},
 		{args: []string{"alerts", "resolve", "a1"}, method: "POST", path: "/alerts/a1/resolve", reply: `{}`, wantOut: "Resolved a1"},
 		{args: []string{"notifications", "list"}, method: "GET", path: "/notifications", reply: `{"data":[]}`},
+		{args: []string{"notifications", "list"}, method: "GET", path: "/notifications", reply: `{"data":[{"id":"2894bd73-aa7f-4deb-a227-f8ecd83faff0","inserted_at":"2026-10-20T00:16:03Z","read_at":null,"type":"database.stopped","payload":{"name":"osa-engine","reason":"host_maintenance"}}]}`, wantOut: "database.stopped: osa-engine (host_maintenance)"},
+		{args: []string{"agent", "harnesses"}, method: "GET", path: "/agents/harnesses", reply: `{"data":[{"value":"claude-code","label":"Claude Code","default_model":"sonnet","models":[{"id":"a","capabilities":{"tools":true}},{"id":"b"},{"id":"c"},{"id":"d"}]}]}`, wantOut: "a, b, c +1 more"},
+		{args: []string{"agent", "templates"}, method: "GET", path: "/agents/templates", reply: `{"data":[{"id":"code-reviewer","name":"Code reviewer","harness":"claude-code","category":"engineering","first_message":"Review the open pull request."}]}`, wantOut: "claude-code"},
+		{args: []string{"workspace", "activity", "w1"}, method: "GET", path: "/workspaces/w1/activity", reply: `{"data":[{"action":"database.stop","resource_type":"database","occurred_at":"2026-10-19T23:36:59Z","metadata":{"name":"commas-brief-db","reason":"host_maintenance"}}]}`, wantOut: "commas-brief-db (host_maintenance)"},
 		{args: []string{"notifications", "unread"}, method: "GET", path: "/notifications/unread-count", reply: `{"count":3}`, wantOut: "3"},
 		{args: []string{"notifications", "read", "n1"}, method: "POST", path: "/notifications/n1/read", reply: `{}`},
 		{args: []string{"notifications", "read-all"}, method: "POST", path: "/notifications/read-all", reply: `{}`},
@@ -159,7 +166,8 @@ func TestPlatformCommandsSendTheRightRequests(t *testing.T) {
 		{args: []string{"workspace", "transfer", "acme", "--to", wsID, "--id", "sbx-1", "--id", "sbx-2"}, method: "POST", path: "/workspaces/" + wsID + "/transfer", reply: `{"data":{"moved_count":2,"resource_ids":["sbx-1","sbx-2"]}}`, body: map[string]any{"target_workspace_id": wsID, "resource_ids": []string{"sbx-1", "sbx-2"}}, wantOut: "Moved 2"},
 		{args: []string{"workspace", "stats", "acme"}, method: "GET", path: "/workspaces/" + wsID + "/stats", reply: `{"sandboxes":3}`},
 		{args: []string{"workspace", "usage", "acme"}, method: "GET", path: "/workspaces/" + wsID + "/usage", reply: `{"credit_cents":1}`},
-		{args: []string{"workspace", "activity", "acme"}, method: "GET", path: "/workspaces/" + wsID + "/activity", reply: `{"data":[]}`},
+		{args: []string{"workspace", "activity", "acme"}, method: "GET", path: "/workspaces/" + wsID + "/activity", reply: `{"data":[{"occurred_at":"2026-10-18T10:00:00Z","action":"sandbox.create","resource_type":"sandbox","resource_id":"abcdef12-0000-0000-0000-000000000000","actor":{"email":"a@b.co"}}]}`, wantOut: "sandbox.create"},
+		{args: []string{"workspace", "usage", "acme"}, method: "GET", path: "/workspaces/" + wsID + "/usage", reply: `{"by_product":[{"product":"sandboxes","resource_type":"sandbox","total_cost_cents":7,"total_seconds":3600,"resources":1}]}`, wantOut: "sandboxes"},
 		{args: []string{"workspace", "inventory", "acme"}, method: "GET", path: "/workspaces/" + wsID + "/inventory", reply: `{"sandboxes":[]}`},
 		{args: []string{"workspace", "members", "acme"}, method: "GET", path: "/workspaces/" + wsID + "/members", reply: list(`{"email":"a@b.co","role":"admin"}`), wantOut: "a@b.co"},
 	}
@@ -421,5 +429,70 @@ func TestFileBodyIsMergedUnderFlagsAndRejectsNonObjects(t *testing.T) {
 	}
 	if _, err := runIn(t, `[1,2]`, "gateway", "budget", "set", "--file", "-"); err == nil {
 		t.Fatal("a JSON array is not a body")
+	}
+}
+
+func TestScheduleCreateSendsTheMachineZoneOverlapAndEnv(t *testing.T) {
+	f := fakeRoutes(t, map[string]any{
+		"POST /cron-jobs":                  resp{201, `{"id":"c1c1c1c1-0000-0000-0000-000000000000","name":"ingest","schedule":"*/10 * * * *","timezone":"America/Chicago","computer_id":"b0b0b0b0-0000-0000-0000-000000000000","overlap":"skip","timeout_sec":600,"env_names":["MODE","TOKEN"],"next_run_at":"2026-10-19T14:10:00Z"}`},
+		"GET /cron-jobs/ingest":            `{"id":"c1c1c1c1-0000-0000-0000-000000000000","name":"ingest","schedule":"*/10 * * * *","timezone":"America/Chicago","overlap":"skip","timeout_sec":300,"env_names":["MODE"],"status":"active","next_run_at":"2026-10-19T14:10:00Z"}`,
+		"GET /cron-jobs/ingest/executions": `{"data":[{"id":"e1e1e1e1-0000-0000-0000-000000000000","state":"skipped_overlap","exit_code":null}]}`,
+	})
+	out, err := run(t, "schedule", "create", "--name", "ingest", "--cron", "*/10 * * * *", "--tz", "America/Chicago",
+		"--on", "my-box", "--command", "sh ingest.sh", "--timeout", "600", "--overlap", "skip",
+		"--env", "MODE=prod", "--secret", "TOKEN=secret://org/INGEST", "--workspace", wsID)
+	if err != nil || !strings.Contains(out, "2026-10-19T14:10:00Z") || strings.Contains(out, "prod") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "b0b0b0b0") {
+		t.Fatalf("ON should show the computer: %s", out)
+	}
+	b := f.find("POST", "/cron-jobs")[0].Body
+	env, _ := b["env"].(map[string]any)
+	if b["schedule"] != "*/10 * * * *" || b["timezone"] != "America/Chicago" || b["computer_id"] != "my-box" ||
+		b["command"] != "sh ingest.sh" || b["timeout_sec"] != float64(600) || b["overlap"] != "skip" ||
+		env["MODE"] != "prod" || env["TOKEN"] != "secret://org/INGEST" || b["workspace_id"] != wsID {
+		t.Fatalf("body = %v", b)
+	}
+	if _, has := b["secret"]; has {
+		t.Fatalf("secret must be folded into env: %v", b)
+	}
+	if out, err := run(t, "schedule", "get", "ingest"); err != nil || !strings.Contains(out, "America/Chicago") || !strings.Contains(out, "MODE") {
+		t.Fatalf("get: %v\n%s", err, out)
+	}
+	if out, err := run(t, "schedule", "executions", "ingest"); err != nil || !strings.Contains(out, "skipped_overlap") {
+		t.Fatalf("executions: %v\n%s", err, out)
+	}
+}
+
+func TestScheduleCreateRefusesWhatItCannotHonour(t *testing.T) {
+	fakeRoutes(t, map[string]any{"POST /cron-jobs": `{}`})
+	for _, args := range [][]string{
+		{"schedule", "create", "--name", "a", "--cron", "* * * * *"},
+		{"schedule", "create", "--name", "a", "--cron", "* * * * *", "--agent", "bot", "--command", "x"},
+		{"schedule", "create", "--name", "a", "--cron", "* * * * *", "--command", "x", "--secret", "TOKEN=plain"},
+		{"schedule", "create", "--name", "a", "--cron", "* * * * *", "--command", "x", "--env", "A=1", "--secret", "A=secret://org/A"},
+		{"schedule", "create", "--name", "a", "--cron", "* * * * *", "--command", "x", "--timeout", "7200"},
+		{"schedule", "create", "--name", "a", "--cron", "* * * * *", "--command", "x", "--overlap", "sometimes"},
+	} {
+		if out, err := run(t, args...); err == nil {
+			t.Fatalf("%v must fail:\n%s", args, out)
+		}
+	}
+}
+
+// A sandbox schedule stores sandbox_id and leaves computer_id nil; the ON
+// column must still name the machine.
+func TestScheduleOnASandboxShowsTheSandbox(t *testing.T) {
+	fakeRoutes(t, map[string]any{
+		"POST /cron-jobs": resp{201, `{"id":"c1c1c1c1-0000-0000-0000-000000000000","name":"ingest","schedule":"*/10 * * * *","sandbox_id":"44aa11bb-2222-4333-8444-555566667777","machine_kind":"sandbox","state":"active","timezone":"UTC","overlap":"skip","timeout_sec":60}`},
+	})
+	out, err := run(t, "schedule", "create", "--name", "ingest", "--cron", "*/10 * * * *",
+		"--on", "box-1", "--command", "echo hi")
+	if err != nil {
+		t.Fatalf("create: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "44aa11bb") {
+		t.Fatalf("ON should show the sandbox: %s", out)
 	}
 }

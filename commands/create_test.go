@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Miosa-osa/miosa-cli-go/commands"
@@ -378,6 +379,26 @@ func TestCreateCommand_RuntimeOmittedByDefault(t *testing.T) {
 
 	if _, err := run(t, "create", "my-box"); err != nil {
 		t.Fatalf("create failed: %v", err)
+	}
+}
+
+func TestCreateCommand_ComputerTemplatePointsAtComputerCreate(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("server should not be called for a computer template")
+	}))
+	defer srv.Close()
+	cleanup := setupEnv(t, srv)
+	defer cleanup()
+
+	_, err := run(t, "create", "my-box", "--template", "miosa-desktop")
+	if err == nil {
+		t.Fatal("expected a usage error for a computer template")
+	}
+	if code := commands.ExitCode(err); code != commands.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (usage)", code, commands.ExitUsage)
+	}
+	if !strings.Contains(err.Error(), "miosa computer create") || !strings.Contains(err.Error(), "miosa-desktop") {
+		t.Fatalf("the error must name the command that takes a computer template: %v", err)
 	}
 }
 

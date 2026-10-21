@@ -1,6 +1,8 @@
 package commands_test
 
 import (
+	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -27,6 +29,58 @@ func TestExportWritesManifestIntoANamedBucket(t *testing.T) {
 	}
 	if _, ok := body["workspace_id"]; ok {
 		t.Fatalf("an organization export must not name a workspace: %v", body)
+	}
+}
+
+// A slice the key could not read is named, never silently missing.
+func TestExportWarnsAboutEverySliceThatWasLeftOut(t *testing.T) {
+	fakeRoutes(t, map[string]any{
+		"GET /storage/buckets": `{"data":[{"id":"b1","name":"exports"}]}`,
+		"POST /exports": `{"data":{"prefix":"exports/x/","manifest_key":"exports/x/manifest.json",` +
+			`"manifest_sha256":"abc123","rows":3,"files":[{"path":"agents.ndjson","key":"exports/x/agents.ndjson",` +
+			`"sha256":"def456","bytes":42,"rows":3}],` +
+			`"omitted":[{"slice":"secret_names","omitted":"missing scope secrets:read"}]}}`,
+	})
+	stderr := captureStderr(t, func() {
+		out, err := run(t, "export", "--to", "bucket:exports")
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+	})
+	if !strings.Contains(stderr, "warning: secret_names was left out of the export (missing scope secrets:read)") {
+		t.Fatalf("no warning for the omitted slice: %q", stderr)
+	}
+}
+
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	fn()
+	os.Stderr = old
+	_ = w.Close()
+	b, _ := io.ReadAll(r)
+	return string(b)
+}
+
+func TestExportWithNothingLeftOutPrintsNoWarning(t *testing.T) {
+	fakeRoutes(t, map[string]any{
+		"GET /storage/buckets": `{"data":[{"id":"b1","name":"exports"}]}`,
+		"POST /exports": `{"data":{"prefix":"exports/x/","manifest_key":"exports/x/manifest.json",` +
+			`"manifest_sha256":"abc123","rows":0,"files":[],"omitted":[]}}`,
+	})
+	stderr := captureStderr(t, func() {
+		out, err := run(t, "export", "--to", "bucket:exports")
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+	})
+	if strings.Contains(stderr, "warning:") {
+		t.Fatalf("unexpected warning: %q", stderr)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -54,6 +55,16 @@ func New(baseURL, key string) *Client {
 	}
 }
 
+// WithoutOverallTimeout returns a shallow copy whose HTTP client has no total
+// deadline. Streamed uploads use it: an overall wall-clock deadline cuts a
+// large body off no matter how steadily it is moving. The caller enforces an
+// idle limit instead, so a stalled transfer still ends.
+func (c *Client) WithoutOverallTimeout() *Client {
+	clone := *c
+	clone.HTTP = &http.Client{Transport: c.HTTP.Transport, CheckRedirect: c.HTTP.CheckRedirect, Jar: c.HTTP.Jar}
+	return &clone
+}
+
 func sleepCtx(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -91,6 +102,9 @@ func (e *Error) Error() string {
 		msg = http.StatusText(e.Status)
 	}
 	b.WriteString(msg)
+	if d := e.fieldDetails(); d != "" {
+		b.WriteString(": " + d)
+	}
 	if e.Code != "" && !strings.EqualFold(e.Code, msg) {
 		fmt.Fprintf(&b, " [%s]", e.Code)
 	}
@@ -98,6 +112,39 @@ func (e *Error) Error() string {
 		fmt.Fprintf(&b, " (request_id=%s)", e.RequestID)
 	}
 	return b.String()
+}
+
+// fieldDetails renders the field-level reasons a 4xx carried ({"name": "can't be blank"}) as
+// "name can't be blank; other must be positive", so a refusal says which field and why instead
+// of only "The trigger is not valid". Only string and string-list values are shown; anything
+// structured (a list of matches, say) has its own rendering.
+func (e *Error) fieldDetails() string {
+	if len(e.Details) == 0 {
+		return ""
+	}
+	fields := make([]string, 0, len(e.Details))
+	for field := range e.Details {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	var parts []string
+	for _, field := range fields {
+		switch v := e.Details[field].(type) {
+		case string:
+			parts = append(parts, field+" "+v)
+		case []any:
+			var reasons []string
+			for _, r := range v {
+				if s, ok := r.(string); ok {
+					reasons = append(reasons, s)
+				}
+			}
+			if len(reasons) > 0 {
+				parts = append(parts, field+" "+strings.Join(reasons, ", "))
+			}
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 // IsStatus reports whether err is an *Error with the given HTTP status.
@@ -201,6 +248,9 @@ type Request struct {
 	Headers        map[string]string
 	// NoRetry disables retries for this call.
 	NoRetry bool
+	// StreamBody sends an io.Reader body as it is read instead of buffering
+	// it first. Only valid with NoRetry: a stream cannot be replayed.
+	StreamBody bool
 	// Verbatim sends Path as given, without rewriting names to ids.
 	Verbatim bool
 }
@@ -315,12 +365,18 @@ func (c *Client) do(ctx context.Context, hc *http.Client, r Request) (*http.Resp
 	switch b := r.Body.(type) {
 	case nil:
 	case io.Reader:
-		// A raw reader cannot be replayed; buffer it so retries work.
-		data, err := io.ReadAll(b)
-		if err != nil {
-			return nil, err
+		if r.StreamBody && r.NoRetry {
+			// Uploads go out as they are read; a 200 MB body must not sit in
+			// memory, and a retry would replay a half-read stream anyway.
+			reader = b
+		} else {
+			// A raw reader cannot be replayed; buffer it so retries work.
+			data, err := io.ReadAll(b)
+			if err != nil {
+				return nil, err
+			}
+			payload = data
 		}
-		payload = data
 	default:
 		data, err := json.Marshal(b)
 		if err != nil {

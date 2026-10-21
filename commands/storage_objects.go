@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -95,6 +96,9 @@ func storagePutCmd() *cobra.Command {
 the file name; with - it is required. Files over 256 MiB go up in 64 MiB parts
 automatically (the object appears only when every part is in).
 
+An upload has no overall deadline, so a large file is not cut off while it is
+still moving; --timeout is the idle limit instead, and 0 disables even that.
+
   miosa storage put assets ./logo.png brand/logo.png
   miosa storage put builds ./App.dmg
   cat backup.sql | miosa storage put backups - db/backup.sql`,
@@ -110,6 +114,11 @@ automatically (the object appears only when every part is in).
 			if len(args) == 3 {
 				key = args[2]
 			}
+			// Uploads stream with no overall deadline; --timeout is the idle
+			// limit, so a steady 200 MB transfer is not cut off at 60 s and a
+			// stalled one still ends.
+			upload := c.API.WithoutOverallTimeout()
+			idle := time.Duration(globalFlags.Timeout) * time.Second
 			if file == "-" {
 				if len(args) < 3 {
 					return usagef("reading from standard input needs a key: miosa storage put %s - <key>", bucket)
@@ -121,7 +130,7 @@ automatically (the object appears only when every part is in).
 				if ctype == "" {
 					ctype = "application/octet-stream"
 				}
-				if _, err := c.API.JSONAny(cmd.Context(), api.Request{Method: http.MethodPut, Path: bucketObjectPath(bucket, key), Body: cmd.InOrStdin(), ContentType: ctype, NoRetry: true}); err != nil {
+				if err := storageStreamPut(cmd.Context(), upload, bucket, key, cmd.InOrStdin(), ctype, idle); err != nil {
 					return die(err)
 				}
 				if isJSON() {
@@ -145,9 +154,9 @@ automatically (the object appears only when every part is in).
 				ctype = "application/octet-stream"
 			}
 			if st.Size() > storageSingleMax {
-				err = storageMultipartPut(cmd.Context(), c.API, bucket, key, file, st.Size(), ctype)
+				err = storageMultipartPut(cmd.Context(), upload, bucket, key, file, st.Size(), ctype, idle)
 			} else {
-				err = storageSinglePut(cmd.Context(), c.API, bucket, key, file, st.Size(), ctype)
+				err = storageSinglePut(cmd.Context(), upload, bucket, key, file, st.Size(), ctype, idle)
 			}
 			if err != nil {
 				return die(err)
@@ -163,23 +172,33 @@ automatically (the object appears only when every part is in).
 	return cmd
 }
 
-func storageSinglePut(ctx context.Context, c *api.Client, bucket, key, file string, size int64, ctype string) error {
+func storageSinglePut(ctx context.Context, c *api.Client, bucket, key, file string, size int64, ctype string, idle time.Duration) error {
 	f, err := os.Open(file)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	resp, err := c.Do(ctx, api.Request{
-		Method: http.MethodPut, Path: bucketObjectPath(bucket, key), Body: f, ContentType: ctype, NoRetry: true,
+	reqCtx, guard := withStallGuard(ctx, idle)
+	defer guard.stop()
+	_, err = c.Do(reqCtx, api.Request{
+		Method: http.MethodPut, Path: bucketObjectPath(bucket, key),
+		Body: &progressReader{r: f, guard: guard}, ContentType: ctype, NoRetry: true, StreamBody: true,
 		Headers: map[string]string{"Content-Length": strconv.FormatInt(size, 10)},
 	})
-	if err != nil {
-		return err
-	}
-	return resp.Body.Close()
+	return guard.err(err)
 }
 
-func storageMultipartPut(ctx context.Context, c *api.Client, bucket, key, file string, size int64, ctype string) error {
+func storageStreamPut(ctx context.Context, c *api.Client, bucket, key string, body io.Reader, ctype string, idle time.Duration) error {
+	reqCtx, guard := withStallGuard(ctx, idle)
+	defer guard.stop()
+	_, err := c.JSONAny(reqCtx, api.Request{
+		Method: http.MethodPut, Path: bucketObjectPath(bucket, key),
+		Body: &progressReader{r: body, guard: guard}, ContentType: ctype, NoRetry: true, StreamBody: true,
+	})
+	return guard.err(err)
+}
+
+func storageMultipartPut(ctx context.Context, c *api.Client, bucket, key, file string, size int64, ctype string, idle time.Duration) error {
 	base := "/storage/buckets/" + url.PathEscape(bucket) + "/multipart"
 	var created struct {
 		Data struct {
@@ -216,11 +235,15 @@ func storageMultipartPut(ctx context.Context, c *api.Client, bucket, key, file s
 		}
 		var lastErr error
 		for attempt := 0; attempt < 3; attempt++ {
-			lastErr = c.JSON(ctx, api.Request{
+			reqCtx, guard := withStallGuard(ctx, idle)
+			lastErr = c.JSON(reqCtx, api.Request{
 				Method: http.MethodPut, Path: fmt.Sprintf("%s/%s/parts/%d", base, id, n),
-				Body: io.NewSectionReader(f, off, length), ContentType: "application/octet-stream", NoRetry: true,
+				Body:        &progressReader{r: io.NewSectionReader(f, off, length), guard: guard},
+				ContentType: "application/octet-stream", NoRetry: true, StreamBody: true,
 				Headers: map[string]string{"Content-Length": strconv.FormatInt(length, 10)},
 			}, &res)
+			guard.stop()
+			lastErr = guard.err(lastErr)
 			if lastErr == nil {
 				break
 			}
@@ -236,6 +259,68 @@ func storageMultipartPut(ctx context.Context, c *api.Client, bucket, key, file s
 		return err
 	}
 	return nil
+}
+
+// stallGuard cancels an upload whose body stops moving for the idle window.
+// A zero idle disables it, and a nil guard is harmless, so callers never
+// branch on whether the limit is on.
+type stallGuard struct {
+	cancel context.CancelFunc
+	timer  *time.Timer
+	idle   time.Duration
+	fired  atomic.Bool
+}
+
+func withStallGuard(ctx context.Context, idle time.Duration) (context.Context, *stallGuard) {
+	if idle <= 0 {
+		return ctx, nil
+	}
+	reqCtx, cancel := context.WithCancel(ctx)
+	g := &stallGuard{cancel: cancel, idle: idle}
+	g.timer = time.AfterFunc(idle, func() {
+		g.fired.Store(true)
+		cancel()
+	})
+	return reqCtx, g
+}
+
+// progress restarts the idle window after the body moved.
+func (g *stallGuard) progress() {
+	if g != nil && g.timer != nil {
+		g.timer.Reset(g.idle)
+	}
+}
+
+func (g *stallGuard) stop() {
+	if g == nil {
+		return
+	}
+	if g.timer != nil {
+		g.timer.Stop()
+	}
+	g.cancel()
+}
+
+// err replaces the transport's cancellation error with what actually happened.
+func (g *stallGuard) err(err error) error {
+	if g != nil && g.fired.Load() {
+		return fmt.Errorf("upload stalled: no progress for %s (--timeout sets this limit)", g.idle)
+	}
+	return err
+}
+
+// progressReader reports each read to the guard.
+type progressReader struct {
+	r     io.Reader
+	guard *stallGuard
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.guard.progress()
+	}
+	return n, err
 }
 
 // ─── get ──────────────────────────────────────────────────────────────────────

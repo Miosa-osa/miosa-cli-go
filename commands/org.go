@@ -52,6 +52,7 @@ one are locked to that organization and cannot bill another.`,
 		RunE: runOrgShow,
 	}
 	cmd.AddCommand(
+		newOrgDiffCmd(),
 		&cobra.Command{
 			Use:   "limits",
 			Short: "Same as 'miosa limits': who pays and whether a create can start",
@@ -76,6 +77,7 @@ one are locked to that organization and cannot bill another.`,
 		},
 		newOrgInviteCmd(),
 		newOrgCapsCmd(),
+		newOrgApplyCmd(),
 	)
 	return cmd
 }

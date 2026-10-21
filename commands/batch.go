@@ -93,6 +93,9 @@ if any sandbox failed.
 			if region != "" {
 				body["region"] = region
 			}
+			if workspace == "" {
+				workspace = defaultWorkspaceRef()
+			}
 			if workspace != "" {
 				body["workspace_slug"] = workspace
 			}
@@ -161,7 +164,7 @@ if any sandbox failed.
 	f.StringVar(&size, "size", "", "Sandbox size, as for 'miosa create'")
 	f.StringVar(&prefix, "name-prefix", "", "Prefix for the sandbox names, numbered from 1")
 	f.StringVar(&region, "region", "", "Region")
-	f.StringVar(&workspace, "workspace", "", "Workspace slug")
+	f.StringVar(&workspace, "workspace", "", "Workspace slug (default: the profile's default workspace)")
 	f.StringVar(&ttl, "ttl", "", "Time to live of each sandbox, for example 2h")
 	f.StringVar(&idle, "idle-timeout", "", "Idle timeout of each sandbox, for example 15m")
 	f.StringArrayVar(&tags, "tag", nil, "Tag KEY=VALUE for every sandbox (repeatable)")

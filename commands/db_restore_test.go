@@ -18,6 +18,7 @@ type dbServer struct {
 	calls    []string
 	bodies   map[string]map[string]any
 	newState string
+	backups  string
 }
 
 func (d *dbServer) handler(t *testing.T) http.Handler {
@@ -40,6 +41,10 @@ func (d *dbServer) handler(t *testing.T) http.Handler {
 		case "GET /databases/" + srcID:
 			w.Write([]byte(`{"id":"` + srcID + `","name":"app-db","engine":"postgresql","engine_version":"16","cpu_count":1,"memory_mb":2048,"storage_mb":10240,"workspace_id":"ws1","state":"running"}`))
 		case "GET /databases/" + srcID + "/backups":
+			if d.backups != "" {
+				w.Write([]byte(d.backups))
+				break
+			}
 			w.Write([]byte(`{"data":[{"id":"bk-failed","state":"failed"},{"id":"bk-newest","state":"completed"},{"id":"bk-old","state":"completed"}]}`))
 		case "POST /databases":
 			w.WriteHeader(201)
@@ -105,14 +110,15 @@ func TestDBRestoreToNewUsesTheBackupItIsGiven(t *testing.T) {
 	defer srv.Close()
 	setupEnv(t, srv)
 
-	if out, err := run(t, "db", "restore", srcID, "--backup", "bk-old", "--to-new", "app-db-r"); err != nil {
+	const full = "33333333-3333-4333-8333-333333333333"
+	if out, err := run(t, "db", "restore", srcID, "--backup", full, "--to-new", "app-db-r"); err != nil {
 		t.Fatalf("restore failed: %v\n%s", err, out)
 	}
-	if got := fake.bodies["POST /databases/22222222-2222-4222-8222-222222222222/restore"]["backup_id"]; got != "bk-old" {
-		t.Errorf("want bk-old, got %v", got)
+	if got := fake.bodies["POST /databases/22222222-2222-4222-8222-222222222222/restore"]["backup_id"]; got != full {
+		t.Errorf("want %s, got %v", full, got)
 	}
 	if fake.has("GET /databases/" + srcID + "/backups") {
-		t.Error("the backup list is only read when --backup is not given")
+		t.Error("a full id needs no backup list")
 	}
 }
 
@@ -153,5 +159,53 @@ func TestDBRestoreStopsWhenTheNewDatabaseFails(t *testing.T) {
 	}
 	if fake.has("POST /databases/22222222-2222-4222-8222-222222222222/restore") {
 		t.Error("no restore into a database that never ran")
+	}
+}
+
+const backupList = `{"data":[{"id":"778439c0-1111-4222-8333-444455556666","state":"completed"},{"id":"778439c0-9999-4222-8333-444455556666","state":"completed"},{"id":"aaaaaaaa-1111-4222-8333-444455556666","state":"completed"}]}`
+
+func TestDBRecoverResolvesAShortBackupID(t *testing.T) {
+	fake := &dbServer{newState: "running", backups: `{"data":[{"id":"778439c0-1111-4222-8333-444455556666","state":"completed"}]}`}
+	srv := httptest.NewServer(fake.handler(t))
+	defer srv.Close()
+	setupEnv(t, srv)
+
+	out, err := run(t, "db", "recover", srcID, "--backup", "778439c0", "--to-new", "app-db-r")
+	if err != nil {
+		t.Fatalf("recover: %v\n%s", err, out)
+	}
+	body := fake.bodies["POST /databases/22222222-2222-4222-8222-222222222222/restore"]
+	if body["backup_id"] != "778439c0-1111-4222-8333-444455556666" {
+		t.Fatalf("backup_id = %v, want the full id", body["backup_id"])
+	}
+}
+
+func TestDBRecoverRefusesAnUnknownShortBackupID(t *testing.T) {
+	fake := &dbServer{newState: "running", backups: backupList}
+	srv := httptest.NewServer(fake.handler(t))
+	defer srv.Close()
+	setupEnv(t, srv)
+
+	_, err := run(t, "db", "recover", srcID, "--backup", "deadbeef", "--to-new", "app-db-r")
+	if err == nil || !strings.Contains(err.Error(), "no backup") {
+		t.Fatalf("err = %v", err)
+	}
+	if fake.has("POST /databases/22222222-2222-4222-8222-222222222222/restore") {
+		t.Fatal("nothing may be restored")
+	}
+}
+
+func TestDBRecoverRefusesAnAmbiguousShortBackupID(t *testing.T) {
+	fake := &dbServer{newState: "running", backups: backupList}
+	srv := httptest.NewServer(fake.handler(t))
+	defer srv.Close()
+	setupEnv(t, srv)
+
+	_, err := run(t, "db", "recover", srcID, "--backup", "778439c0", "--to-new", "app-db-r")
+	if err == nil || !strings.Contains(err.Error(), "matches 2 backups") {
+		t.Fatalf("err = %v", err)
+	}
+	if fake.has("POST /databases/22222222-2222-4222-8222-222222222222/restore") {
+		t.Fatal("nothing may be restored")
 	}
 }

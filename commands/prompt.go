@@ -210,7 +210,14 @@ func runPrompt(cmd *cobra.Command, args []string, o promptOptions) error {
 		if err != nil {
 			return die(err)
 		}
+		// The run binds a definition AND a version (the API refuses one without the
+		// other): run the agent's current published version.
+		version, err := currentAgentVersion(ctx, c.API, id)
+		if err != nil {
+			return die(err)
+		}
 		body["agent_definition_id"] = id
+		body["agent_version_id"] = version
 	}
 
 	// Target.
@@ -637,4 +644,22 @@ func resolveHarness(ctx context.Context, c *api.Client, name string) (string, er
 		return "", usagef("the custom gateway harness is not a prompt harness: run a saved agent with --agent")
 	}
 	return "", usagef("--harness must be one of %s (got %q)", strings.Join(known, ", "), name)
+}
+
+// currentAgentVersion is the id of the agent's current published version.
+func currentAgentVersion(ctx context.Context, c *api.Client, agentID string) (string, error) {
+	var out struct {
+		Data struct {
+			Version struct {
+				ID string `json:"id"`
+			} `json:"version"`
+		} `json:"data"`
+	}
+	if err := c.Get(ctx, "/agents/"+agentID, nil, &out); err != nil {
+		return "", err
+	}
+	if out.Data.Version.ID == "" {
+		return "", fmt.Errorf("agent %s has no published version; publish one with 'miosa agent publish'", agentID)
+	}
+	return out.Data.Version.ID, nil
 }

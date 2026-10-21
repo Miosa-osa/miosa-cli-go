@@ -214,7 +214,4 @@ func TestConnectionsRmAndTest(t *testing.T) {
 	if _, err := run(t, "connections", "rm", "models", "claude", "-y"); err == nil || commands.ExitCode(err) != commands.ExitUsage {
 		t.Fatalf("a subscription is removed by id: %v", err)
 	}
-	if _, err := run(t, "connections", "share", "x"); err == nil || !strings.Contains(err.Error(), "not exposed by the API yet") {
-		t.Fatalf("share: %v", err)
-	}
 }

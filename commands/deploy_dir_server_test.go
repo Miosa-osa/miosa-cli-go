@@ -80,3 +80,41 @@ func TestDeployCreateFromDirTypeDynamicNeedsRunCommand(t *testing.T) {
 		t.Fatalf("expected a --from-sandbox usage error, got: %v", err)
 	}
 }
+
+// The env of an upload goes in before the version is published, so the first release carries it. Set
+// after the publish it cut a second release for the same version (WO-01: two releases per publish).
+func TestDeployCreateFromDirSetsEnvBeforeCompleting(t *testing.T) {
+	f := newFakeAPI(t, func(c call) (int, string) {
+		switch {
+		case c.is("POST", "/deployments/drop/sessions"):
+			return 201, `{"data":{"session_id":"s1","deployment_id":"d3","source_type":"upload","chunk_count":0}}`
+		case c.Method == "POST" && strings.Contains(c.Path, "/drop/sessions/s1/chunks"):
+			return 200, `{"data":{"session_id":"s1","chunk_index":0,"bytes_received":10}}`
+		case c.is("POST", "/deployments/d3/env"):
+			return 200, `{"data":[],"release":null}`
+		case c.is("POST", "/deployments/d3/drop/sessions/s1/complete"):
+			return 202, `{"data":{"version_id":"v1","deployment_id":"d3","public_url":"https://d3.miosa.app","kind":"dynamic","state":"building"}}`
+		}
+		return 404, `{"error":{"code":"NOT_FOUND","message":"no route"}}`
+	})
+	dir := t.TempDir()
+	writeStaticSite(t, dir)
+	if out, err := run(t, "deploy", "create", "--dir", dir, "--name", "api", "--run-command", "node server.js",
+		"--port", "3000", "--env", "GREETING=v1", "--no-wait"); err != nil {
+		t.Fatalf("deploy create: %v (out=%q)", err, out)
+	}
+	envAt, completeAt := -1, -1
+	f.mu.Lock()
+	for i, c := range f.calls {
+		switch {
+		case c.is("POST", "/deployments/d3/env"):
+			envAt = i
+		case c.is("POST", "/deployments/d3/drop/sessions/s1/complete"):
+			completeAt = i
+		}
+	}
+	f.mu.Unlock()
+	if envAt < 0 || completeAt < 0 || envAt > completeAt {
+		t.Fatalf("env must be set before the publish completes: env at %d, complete at %d", envAt, completeAt)
+	}
+}

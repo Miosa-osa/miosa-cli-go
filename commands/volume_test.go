@@ -206,3 +206,17 @@ func TestVolumeSnapshotRmNeedsConfirmationAndAnUnknownIdIsRefused(t *testing.T) 
 		t.Fatalf("%v", err)
 	}
 }
+
+func TestVolumeRestoreStaysAsAHiddenAliasOfFork(t *testing.T) {
+	f := fakeRoutes(t, snapshotRoutes())
+	if _, err := run(t, "volume", "restore", volSnapID[:8], "--to-new", "wo05-vol-r"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.find("POST", "/volume-snapshots/"+volSnapID+"/restore")) != 1 {
+		t.Fatal("restore must reach the same route as fork")
+	}
+	help, _ := run(t, "volume", "--help")
+	if strings.Contains(help, "restore") {
+		t.Fatalf("restore is hidden from help: %s", help)
+	}
+}

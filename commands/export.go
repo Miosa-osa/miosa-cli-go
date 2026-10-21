@@ -9,6 +9,7 @@ import (
 
 	"github.com/Miosa-osa/miosa-cli-go/internal/api"
 	"github.com/Miosa-osa/miosa-cli-go/internal/client"
+	"github.com/Miosa-osa/miosa-cli-go/internal/output"
 )
 
 func init() {
@@ -73,11 +74,18 @@ listed by key and size, and stay where they are).`,
 			if err != nil {
 				return die(err)
 			}
+			// unwrapObject already steps into {"data": {...}}.
+			data, _ := unwrapObject(resp).(map[string]any)
+			// A slice the key could not read is not in the export; say so on stderr in every
+			// output mode, so a script that parses stdout still sees it.
+			omitted, _ := data["omitted"].([]any)
+			for _, o := range omitted {
+				entry, _ := o.(map[string]any)
+				output.Warn("%v was left out of the export (%v)", orEmpty(entry["slice"], ""), orEmpty(entry["omitted"], "not allowed"))
+			}
 			if isJSON() {
 				return p.JSON(resp)
 			}
-			obj, _ := unwrapObject(resp).(map[string]any)
-			data, _ := obj["data"].(map[string]any)
 			if data == nil {
 				return p.JSON(resp)
 			}

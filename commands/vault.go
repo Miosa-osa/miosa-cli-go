@@ -311,10 +311,23 @@ func secretShareCmd() *cobra.Command {
 				return die(err)
 			}
 
+			// The server takes workspace ids, but a slug is what people type,
+			// so a slug or name is resolved the same way --workspace-id is
+			// elsewhere. A value that matches nothing says so; it used to
+			// reach the API and come back as a bare BAD_REQUEST.
+			ids := make([]string, 0, len(workspaces))
+			for _, ref := range workspaces {
+				workspaceID, err := c.API.ResolveWorkspace(cmd.Context(), ref)
+				if err != nil {
+					return die(err)
+				}
+				ids = append(ids, workspaceID)
+			}
+
 			var out struct {
 				Data map[string]any `json:"data"`
 			}
-			body := map[string]any{"workspace_ids": workspaces}
+			body := map[string]any{"workspace_ids": ids}
 			if err := c.API.Post(cmd.Context(), "/secrets/"+id+"/shares", body, &out); err != nil {
 				return die(err)
 			}
@@ -325,7 +338,7 @@ func secretShareCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringSliceVar(&workspaces, "workspace", nil, "Workspace id to share with (repeatable)")
+	cmd.Flags().StringSliceVar(&workspaces, "workspace", nil, "Workspace slug or id to share with (repeatable)")
 	_ = cmd.MarkFlagRequired("workspace")
 	return cmd
 }
@@ -349,10 +362,15 @@ func secretUnshareCmd() *cobra.Command {
 				return die(err)
 			}
 
+			workspaceID, err := c.API.ResolveWorkspace(cmd.Context(), workspace)
+			if err != nil {
+				return die(err)
+			}
+
 			var out struct {
 				Data map[string]any `json:"data"`
 			}
-			path := "/secrets/" + id + "/shares/" + workspace
+			path := "/secrets/" + id + "/shares/" + workspaceID
 			if err := c.API.Delete(cmd.Context(), path, nil, &out); err != nil {
 				return die(err)
 			}
@@ -363,19 +381,24 @@ func secretUnshareCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&workspace, "workspace", "", "Workspace id to stop sharing with")
+	cmd.Flags().StringVar(&workspace, "workspace", "", "Workspace slug or id to stop sharing with")
 	_ = cmd.MarkFlagRequired("workspace")
 	return cmd
 }
 
 func secretImportCmd() *cobra.Command {
 	var file, scope, workspaceID string
+	var strict bool
 
 	cmd := &cobra.Command{
 		Use:   "import --file <dotenv>",
 		Short: "Load many secrets from a dotenv file",
 		Long: `Load many names at once. Values are read from the file and never echoed; the
-command prints the names it set.`,
+command prints the names it set.
+
+A line the vault cannot take is reported with its line number and the reason
+instead of being skipped silently. When every line is unusable the command
+fails, and --strict fails on the first unusable line before anything is set.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c, _, err := buildClient()
@@ -387,6 +410,17 @@ command prints the names it set.`,
 			data, readErr := os.ReadFile(file)
 			if readErr != nil {
 				return die(readErr)
+			}
+
+			scan := scanDotenv(string(data))
+			for _, warning := range scan.warnings {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s:%d: %s\n", file, warning.line, warning.reason)
+			}
+			if strict && scan.skipped > 0 {
+				return die(fmt.Errorf("%s: %d line(s) cannot be imported; --strict refuses a partial import", file, scan.skipped))
+			}
+			if scan.valid == 0 && scan.skipped > 0 {
+				return die(fmt.Errorf("%s: no lines could be imported; all %d line(s) were skipped", file, scan.skipped))
 			}
 
 			body := map[string]any{"content": string(data), "scope": scope}
@@ -412,8 +446,80 @@ command prints the names it set.`,
 	cmd.Flags().StringVar(&file, "file", "", "Dotenv file to read")
 	cmd.Flags().StringVar(&scope, "scope", "org", "Org or workspace")
 	cmd.Flags().StringVar(&workspaceID, "workspace-id", "", "Required with --scope workspace")
+	cmd.Flags().BoolVar(&strict, "strict", false, "Fail on the first line that cannot be imported")
 	_ = cmd.MarkFlagRequired("file")
 	return cmd
+}
+
+// dotenvWarning is one line the vault cannot take, with the line number the
+// user sees in their editor (1-based) and the reason. It never carries a value.
+type dotenvWarning struct {
+	line   int
+	reason string
+}
+
+type dotenvScan struct {
+	valid    int
+	skipped  int
+	warnings []dotenvWarning
+}
+
+// scanDotenv applies the vault's dotenv rules locally so the command can say
+// what it is dropping. The server keeps the same rules: a line is NAME=value
+// with a name of letters, digits and underscores that starts with a letter or
+// underscore; blank lines and comments are ignored; the name is upcased, so
+// two spellings of one name are a duplicate.
+func scanDotenv(content string) dotenvScan {
+	var scan dotenvScan
+	seen := map[string]int{}
+
+	for i, raw := range strings.Split(content, "\n") {
+		lineNo := i + 1
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, _, ok := strings.Cut(line, "=")
+		if !ok {
+			scan.skipped++
+			scan.warnings = append(scan.warnings, dotenvWarning{lineNo, "not a NAME=value line"})
+			continue
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			scan.skipped++
+			scan.warnings = append(scan.warnings, dotenvWarning{lineNo, "empty name"})
+			continue
+		}
+		if !validSecretName(name) {
+			scan.skipped++
+			scan.warnings = append(scan.warnings, dotenvWarning{lineNo,
+				fmt.Sprintf("invalid name %q: use letters, digits and underscores, starting with a letter or underscore", name)})
+			continue
+		}
+		upper := strings.ToUpper(name)
+		if first, dup := seen[upper]; dup {
+			scan.warnings = append(scan.warnings, dotenvWarning{lineNo,
+				fmt.Sprintf("duplicate name %s (first set on line %d); the later value wins", upper, first)})
+			continue
+		}
+		seen[upper] = lineNo
+		scan.valid++
+	}
+	return scan
+}
+
+// validSecretName matches the vault's rule: [A-Za-z_][A-Za-z0-9_]*.
+func validSecretName(name string) bool {
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '_':
+		case r >= '0' && r <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return name != ""
 }
 
 func secretRemoveCmd() *cobra.Command {

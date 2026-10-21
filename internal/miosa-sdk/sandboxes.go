@@ -35,6 +35,8 @@ type SandboxData struct {
 	IdleTimeoutSec int               `json:"idle_timeout_sec"`
 	AlwaysOn       bool              `json:"always_on"`
 	LostReason     string            `json:"lost_reason,omitempty"`
+	FailureReason  string            `json:"failure_reason,omitempty"`
+	LastError      string            `json:"last_error,omitempty"`
 	PreviewURL     string            `json:"preview_url"`
 	Ready          bool              `json:"ready"`
 	ReadyAt        string            `json:"ready_at"`
@@ -75,6 +77,15 @@ type CreateSandboxInput struct {
 	ProjectSlug    string            `json:"project_slug,omitempty"`
 	ProjectName    string            `json:"project_name,omitempty"`
 	Metadata       map[string]string `json:"metadata,omitempty"`
+	// Tags are the governance tags stored on the sandbox (WO-37): owner,
+	// entity, purpose (production, client, internal, test) and project.
+	Tags map[string]string `json:"tags,omitempty"`
+	// Expires is a governance deadline as a duration ("24h", "7d"); the server
+	// resolves it. purpose=test defaults to 24 hours when neither this nor
+	// ExpiresAt is set.
+	Expires string `json:"expires,omitempty"`
+	// ExpiresAt is the same deadline as an RFC 3339 timestamp.
+	ExpiresAt string `json:"expires_at,omitempty"`
 	// WaitSec asks the create request itself to wait up to this many seconds
 	// (2 to 120) for readiness; the sandbox is returned either way.
 	WaitSec int `json:"wait,omitempty"`

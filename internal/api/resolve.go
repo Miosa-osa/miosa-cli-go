@@ -170,6 +170,8 @@ var agentLiterals = map[string]bool{
 	// The Agents tab: settings, the model picker, shared credentials and the
 	// keys of tool servers. None of these is an agent named "credentials".
 	"settings": true, "models": true, "credentials": true, "tool-keys": true,
+	// Approval policies (WO-16) are the workspace's, not one agent's.
+	"policies": true,
 }
 
 // ResolveAgent returns the id for an agent reference: a UUID or an agent name.

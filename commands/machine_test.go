@@ -171,6 +171,52 @@ func TestInfoJSON(t *testing.T) {
 	}
 }
 
+// An errored sandbox says why, and a healthy one keeps its old output.
+func TestInfoShowsTheFailureReason(t *testing.T) {
+	newFakeAPI(t, func(c call) (int, string) {
+		return 200, `{"id":"sb1","name":"box","state":"error","size":"small","template_id":"miosa-sandbox",` +
+			`"failure_reason":"vm_gone","last_error":"host reports no VM and no sealed checkpoint exists (source=vm_guard)"}`
+	})
+	out, err := run(t, "info", "sb1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Reason:   vm_gone", "Detail:   host reports no VM"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestInfoJSONCarriesTheFailureReason(t *testing.T) {
+	newFakeAPI(t, func(c call) (int, string) {
+		return 200, `{"id":"sb1","name":"box","state":"error","size":"small","template_id":"miosa-sandbox",` +
+			`"failure_reason":"provision_failed","last_error":"no host accepts the request"}`
+	})
+	out, err := run(t, "info", "sb1", "-o", "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"failure_reason": "provision_failed"`, `"last_error": "no host accepts the request"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %s:\n%s", want, out)
+		}
+	}
+}
+
+func TestInfoOmitsTheReasonForAHealthySandbox(t *testing.T) {
+	newFakeAPI(t, func(c call) (int, string) {
+		return 200, `{"id":"sb1","name":"box","state":"running","size":"small","template_id":"miosa-sandbox"}`
+	})
+	out, err := run(t, "info", "sb1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "Reason:") || strings.Contains(out, "Detail:") {
+		t.Fatalf("a healthy sandbox must not print a reason:\n%s", out)
+	}
+}
+
 func TestInfoFallsBackToComputer(t *testing.T) {
 	newFakeAPI(t, func(c call) (int, string) {
 		if strings.HasPrefix(c.Path, "/sandboxes/") {

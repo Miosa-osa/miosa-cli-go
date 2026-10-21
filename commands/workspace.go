@@ -20,6 +20,7 @@ func newWorkspaceCmd() *cobra.Command {
 		newWorkspaceCreateCmd(),
 		newWorkspaceListCmd(),
 		newWorkspaceDeleteCmd(),
+		newWorkspaceRetireCmd(),
 	)
 	cmd.AddCommand(workspaceOps()...)
 	return cmd

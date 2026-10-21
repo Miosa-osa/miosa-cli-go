@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/Miosa-osa/miosa-cli-go/internal/api"
 )
 
 // newDBRestoreCmd restores a backup, either over the database it came from or
@@ -69,6 +72,13 @@ func runDBRestore(cmd *cobra.Command, ref, backup, toNew string, yes bool) error
 		if err != nil {
 			return die(err)
 		}
+	} else if !api.IsUUID(backup) {
+		// 'miosa db backups' prints short ids; the restore route takes the
+		// full id, so resolve the prefix against this database's backups.
+		backup, err = resolveBackupRef(ctx, c.API.Get, sourceID, backup)
+		if err != nil {
+			return die(err)
+		}
 	}
 
 	targetID := sourceID
@@ -124,6 +134,37 @@ type dbRef struct {
 }
 
 type apiGetter func(ctx context.Context, path string, q url.Values, out any) error
+
+// resolveBackupRef turns a short (or partial) backup id into the full id the
+// restore route requires, using the source database's own backup list.
+func resolveBackupRef(ctx context.Context, get apiGetter, databaseID, ref string) (string, error) {
+	prefix := strings.ToLower(strings.TrimSpace(ref))
+	if prefix == "" {
+		return "", usagef("--backup is empty")
+	}
+	var list struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := get(ctx, "/databases/"+url.PathEscape(databaseID)+"/backups", nil, &list); err != nil {
+		return "", err
+	}
+	var matches []string
+	for _, b := range list.Data {
+		if strings.HasPrefix(strings.ToLower(b.ID), prefix) {
+			matches = append(matches, b.ID)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return "", usagef("no backup of this database matches %q (see 'miosa db backups')", ref)
+	default:
+		return "", usagef("%q matches %d backups; use more of the id (see 'miosa db backups')", ref, len(matches))
+	}
+}
 
 func newestCompletedBackup(ctx context.Context, get apiGetter, databaseID string) (string, error) {
 	var list struct {

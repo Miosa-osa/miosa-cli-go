@@ -105,7 +105,8 @@ func renderEnvRemoval(cmd *cobra.Command, args []string, resp any) error {
 	p := printerFor(cmd)
 	deleted, missing := stringList(result["deleted"]), stringList(result["missing"])
 	if len(deleted) > 0 {
-		p.Success("Removed %s from %s; it applies to the next release ('miosa deploy redeploy %s')", strings.Join(deleted, ", "), args[0], args[0])
+		p.Success("Removed %s from %s", strings.Join(deleted, ", "), args[0])
+		printEnvRelease(p, resp, args[0])
 	}
 	if len(missing) > 0 {
 		p.Line("Not set, nothing removed: %s", strings.Join(missing, ", "))

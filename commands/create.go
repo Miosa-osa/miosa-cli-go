@@ -19,6 +19,8 @@ type createOptions struct {
 	idle        string
 	alwaysOn    bool
 	meta        []string
+	tag         []string
+	expires     string
 }
 
 // sandboxSizes are the sizes the platform offers (see 'miosa catalog').
@@ -75,8 +77,10 @@ background once the sandbox is ready; watch it with 'miosa info'.`,
 	cmd.Flags().StringVar(&opts.idle, "idle-timeout", "", "Pause after this much inactivity: seconds, 15m, 1h")
 	cmd.Flags().BoolVar(&opts.alwaysOn, "always-on", false, "Keep the sandbox running: no idle pause, and the platform resumes it after a host restart")
 	cmd.Flags().StringArrayVar(&opts.meta, "meta", nil, "Metadata, KEY=VALUE (repeatable)")
+	cmd.Flags().StringArrayVar(&opts.tag, "tag", nil, "Governance tag, KEY=VALUE (repeatable): owner, entity, purpose, project")
+	cmd.Flags().StringVar(&opts.expires, "expires", "", "Governance deadline: 24h, 7d or an RFC 3339 time (purpose=test defaults to 24h)")
 	cmd.Flags().StringVar(&template, "template", "miosa-sandbox", "Sandbox template, for example miosa-sandbox, nextjs, static-html, or fastapi-auth")
-	cmd.Flags().StringVar(&workspace, "workspace", "", "Workspace slug to assign the sandbox to")
+	cmd.Flags().StringVar(&workspace, "workspace", "", "Workspace slug to assign the sandbox to (default: the profile's default workspace)")
 	cmd.Flags().StringVar(&runtime, "runtime", "", "Sandbox runtime: firecracker, soma or auto")
 	envFlags.bind(cmd, "sandbox")
 
@@ -119,6 +123,12 @@ func runCreate(cmd *cobra.Command, args []string, size, template, workspace, run
 		}
 	}
 
+	// A computer image is not a sandbox template. Sending it to the sandbox
+	// API can only come back INVALID_TEMPLATE, so name the command that takes it.
+	if canonical, ok := computerTemplateRef(template); ok {
+		return usagef("--template %s is a computer template; run 'miosa computer create <name> --template %s' to create a desktop machine", template, canonical)
+	}
+
 	input := miosa.CreateSandboxInput{
 		Name:        name,
 		TemplateID:  template,
@@ -128,8 +138,28 @@ func runCreate(cmd *cobra.Command, args []string, size, template, workspace, run
 		SetupFile:   setup,
 		Runtime:     runtime,
 	}
+	if workspace == "" {
+		workspace = defaultWorkspaceRef()
+	}
 	if workspace != "" {
 		input.WorkspaceSlug = workspace
+	}
+	if len(opts.tag) > 0 {
+		tags, err := parseTagFlags(opts.tag)
+		if err != nil {
+			return usagef("%v", err)
+		}
+		input.Tags = tags
+	}
+	if strings.TrimSpace(opts.expires) != "" {
+		// A duration travels as `expires` and is resolved by the server; a
+		// timestamp travels as `expires_at`. Sending a duration in the
+		// timestamp field would be refused.
+		if looksLikeTimestamp(opts.expires) {
+			input.ExpiresAt = strings.TrimSpace(opts.expires)
+		} else {
+			input.Expires = strings.TrimSpace(opts.expires)
+		}
 	}
 	if opts.ttl != "" {
 		n, err := parseSeconds(opts.ttl)
@@ -241,4 +271,47 @@ func createWaitSeconds(wait time.Duration) int {
 		return 0
 	}
 	return n
+}
+
+// parseTagFlags turns repeated KEY=VALUE flags into the tag map the API takes.
+// A bare KEY is refused: an empty value says nothing, and a typo in a reserved
+// key (purpose, owner) should not create a resource that looks tagged.
+func parseTagFlags(values []string) (map[string]string, error) {
+	tags := make(map[string]string, len(values))
+
+	for _, entry := range values {
+		key, value, ok := strings.Cut(entry, "=")
+		key = strings.TrimSpace(key)
+		if !ok || key == "" {
+			return nil, fmt.Errorf("--tag %q: use KEY=VALUE", entry)
+		}
+		if strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("--tag %q: the value is empty", entry)
+		}
+		tags[key] = strings.TrimSpace(value)
+	}
+
+	return tags, nil
+}
+
+// computerTemplates are the computer machine images. They are resolved by
+// 'miosa computer create' and do not exist in the sandbox template catalog.
+var computerTemplates = map[string]string{
+	"miosa-desktop": "miosa-desktop",
+	"miosa_desktop": "miosa-desktop",
+	"desktop":       "miosa-desktop",
+}
+
+// computerTemplateRef reports whether a --template value names a computer
+// image, and the canonical id to hand to 'miosa computer create'.
+func computerTemplateRef(template string) (string, bool) {
+	canonical, ok := computerTemplates[strings.ToLower(strings.TrimSpace(template))]
+	return canonical, ok
+}
+
+// looksLikeTimestamp separates an RFC 3339 deadline from a duration.
+func looksLikeTimestamp(value string) bool {
+	value = strings.TrimSpace(value)
+	_, err := time.Parse(time.RFC3339, value)
+	return err == nil
 }

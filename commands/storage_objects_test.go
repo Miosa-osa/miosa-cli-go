@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const bucketID = "c1c1c1c1-0000-4000-8000-000000000001"
@@ -296,5 +297,87 @@ func TestStoragePutFromStandardInputNeedsAKey(t *testing.T) {
 	}
 	if f.count() != 0 {
 		t.Fatalf("a request was sent: %+v", f.calls)
+	}
+}
+
+// A 200 MB body is a single PUT (under the 256 MiB part limit) and must not be
+// cut off by a wall-clock deadline while it is still moving.
+func TestStoragePutTwoHundredMegabytesToASlowServer(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "big.bin")
+	f, err := os.Create(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := make([]byte, 1<<20)
+	for i := 0; i < 200; i++ {
+		if _, err := f.Write(chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var received int64
+	srv := plainServer(t, func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, 8<<20)
+		for {
+			n, readErr := r.Body.Read(buf)
+			received += int64(n)
+			if n > 0 {
+				time.Sleep(20 * time.Millisecond)
+			}
+			if readErr != nil {
+				break
+			}
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	setupEnv(t, srv)
+
+	out, err := run(t, "storage", "put", bucketID, src, "big.bin", "--timeout", "5")
+	if err != nil {
+		t.Fatalf("a 200 MB upload must finish: %v\n%s", err, out)
+	}
+	if received != 200<<20 {
+		t.Fatalf("server received %d bytes, want %d", received, int64(200<<20))
+	}
+}
+
+// A body that stops moving ends at the idle limit, not at a wall clock and
+// not never.
+func TestStoragePutStalledUploadEndsAtTheIdleLimit(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "slow.bin")
+	if err := os.WriteFile(src, make([]byte, 1<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The handler stops when the client cancels OR when the test ends, so
+	// httptest.Server.Close can never block on a handler that outlived it.
+	// The cleanup is registered AFTER plainServer's Close so it runs first.
+	stop := make(chan struct{})
+	srv := plainServer(t, func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, 1024)
+		_, _ = r.Body.Read(buf)
+		select {
+		case <-r.Context().Done():
+		case <-stop:
+		}
+	})
+	t.Cleanup(func() { close(stop) })
+	setupEnv(t, srv)
+
+	start := time.Now()
+	out, err := run(t, "storage", "put", bucketID, src, "slow.bin", "--timeout", "1")
+	if err == nil {
+		t.Fatalf("a stalled upload must fail:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "upload stalled") {
+		t.Fatalf("error = %v, want the idle-limit message", err)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("took %s; the idle limit should have ended it sooner", elapsed)
 	}
 }

@@ -50,6 +50,9 @@ func attachOneShot(cmd *cobra.Command) {
 		if name != "" {
 			body["name"] = name
 		}
+		if workspace == "" {
+			workspace = defaultWorkspaceRef()
+		}
 		if workspace != "" {
 			body["workspace_slug"] = workspace
 		}
@@ -129,7 +132,7 @@ func attachOneShot(cmd *cobra.Command) {
 	f.StringVar(&template, "template", "", "Sandbox template (default miosa-sandbox)")
 	f.StringVar(&cwd, "cwd", "", "Working directory for the command")
 	f.StringVar(&name, "name", "", "Name for the sandbox")
-	f.StringVar(&workspace, "workspace", "", "Workspace slug")
+	f.StringVar(&workspace, "workspace", "", "Workspace slug (default: the profile's default workspace)")
 	f.StringArrayVar(&vars, "set", nil, "Environment variable KEY=VALUE for the command (repeatable)")
 	f.StringArrayVar(&tags, "meta", nil, "Metadata KEY=VALUE on the sandbox (repeatable)")
 }

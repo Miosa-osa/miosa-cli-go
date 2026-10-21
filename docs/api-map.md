@@ -15,12 +15,20 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa agent authority grants` | GET | `/actions/grants` |
 | `miosa agent authority receipts` | GET | `/actions/receipts` |
 | `miosa agent authority revoke` | DELETE | `/actions/grants/{0}` |
+| `miosa agent authority rules create` | POST | `/agents/policies` |
+| `miosa agent authority rules get` | GET | `/agents/policies/{0}` |
+| `miosa agent authority rules list` | GET | `/agents/policies` |
+| `miosa agent authority rules rm` | DELETE | `/agents/policies/{0}` |
 | `miosa agent defaults` | GET | `/agents/defaults` |
 | `miosa agent duplicate` | POST | `/agents/{0}/duplicate` |
 | `miosa agent get` | GET | `/agents/{0}` |
 | `miosa agent harness-versions` | GET | `/agents/harness-versions` |
 | `miosa agent harnesses` | GET | `/agents/harnesses` |
 | `miosa agent list` | GET | `/agents` |
+| `miosa agent policy create` | POST | `/agents/policies` |
+| `miosa agent policy get` | GET | `/agents/policies/{0}` |
+| `miosa agent policy list` | GET | `/agents/policies` |
+| `miosa agent policy rm` | DELETE | `/agents/policies/{0}` |
 | `miosa agent rm` | DELETE | `/agents/{0}` |
 | `miosa agent runs` | GET | `/agents/{0}/runs` |
 | `miosa agent templates` | GET | `/agents/templates` |
@@ -83,6 +91,7 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa computer start` | POST | `/computers/{0}/start` |
 | `miosa computer stop` | POST | `/computers/{0}/stop` |
 | `miosa computer urls` | GET | `/computers/{0}/urls` |
+| `miosa cron create` | POST | `/cron-jobs` |
 | `miosa cron executions` | GET | `/cron-jobs/{0}/executions` |
 | `miosa cron get` | GET | `/cron-jobs/{0}` |
 | `miosa cron list` | GET | `/cron-jobs` |
@@ -127,6 +136,7 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa deploy requests` | GET | `/deployments/{0}/request-logs` |
 | `miosa deploy rm` | DELETE | `/deployments/{0}` |
 | `miosa deploy rollback` | POST | `/deployments/{0}/rollback` |
+| `miosa deploy start` | POST | `/deployments/{0}/start` |
 | `miosa deploy stop` | POST | `/deployments/{0}/stop` |
 | `miosa desktop start` | POST | `/sandboxes/{0}/desktop` |
 | `miosa desktop url` | GET | `/sandboxes/{0}/desktop` |
@@ -148,6 +158,20 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa egress audit` | GET | `/egress/audit` |
 | `miosa egress policies` | GET | `/egress/policies` |
 | `miosa egress suggestions` | GET | `/egress/audit/suggestions` |
+| `miosa email domains add` | POST | `/email/domains` |
+| `miosa email domains list` | GET | `/email/domains` |
+| `miosa email domains records` | GET | `/email/domains/{0}` |
+| `miosa email domains rm` | DELETE | `/email/domains/{0}` |
+| `miosa email domains verify` | POST | `/email/domains/{0}/verify` |
+| `miosa email limits` | GET | `/email/limits` |
+| `miosa email message` | GET | `/email/messages/{0}` |
+| `miosa email messages` | GET | `/email/messages` |
+| `miosa email send` | POST | `/email/send` |
+| `miosa email suppress` | POST | `/email/suppressions` |
+| `miosa email suppressions` | GET | `/email/suppressions` |
+| `miosa email unsuppress` | DELETE | `/email/suppressions/{0}` |
+| `miosa engine get` | GET | `/databases/{0}` |
+| `miosa engine list` | GET | `/databases` |
 | `miosa extend` | POST | `/sandboxes/{0}/extend` |
 | `miosa forge check evidence` | GET | `/forge/repositories/{0}/check-runs/{1}/evidence` |
 | `miosa forge check list` | GET | `/forge/repositories/{0}/check-suites` |
@@ -326,6 +350,7 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa sandbox resize` | PATCH | `/sandboxes/{0}/resources` |
 | `miosa sandbox resources` | GET | `/sandboxes/{0}/resources` |
 | `miosa sandbox update` | PATCH | `/sandboxes/{0}` |
+| `miosa schedule create` | POST | `/cron-jobs` |
 | `miosa schedule executions` | GET | `/cron-jobs/{0}/executions` |
 | `miosa schedule get` | GET | `/cron-jobs/{0}` |
 | `miosa schedule list` | GET | `/cron-jobs` |
@@ -369,10 +394,12 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa volume fork` | POST | `/volume-snapshots/{0}/restore` |
 | `miosa volume get` | GET | `/volumes/{0}` |
 | `miosa volume list` | GET | `/volumes` |
+| `miosa volume mount` | PATCH | `/projects/{0}/services/{1}` |
 | `miosa volume rm` | DELETE | `/volumes/{0}` |
 | `miosa volume snapshot` | POST | `/volumes/{0}/snapshots` |
 | `miosa volume snapshot-rm` | DELETE | `/volume-snapshots/{0}` |
 | `miosa volume snapshots` | GET | `/volumes/{0}/snapshots` |
+| `miosa volume unmount` | PATCH | `/projects/{0}/services/{1}` |
 | `miosa webhook create` | POST | `/webhooks` |
 | `miosa webhook deliveries` | GET | `/webhooks/{0}/deliveries` |
 | `miosa webhook events` | GET | `/webhooks/events` |

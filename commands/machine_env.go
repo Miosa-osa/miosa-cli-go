@@ -133,6 +133,14 @@ Example:
 			p.Line("%s (%s)", sb.Name, sb.ID)
 			p.Line("  Kind:     sandbox")
 			p.Line("  Status:   %s", sb.State)
+			if sb.State == miosa.StatusError {
+				if sb.FailureReason != "" {
+					p.Line("  Reason:   %s", sb.FailureReason)
+				}
+				if sb.LastError != "" {
+					p.Line("  Detail:   %s", sb.LastError)
+				}
+			}
 			if sb.LostReason != "" {
 				p.Line("  Lost:     %s (it cannot be brought back; destroy it to clean up)", sb.LostReason)
 			}

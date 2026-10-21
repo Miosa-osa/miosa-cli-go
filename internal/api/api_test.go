@@ -246,3 +246,22 @@ func TestEventsStopsOnCallbackError(t *testing.T) {
 		t.Fatalf("err=%v n=%d", err, n)
 	}
 }
+
+// Uploads take a client with no overall deadline; the idle guard replaces it.
+func TestWithoutOverallTimeoutKeepsTheTransportAndDropsTheDeadline(t *testing.T) {
+	c := New("http://example.test", "key")
+	c.HTTP.Transport = http.DefaultTransport
+	upload := c.WithoutOverallTimeout()
+	if upload.HTTP.Timeout != 0 {
+		t.Fatalf("upload timeout = %s, want none", upload.HTTP.Timeout)
+	}
+	if c.HTTP.Timeout == 0 {
+		t.Fatal("the original client must keep its deadline")
+	}
+	if upload.HTTP.Transport != c.HTTP.Transport {
+		t.Fatal("the transport must be shared")
+	}
+	if upload.BaseURL != c.BaseURL || upload.Key != c.Key {
+		t.Fatal("the copy must keep the endpoint and key")
+	}
+}

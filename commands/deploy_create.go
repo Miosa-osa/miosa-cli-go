@@ -65,7 +65,8 @@ type deployFlags struct {
 	project      string // project to link the Forge repository through
 	noAuto       bool   // Forge: do not build on every push to the branch
 	rootDir      string
-	force        bool // push even when nothing changed since the latest version
+	force        bool   // push even when nothing changed since the latest version
+	aiAccess     string // allow | block: whether agents may read the published site
 }
 
 // bindDeploySourceFlags binds the flags that shape the deployment. The bare
@@ -83,6 +84,7 @@ func bindDeploySourceFlags(cmd *cobra.Command, f *deployFlags, createOnly bool) 
 	fs.DurationVar(&f.waitTimeout, "wait-timeout", 10*time.Minute, "How long to wait for the deployment to go live")
 	fs.BoolVar(&f.noPromote, "no-promote", false, "Upload the version without making it live; prints the version to promote later")
 	fs.BoolVar(&f.force, "force", false, "Upload even when the files match the latest version")
+	fs.StringVar(&f.aiAccess, "ai-access", "", "Whether agents may read the published site: allow (the default) or block")
 	if createOnly {
 		fs.StringVar(&f.fromSandbox, "from-sandbox", "", "Publish this sandbox (name, id or 'current')")
 		fs.StringVar(&f.git, "git", "", "Deploy this git repository URL")
@@ -230,6 +232,9 @@ func runDeployCreate(cmd *cobra.Command, args []string, flags *deployFlags) erro
 	if err != nil {
 		return usagef("%v", err)
 	}
+	if err := checkAIAccess(f.aiAccess); err != nil {
+		return err
+	}
 
 	var httpTimeout time.Duration
 	if f.shouldWait() {
@@ -270,6 +275,15 @@ func runDeployCreate(cmd *cobra.Command, args []string, flags *deployFlags) erro
 		out.Domain = f.domain
 	}
 
+	// Set after the deployment exists, whatever the source: an upload creates it through a drop session
+	// that has no such field. Before the wait, so the site is closed to agents as soon as it is live.
+	if f.aiAccess != "" {
+		if err := setAIAccess(cmd.Context(), c, out.ID, f.aiAccess); err != nil {
+			return die(err)
+		}
+		out.AIAccess = f.aiAccess
+	}
+
 	if f.shouldWait() && out.Promoted != nil && !*out.Promoted {
 		// An uploaded version that was not promoted never goes live: there is nothing to wait for.
 	} else if f.shouldWait() {
@@ -308,6 +322,8 @@ type deployOutcome struct {
 	// with --no-promote is uploaded but not serving.
 	VersionID string
 	Promoted  *bool
+	// AIAccess is set when --ai-access was given: allow or block.
+	AIAccess string
 	// Existing is true when this run pushed to a deployment that was already
 	// there (a linked folder, or --deployment) instead of creating one.
 	Existing bool
@@ -633,6 +649,13 @@ func deployFromDir(ctx context.Context, c *client.Client, p *output.Printer, f *
 	// 3. Complete: assemble, publish, and promote unless --no-promote asked for
 	//    a version that is not live yet.
 	promote := !f.noPromote
+	// The env goes in BEFORE the version is published, so the first release carries it. Set afterwards it
+	// cut a second release for the same version (WO-01: two releases per publish with --env).
+	if len(env) > 0 {
+		if err := setDeploymentEnv(ctx, c, depID, env); err != nil {
+			return nil, err
+		}
+	}
 	var done dropCompleteResponse
 	completePath := fmt.Sprintf("/deployments/%s/drop/sessions/%s/complete", depID, sid)
 	completeBody := map[string]any{"promote": promote}
@@ -673,11 +696,6 @@ func deployFromDir(ctx context.Context, c *client.Client, p *output.Printer, f *
 	}
 	if done.Data.Kind == "dynamic" {
 		out.State = firstNonEmpty(done.Data.State, "building")
-	}
-	if len(env) > 0 {
-		if err := setDeploymentEnv(ctx, c, out.ID, env); err != nil {
-			return nil, err
-		}
 	}
 	// Remember (or refresh) the deployment so the next 'miosa deploy' in this
 	// folder pushes a new version instead of creating a duplicate. Written on
@@ -961,6 +979,9 @@ func renderDeploy(p *output.Printer, out *deployOutcome) error {
 		if out.Domain != "" {
 			m["domain"] = out.Domain
 		}
+		if out.AIAccess != "" {
+			m["ai_access"] = out.AIAccess
+		}
 		if out.WebhookSecret != "" {
 			m["webhook_secret"] = out.WebhookSecret
 		}
@@ -983,6 +1004,9 @@ func renderDeploy(p *output.Printer, out *deployOutcome) error {
 	}
 	if out.Domain != "" {
 		rows = append(rows, [2]string{"Domain", out.Domain + " (run 'miosa deploy domains " + out.Name + "')"})
+	}
+	if out.AIAccess != "" {
+		rows = append(rows, [2]string{"AI access", out.AIAccess})
 	}
 	p.Fields(rows)
 	if out.WebhookSecret != "" {

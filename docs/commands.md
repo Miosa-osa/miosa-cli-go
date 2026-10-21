@@ -45,7 +45,8 @@ Regenerate with `make docs`.
 - [`miosa device`](#miosa-device) - Every machine you can run work on, across runtime kinds
 - [`miosa doctor`](#miosa-doctor) - Diagnose configuration, connectivity and authentication
 - [`miosa egress`](#miosa-egress) - Outbound network policy for sandboxes
-- [`miosa engine`](#miosa-engine) - Operate an Optimal Engine: wire two of them together and read sync status
+- [`miosa email`](#miosa-email) - Send email from your apps through MIOSA
+- [`miosa engine`](#miosa-engine) - Operate an Optimal Engine: managed Engines on MIOSA, and two-Engine sync
 - [`miosa env`](#miosa-env) - Manage environments (what new machines start with)
 - [`miosa events`](#miosa-events) - Stream a sandbox's lifecycle events
 - [`miosa exec`](#miosa-exec) - Execute a command in a sandbox
@@ -57,6 +58,7 @@ Regenerate with `make docs`.
 - [`miosa function`](#miosa-function) - Edge functions
 - [`miosa gateway`](#miosa-gateway) - The AI gateway: model routing policies, budget, limits and request traces
 - [`miosa host`](#miosa-host) - Your own machines enrolled in your organization (bring your own host)
+- [`miosa import`](#miosa-import) - Load a CSV into a managed database, or a Notion export into an Engine
 - [`miosa info`](#miosa-info) - Show a machine's state, environment and setup status
 - [`miosa limits`](#miosa-limits) - Limits of the organization a new machine would bill
 - [`miosa list`](#miosa-list) - List sandboxes
@@ -65,8 +67,11 @@ Regenerate with `make docs`.
 - [`miosa logs`](#miosa-logs) - Show a sandbox's system log
 - [`miosa mcp`](#miosa-mcp) - Connect AI clients to the MIOSA Model Context Protocol server
 - [`miosa member`](#miosa-member) - People in your organization
+- [`miosa module`](#miosa-module) - Apply a manifest of resources to a workspace
+- [`miosa move`](#miosa-move) - Move a resource to another workspace
 - [`miosa notifications`](#miosa-notifications) - Your notifications
 - [`miosa open`](#miosa-open) - Open the web console (or print its URL)
+- [`miosa optimal`](#miosa-optimal) - Chat with Optimal and manage its chats from the terminal
 - [`miosa org`](#miosa-org) - The organization you work in, who pays for new machines, members and limits
 - [`miosa pause`](#miosa-pause) - Pause a sandbox (it keeps its disk and memory state)
 - [`miosa policy`](#miosa-policy) - Show or change a computer's network policy
@@ -247,7 +252,7 @@ What agents are allowed to do.
 miosa agent authority
 ```
 
-The catalog of gated actions, standing grants, and the receipts of what ran.
+The catalog of gated actions, the rules for unattended runs, standing grants, and the receipts of what ran.
 
 ##### `miosa agent authority catalog`
 
@@ -270,8 +275,22 @@ miosa agent authority grants
 List receipts of authorized actions.
 
 ```
-miosa agent authority receipts
+miosa agent authority receipts [flags]
 ```
+
+Every action an agent was allowed or refused leaves a receipt.
+An approval
+policy's automatic decisions have surface agent_policy; the harness gate's have agent_run.
+
+```
+  miosa agent authority receipts --workspace-id <id> --surface agent_policy
+```
+
+Flags:
+
+- `--limit int` - At most this many, newest first (default 100, up to 500).
+- `--surface string` - Only receipts from this surface (agent_policy, agent_run, ...).
+- `--workspace-id string` - Only this workspace's receipts.
 
 ##### `miosa agent authority revoke`
 
@@ -280,6 +299,100 @@ Revoke a standing grant.
 ```
 miosa agent authority revoke <grant> [flags]
 ```
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
+
+##### `miosa agent authority rules`
+
+What unattended runs may do alone.
+
+```
+miosa agent authority rules
+```
+
+A rule set decides what a scheduled or triggered agent run may do on its own.
+It applies to the organization, one workspace (--workspace-id) or one agent (--agent).
+
+A rule is class[:resource].
+Classes: read, internal_write, external_write,
+destructive, publish.
+The resource is what the call touches (storage, deployment,
+a tool server, a shell program such as npm), or * for any.
+
+```
+  miosa agent authority rules create --name drafts --agent drafter \
+      --allow internal_write:storage --ask external_write:email --budget-run 50
+  miosa agent authority rules list --workspace-id <id>
+  miosa agent authority rules rm drafts
+
+```
+A deny anywhere wins; otherwise the most specific scope decides, and in it ask beats
+allow. destructive and publish are allowed only by a rule naming that class, and
+external_write only by a rule naming its resource.
+With no rule an unattended run
+asks, and an ask nobody answers fails safe.
+For time windows give the rules in
+--file as JSON: {"rules": [{"effect": "allow", "class": "read", "resource": "*",
+"window": {"days": [1,2,3,4,5], "from": "09:00", "to": "17:00", "tz": "UTC"}}]}.
+
+Aliases: `rule`.
+
+###### `miosa agent authority rules create`
+
+Create a rule set.
+
+```
+miosa agent authority rules create [flags]
+```
+
+Flags:
+
+- `--agent string` - Apply to this agent only (name or id).
+- `--allow stringArray` - Rule class[:resource] the agent may do on its own (repeatable).
+- `--ask stringArray` - Rule class[:resource] that needs a person's approval (repeatable).
+- `--budget-day int` - Most credits the scope's runs may spend in a day.
+- `--budget-run int` - Most credits one run may spend.
+- `--deny stringArray` - Rule class[:resource] that is always refused (repeatable).
+- `--file string` - Read the request body from a JSON file (- for standard input); flags override its fields.
+- `--name string` - A label.
+- `--workspace-id string` - Apply to this workspace (default: the whole organization).
+
+###### `miosa agent authority rules get`
+
+Show a rule set.
+
+```
+miosa agent authority rules get <rule-set>
+```
+
+Aliases: `show`.
+
+###### `miosa agent authority rules list`
+
+List rule sets.
+
+```
+miosa agent authority rules list [flags]
+```
+
+Aliases: `ls`.
+
+Flags:
+
+- `--agent string` - Only this agent's rule sets (name or id).
+- `--workspace-id string` - Only this workspace's rule sets.
+
+###### `miosa agent authority rules rm`
+
+Disable a rule set (its receipts stay).
+
+```
+miosa agent authority rules rm <rule-set> [flags]
+```
+
+Aliases: `delete`, `disable`.
 
 Flags:
 
@@ -418,7 +531,7 @@ Flags:
 - `--overdrive` - Run the harness without approval prompts (stored on the version).
 - `--project-id string` - Project id.
 - `--timeout-sec int` - Run time limit in seconds (execution.timeout_seconds).
-- `--workspace-id string` - Workspace id.
+- `--workspace string` - Workspace slug or id (default: $MIOSA_WORKSPACE, then the profile's default workspace).
 
 #### `miosa agent publish`
 
@@ -523,6 +636,8 @@ Flags:
 - `--kind string` - Kind of trigger (schedule|webhook).
 - `--name string` - A label.
 - `--schedule string` - Cron expression for a schedule trigger.
+- `--timeout int` - Seconds a scheduled run may take, 60 to 3600.
+- `--tz string` - IANA time zone the schedule is evaluated in (default UTC).
 
 ##### `miosa agent triggers fire`
 
@@ -887,6 +1002,38 @@ Flags:
 - `--type string` - Only this event type.
 - `--workspace-id string` - Only this workspace.
 
+#### `miosa audit export`
+
+Write the audit log as JSONL (90 days by default).
+
+```
+miosa audit export [flags]
+```
+
+Write the organization's audit log to stdout as JSONL, one event per line,
+exactly as the API returns it.
+
+```
+  miosa audit export > audit.jsonl
+  miosa audit export --since 7d --resource-type sandbox > sandboxes.jsonl
+  miosa audit export --since 2026-09-01 --until 2026-09-30 --type api_key.created
+
+```
+--since takes a duration (30m, 24h, 7d, 2w) or an RFC 3339 date; the default
+is 90 days, which is how long the audit stream keeps events.
+Pages are read
+newest first and the export stops as soon as an event is older than --since,
+so a window costs only the pages it needs.
+
+Flags:
+
+- `--resource-id string` - Only events about this resource id.
+- `--resource-type string` - Only events about this resource type.
+- `--since string` - How far back to read: a duration (7d) or an RFC 3339 date. (default `90d`)
+- `--type string` - Only this event type.
+- `--until string` - Only events at or before this RFC 3339 date.
+- `--workspace-id string` - Only this workspace.
+
 ### `miosa batch`
 
 Create many sandboxes in one request.
@@ -965,7 +1112,7 @@ Flags:
 - `--ttl string` - Time to live of each sandbox, for example 2h.
 - `--wait` - Wait until the batch has settled.
 - `--wait-timeout duration` - How long --wait may take. (default `15m0s`)
-- `--workspace string` - Workspace slug.
+- `--workspace string` - Workspace slug (default: the profile's default workspace).
 
 #### `miosa batch status`
 
@@ -1022,6 +1169,59 @@ Spend by resource.
 miosa billing breakdown
 ```
 
+#### `miosa billing cap`
+
+Monthly spending caps for the organization and its workspaces.
+
+```
+miosa billing cap
+```
+
+A cap is a monthly spending limit.
+Reaching it either pauses (new spend is refused and
+running workloads are stopped, never destroyed, and nothing resumes by itself) or only alerts.
+Alerts go out at the organization's thresholds (50, 80, 90 and 100 percent by default) by email and
+the billing.spend_threshold_reached webhook.
+
+##### `miosa billing cap set`
+
+Set or clear a monthly cap.
+
+```
+miosa billing cap set [flags]
+```
+
+Set the organization cap or one workspace's cap, in US dollars a month.
+
+```
+  miosa billing cap set --org --monthly 500 --action pause
+  miosa billing cap set --workspace web --monthly 100 --action alert
+  miosa billing cap set --workspace web --scope sandboxes --monthly 40
+  miosa billing cap set --workspace web --clear
+
+```
+The organization cap and a workspace's default scope ("all") count every product.
+A workspace
+action applies to both of its caps.
+Only owners and admins can change caps.
+
+Flags:
+
+- `--action string` - At the cap: pause (refuse new spend, stop running work) or alert.
+- `--clear` - Remove the cap.
+- `--monthly float64` - Cap in US dollars a month.
+- `--org` - Set the organization cap.
+- `--scope string` - For a workspace: all products, or sandboxes only. (default `all`)
+- `--workspace string` - Set this workspace's cap (slug, name or id).
+
+##### `miosa billing cap show`
+
+Show the organization cap and every workspace cap.
+
+```
+miosa billing cap show
+```
+
 #### `miosa billing invoices`
 
 List invoices.
@@ -1043,8 +1243,12 @@ miosa billing plan
 Compute spend per workspace.
 
 ```
-miosa billing spend
+miosa billing spend [flags]
 ```
+
+Flags:
+
+- `--period string` - Window to read (default 30d) (7d|30d|mtd).
 
 #### `miosa billing transactions`
 
@@ -2161,11 +2365,40 @@ Flags:
 
 #### `miosa connections share`
 
-Share a connection with a workspace (not available yet).
+Share a model connection with other workspaces.
 
 ```
-miosa connections share <id>
+miosa connections share <connection> [flags]
 ```
+
+Share a model connection (an API key or subscription) with other workspaces.
+
+A share is a grant, never a copy: the secret stays in the workspace that holds
+it and a run in a shared workspace uses it when it runs.
+Revoke it with
+'miosa connections unshare'; it takes effect on the next run.
+
+<connection> is the connection id from 'miosa connections list --json' (for
+example openrouter, or agent_credential:openrouter).
+The connection must be held
+by a workspace itself; one held by the organization already reaches every
+workspace.
+The holding workspace is found for you, or name it with --from.
+
+```
+  miosa connections share openrouter --workspace research,ops
+  miosa connections share claude_subscription --all-workspaces
+  miosa connections share openrouter --workspace ops --from models
+
+```
+--all-workspaces skips workspaces flagged private unless you name them with
+--workspace.
+
+Flags:
+
+- `--all-workspaces` - Every workspace of the organization except private ones.
+- `--from string` - The workspace that holds the connection (default: the one that does).
+- `--workspace stringSlice` - Workspace(s) to share with (slug or id, comma separated).
 
 #### `miosa connections signin`
 
@@ -2338,6 +2571,29 @@ Flags:
 - `--key-stdin` - Read the value from standard input.
 - `--workspace-id string` - Workspace the connection belongs to.
 
+#### `miosa connections unshare`
+
+Stop sharing a model connection with workspaces.
+
+```
+miosa connections unshare <connection> [flags]
+```
+
+Revoke a share made with 'miosa connections share'.
+Runs in the workspace use
+their own connection, or none, from their next run.
+
+```
+  miosa connections unshare openrouter --workspace research
+  miosa connections unshare openrouter --all-workspaces
+```
+
+Flags:
+
+- `--all-workspaces` - Every workspace of the organization except private ones.
+- `--from string` - The workspace that holds the connection (default: the one that does).
+- `--workspace stringSlice` - Workspace(s) to stop sharing with (slug or id, comma separated).
+
 #### `miosa connections use`
 
 Choose which connections a harness runs on.
@@ -2445,17 +2701,19 @@ Flags:
 
 - `--always-on` - Keep the sandbox running: no idle pause, and the platform resumes it after a host restart.
 - `--env string` - Environment the sandbox starts from (default: your default environment).
+- `--expires string` - Governance deadline: 24h, 7d or an RFC 3339 time (purpose=test defaults to 24h).
 - `--idle-timeout string` - Pause after this much inactivity: seconds, 15m, 1h.
 - `--meta stringArray` - Metadata, KEY=VALUE (repeatable).
 - `--no-env` - Pass nothing of yours to the sandbox (safe to hand to third parties).
 - `--runtime string` - Sandbox runtime: firecracker, soma or auto.
 - `--setup-file string` - Shell script (UTF-8, max 64KB) run in the background once the sandbox is ready.
 - `--size string` - Sandbox size: micro, tiny, xs, small, quad, medium, large, xl. (default `small`)
+- `--tag stringArray` - Governance tag, KEY=VALUE (repeatable): owner, entity, purpose, project.
 - `--template string` - Sandbox template, for example miosa-sandbox, nextjs, static-html, or fastapi-auth. (default `miosa-sandbox`)
 - `--ttl string` - Time to live: seconds, 90m, 2h or 2d (default: the plan's).
 - `--wait` - Wait until the sandbox is ready for commands.
 - `--wait-timeout duration` - How long --wait may take. (default `3m0s`)
-- `--workspace string` - Workspace slug to assign the sandbox to.
+- `--workspace string` - Workspace slug to assign the sandbox to (default: the profile's default workspace).
 
 ### `miosa daemon`
 
@@ -2606,14 +2864,18 @@ Create a managed database.
 pg_stat_statements, citext, hstore, btree_gin, btree_gist. --version is a version with an
 image (postgres 16, mysql 8, redis 7). --size is one of tiny, xs, small, medium, large.
 
+--engine optimal creates an Optimal Engine; 'miosa engine create' is the same call with
+the Engine-specific flags and an idempotent name.
+
 Flags:
 
-- `--engine string` - Engine: postgres, mysql, redis or qdrant (postgres|postgresql|mysql|redis|qdrant). (default `postgres`)
+- `--class string` - Data classification: public, internal, confidential or restricted (public|internal|confidential|restricted).
+- `--engine string` - Engine: postgres, mysql, redis, qdrant or optimal (postgres|postgresql|mysql|redis|qdrant|optimal). (default `postgres`)
 - `--extensions stringArray` - PostgreSQL extensions to enable at create, comma separated.
 - `--region string` - Pin to a region.
 - `--size string` - Size: tiny, xs, small, medium or large (tiny|xs|small|medium|large).
 - `--version string` - Engine version (default: the engine's current one).
-- `--workspace string` - Workspace slug.
+- `--workspace string` - Workspace slug (default: the profile's default workspace).
 
 #### `miosa db get`
 
@@ -2638,6 +2900,7 @@ Aliases: `ls`.
 Flags:
 
 - `--all-orgs` - List every organization your sign-in covers, with an ORG column.
+- `--workspace string` - Only this workspace (slug, name or id).
 
 #### `miosa db logs`
 
@@ -2759,6 +3022,7 @@ Aliases: `deployments`, `deployment`.
 
 Flags:
 
+- `--ai-access string` - Whether agents may read the published site: allow (the default) or block.
 - `--branch string` - Git branch to build (default: the current one).
 - `--deployment string` - Push a new version to this existing deployment (id, name or hostname).
 - `--domain string` - Custom domain to attach (then add the DNS record it shows).
@@ -2829,6 +3093,7 @@ Aliases: `publish`.
 
 Flags:
 
+- `--ai-access string` - Whether agents may read the published site: allow (the default) or block.
 - `--branch string` - Git branch to build (default: the current one).
 - `--build-command string` - Build command (git or Forge source, or a --from-sandbox server publish).
 - `--deployment string` - Push a new version to this existing deployment (id, name or hostname).
@@ -3104,7 +3369,7 @@ miosa deploy env-rm <deployment> <name> [flags]
 ```
 
 Removes the named variables.
-Like env-set, the change applies to the next release: run 'miosa deploy redeploy' (or push a new version) to use it.
+Like env-set, a production change cuts a new release on the server and prints it; pass --no-release to remove them without cutting one.
 A name that is not set is reported, not an error.
 
 Aliases: `env-unset`.
@@ -3112,6 +3377,7 @@ Aliases: `env-unset`.
 Flags:
 
 - `-e, --environment string` - Environment: production (default), preview or development (production|preview|development).
+- `--no-release` - Store the change without cutting a release; it applies at the next release.
 
 Examples:
 
@@ -3129,17 +3395,20 @@ miosa deploy env-set <deployment> [flags]
 ```
 
 Sets one or more environment variables.
-They apply to the next release: run 'miosa deploy redeploy' (or push a new version) to use them.
+A production change cuts a new release on the server and prints it (id and state); the variables are live once that release is.
+Pass --no-release to store them without cutting one: they apply at the next release ('miosa deploy redeploy' or a new push).
 
 Flags:
 
 - `-e, --environment string` - Environment: production (default), preview or development (production|preview|development).
+- `--no-release` - Store the change without cutting a release; it applies at the next release.
 - `--set stringArray` - Environment variable KEY=VALUE (repeatable).
 
 Examples:
 
 ```
 miosa deploy env-set my-app --set DATABASE_URL=postgres://... --set FEATURE=on
+  miosa deploy env-set my-app --set FEATURE=off --no-release
 ```
 
 #### `miosa deploy get`
@@ -3269,6 +3538,7 @@ miosa deploy prove <deployment>
 ```
 
 Asks the platform to prove the deployment: it exists, is running, has a public URL, and (for App Engine apps) its host and runtime answer.
+The CLI then requests the public URL itself and checks its status and TLS certificate.
 Exits 1 when any check fails, so a script or CI step can gate on it.
 
 Aliases: `proof`.
@@ -3446,6 +3716,24 @@ miosa deploy versions my-app
   miosa deploy rollback my-app --to 3 --yes
 ```
 
+#### `miosa deploy start`
+
+Start a stopped deployment from its last release.
+
+```
+miosa deploy start <deployment>
+```
+
+Brings a stopped deployment back from the release it was serving, at its current size.
+Nothing is built or uploaded, so it also works for an uploaded deployment, which has no source to redeploy from.
+A static site is live again at once; a server reads 'building' until its instance is healthy.
+
+Examples:
+
+```
+miosa deploy start my-site
+```
+
 #### `miosa deploy stop`
 
 Stop a deployment.
@@ -3470,7 +3758,7 @@ miosa deploy stop my-app
 
 #### `miosa deploy update`
 
-Change a deployment's Forge source, branch, auto-deploy or build settings.
+Change a deployment's source, branch, build or agent access.
 
 ```
 miosa deploy update <deployment> [flags]
@@ -3483,14 +3771,29 @@ deployment to another repository). --auto builds and releases a new version on
 every push or merge to the branch; --no-auto stops that (use 'miosa deploy
 redeploy' to build by hand).
 
+--size small|medium sets the runtime size of the deployment's services (small is
+2 vCPU / 4 GiB, medium is 4 vCPU / 8 GiB).
+A running instance keeps the size it
+started with; the next release or restart uses the new one.
+
+--ai-access allow|block says whether agents may read the published site.
+allow (the default) serves a generated robots.txt and llms.txt unless your files
+have their own. block asks agents to stay away (robots.txt, X-Robots-Tag) and
+answers 403 to a request whose User-Agent names one; that check is UA-based, so
+it is a strong request, not a guarantee.
+
+Aliases: `settings`.
+
 Flags:
 
+- `--ai-access string` - Whether agents may read the published site: allow or block.
 - `--auto` - Build and release on every push/merge to the branch.
 - `--branch string` - Branch to build.
 - `--build-command string` - Build command.
 - `--forge string` - Forge repository to build from (id, org/name or name).
 - `--no-auto` - Stop building on pushes.
 - `--root-directory string` - The app's directory inside the repository.
+- `--size string` - Runtime size: small or medium.
 
 Examples:
 
@@ -3498,6 +3801,8 @@ Examples:
 miosa deploy update my-site --forge my-repo --branch main --auto
   miosa deploy update my-site --no-auto
   miosa deploy update my-site --build-command 'npm run build' --root-directory web
+  miosa deploy update my-app --size small
+  miosa deploy settings my-site --ai-access block
 ```
 
 #### `miosa deploy versions`
@@ -3862,30 +4167,543 @@ Suggest allowlist entries from observed traffic.
 miosa egress suggestions
 ```
 
+### `miosa email`
+
+Send email from your apps through MIOSA.
+
+```
+miosa email
+```
+
+Add a sending domain, publish the DNS records it returns (SPF, DKIM, DMARC),
+verify it, then send from any address on it.
+Bounces and complaints add the
+recipient to the organization's suppression list and are sent to your webhooks
+in the email category (email.delivered, email.bounced, email.complained, ...).
+
+```
+  miosa email domains add mail.example.com
+  miosa email domains verify mail.example.com
+  miosa email send --from hello@mail.example.com --to you@example.org --subject Hi --text "Hello"
+  miosa email messages
+
+```
+A key that may only send is minted with the email:send scope.
+
+Aliases: `mail`.
+
+#### `miosa email domains`
+
+Sending domains and their DNS records.
+
+```
+miosa email domains
+```
+
+'add' prints the SPF, DKIM and DMARC records to publish.
+After they resolve, 'verify'
+checks them; mail can be sent only from a verified domain. <domain> is a domain name or an id.
+
+##### `miosa email domains add`
+
+Add a sending domain and print the DNS records to publish.
+
+```
+miosa email domains add <domain>
+```
+
+##### `miosa email domains list`
+
+List sending domains.
+
+```
+miosa email domains list
+```
+
+Aliases: `ls`.
+
+##### `miosa email domains records`
+
+Show a domain's DNS records and their state.
+
+```
+miosa email domains records <domain>
+```
+
+##### `miosa email domains rm`
+
+Remove a sending domain.
+
+```
+miosa email domains rm <domain> [flags]
+```
+
+Aliases: `delete`.
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
+
+##### `miosa email domains verify`
+
+Check the published DNS records.
+
+```
+miosa email domains verify <domain>
+```
+
+#### `miosa email limits`
+
+Daily cap, sent today and whether sending is paused.
+
+```
+miosa email limits
+```
+
+#### `miosa email message`
+
+Show one message with its delivery events.
+
+```
+miosa email message <id>
+```
+
+Aliases: `show`.
+
+#### `miosa email messages`
+
+List sent messages and their delivery state.
+
+```
+miosa email messages [flags]
+```
+
+Aliases: `ls`.
+
+Flags:
+
+- `--limit int` - How many to return (default 50, at most 200).
+- `--status string` - Only messages in this state: queued, sent, delivered, delayed, bounced, complained or failed.
+
+#### `miosa email send`
+
+Send an email from a verified domain.
+
+```
+miosa email send [flags]
+```
+
+Flags:
+
+- `--attach stringArray` - Attach a file (repeat; 10 MB in total).
+- `--bcc stringArray` - Bcc recipient.
+- `--cc stringArray` - Cc recipient.
+- `--file string` - Read the request body from a JSON file (- for standard input); flags override its fields.
+- `--from string` - Sender address on a verified domain, 'Name <addr>' allowed.
+- `--html string` - HTML body.
+- `--html-file string` - Read the HTML body from a file.
+- `--idempotency-key string` - Replay-safe key: repeating the same key returns the first result (default: generated).
+- `--reply-to stringArray` - Reply-To address.
+- `--subject string` - Subject line.
+- `--tag stringArray` - Tag as NAME=VALUE (repeat).
+- `--text string` - Plain-text body.
+- `--text-file string` - Read the plain-text body from a file.
+- `--to stringArray` - Recipient (repeat or comma-separate).
+
+Examples:
+
+```
+miosa email send --from hello@mail.example.com --to you@example.org --subject "Hi" --text "Hello"
+  miosa email send --from hello@mail.example.com --to a@example.org,b@example.org --subject "Report" --html-file report.html --attach report.pdf
+  miosa email send --file message.json --idempotency-key order-1042
+```
+
+#### `miosa email suppress`
+
+Never send to an address.
+
+```
+miosa email suppress <email>
+```
+
+#### `miosa email suppressions`
+
+List addresses mail is not sent to.
+
+```
+miosa email suppressions
+```
+
+Aliases: `suppressed`.
+
+#### `miosa email unsuppress`
+
+Remove an address from the suppression list.
+
+```
+miosa email unsuppress <id>
+```
+
 ### `miosa engine`
 
-Operate an Optimal Engine: wire two of them together and read sync status.
+Operate an Optimal Engine: managed Engines on MIOSA, and two-Engine sync.
 
 ```
 miosa engine
 ```
 
-Commands here talk to Optimal Engine endpoints directly.
+Managed Engines run on MIOSA as managed databases with engine "optimal":
+create one, read it, list them.
+They are the same objects 'miosa db' shows.
 
-They take the two Engine URLs and an admin key per Engine.
-The admin key is used
-to mint a workspace-scoped replica key on each side, so the peer key each Engine
-stores can read and sync one workspace and nothing else.
+The sync commands talk to Engine endpoints directly.
+They take the two Engine
+URLs and an admin key per Engine.
+The admin key is used to mint a
+workspace-scoped replica key on each side, so the peer key each Engine stores
+can read and sync one workspace and nothing else.
+
+#### `miosa engine attach`
+
+Attach a workspace to an Optimal Engine.
+
+```
+miosa engine attach <workspace> --to <org|engine> [flags]
+```
+
+Attaches a workspace to an Optimal Engine and gives every sandbox, computer,
+deployment and agent run in that workspace the Engine URL and a workspace-scoped
+key, through the platform's secret injection.
+There is nothing to copy into the
+workspace.
+
+--to org uses the organization's Engine.
+When no Engine is the organization's
+yet and exactly one managed Engine exists, that Engine becomes the
+organization's, which is the default for a new organization.
+
+A workspace is served by one Engine at a time.
+Attaching it to a different one
+is refused with the Engine it is already on; pass --replace to move it, which
+only an organization owner or admin may do.
+
+```
+  miosa engine attach kii --to org
+  miosa engine attach kii --to qa-brain
+  miosa engine attach kii --to qa-brain --replace
+  miosa engine attach kii --to org --json | jq '{scope, engine_workspace_slug}'
+```
+
+Flags:
+
+- `--replace` - Move a workspace already attached to another Engine (owners and admins only).
+- `--to string` - Engine name or id, or 'org' for the organization's Engine (required).
+
+#### `miosa engine backup`
+
+Take a backup of a managed Optimal Engine now.
+
+```
+miosa engine backup <engine>
+```
+
+Starts a backup of the Engine's data volume and prints its id and state.
+
+```
+  miosa engine backup qa-brain
+  miosa engine backups qa-brain          # what exists already
+```
+
+#### `miosa engine backups`
+
+List a managed Optimal Engine's backups.
+
+```
+miosa engine backups <engine>
+```
+
+Lists the Engine's backups, newest first, with the state each one reached.
+
+```
+  miosa engine backups qa-brain
+  miosa engine backups qa-brain --json | jq '.data[] | {id, state, created_at}'
+```
+
+Aliases: `backup-list`.
+
+#### `miosa engine connect`
+
+Write an optimal CLI profile for an Engine workspace.
+
+```
+miosa engine connect <engine> [flags]
+```
+
+Mints a read/write key for one workspace of an Engine and writes an 'optimal'
+CLI profile (url, key, workspace) so 'optimal' and 'oe' reach the Engine through
+MIOSA.
+The key expires (default 24h, at most 30 days); run connect again to
+renew it, or revoke it from the console.
+
+The profile goes to ~/.config/optimal/profile (mode 0600), or
+~/.config/optimal/profiles/<name> with --profile <name>. --print writes nothing
+and prints shell exports instead.
+The workspace is the Engine's only attached
+workspace, or the one named with --workspace.
+
+```
+  miosa engine connect brain
+  miosa engine connect brain --workspace kii --profile kii --ttl 72h
+  eval "$(miosa engine connect brain --print)"
+```
+
+Flags:
+
+- `--print` - Print shell exports instead of writing a profile.
+- `--profile string` - Write ~/.config/optimal/profiles/<name> instead of the default profile.
+- `--ttl duration` - Key lifetime (at most 30 days). (default `24h0m0s`)
+- `--workspace string` - Workspace to connect (default: the Engine's only attached workspace).
+
+#### `miosa engine create`
+
+Create a managed Optimal Engine (or return the existing one).
+
+```
+miosa engine create <name> [flags]
+```
+
+Creates a managed Optimal Engine: an Engine in the workspace network with a
+durable data volume, an API key and a private URL.
+
+Re-running it with the same name returns the existing Engine, so a script can
+call it unconditionally. --wait follows provisioning until the Engine is
+running (the target is under 120 s) and prints each state change.
+
+```
+  miosa engine create qa-brain --workspace qa --size small --wait
+  miosa engine create qa-brain --for workspace --wait
+  miosa engine create qa-brain --wait --json | jq '{id, state, engine_version}'
+
+```
+--for picks a starting point for how the Engine is used: agent (tiny, 2 GiB),
+workspace (xs, 10 GiB) or business (small, 25 GiB). --size and --disk override
+either half. --disk is in GiB; --storage-mb stays for exact megabytes and the
+two cannot be given together.
+
+Flags:
+
+- `--cpu int` - CPUs (overrides --size).
+- `--disk int` - Disk in GiB (overrides --size and --storage-mb).
+- `--for string` - How the Engine is used: agent, workspace or business (sets --size and --disk).
+- `--memory-mb int` - Memory in MB (overrides --size).
+- `--size string` - Size: tiny, xs, small, medium or large.
+- `--storage-mb int` - Disk in MB (overrides --size).
+- `--timeout int` - Seconds to wait for the Engine to run. (default `120`)
+- `--version string` - Engine version (default: the engine's current one).
+- `--wait` - Wait until the Engine is running.
+- `--workspace string` - Workspace slug (default: the profile's default workspace).
+
+#### `miosa engine detach`
+
+Detach a workspace and revoke its Engine key.
+
+```
+miosa engine detach <workspace> [flags]
+```
+
+Detaches a workspace from the Engine that serves it and revokes the workspace
+key on that Engine.
+Resources that are already running keep the variables they
+were started with until they are recreated.
+
+A revocation that cannot reach the Engine fails the detach, because the key
+would otherwise stay valid. --force marks the attachment detached anyway and
+records that the key is still to be revoked; use it only when the Engine or the
+workspace is being destroyed.
+
+```
+  miosa engine detach kii
+  miosa engine detach kii --force --json
+```
+
+Flags:
+
+- `--force` - Detach even when the key cannot be revoked on the Engine.
+
+#### `miosa engine get`
+
+Show a managed Optimal Engine, with its usage gauges.
+
+```
+miosa engine get <engine>
+```
+
+Shows one managed Engine by name or id.
+The record is the managed database:
+its version, state, private address and workspace, followed by what the Engine
+reports it is using against its size's limits (vectors, memories, contexts,
+disk, memory, write rate).
+
+A gauge the Engine did not report is left out rather than shown as zero; an
+Engine that cannot answer leaves the gauges out and the record prints anyway.
+
+```
+  miosa engine get qa-brain
+  miosa engine get qa-brain --json | jq '{version: .engine_version, usage}'
+```
+
+Aliases: `show`.
+
+#### `miosa engine list`
+
+List managed Optimal Engines.
+
+```
+miosa engine list [flags]
+```
+
+Lists the managed Engines in the organizations your key covers.
+Other managed
+databases (Postgres, MySQL, Redis, Qdrant) are left out; use 'miosa db list' for
+every database.
+
+Aliases: `ls`.
+
+Flags:
+
+- `--all-orgs` - List every organization your sign-in covers, with an ORG column.
+
+#### `miosa engine recover`
+
+Restore a backup into the Engine, or into a new one.
+
+```
+miosa engine recover <engine> [flags]
+```
+
+Restores a backup, either over the Engine it came from or into a NEW Engine
+(--to-new), which never touches the source.
+
+```
+  miosa engine recover qa-brain --to-new qa-brain-restored
+  miosa engine recover qa-brain --backup 778439c0 --yes
+
+```
+--backup is a backup id (see 'miosa engine backups'); without it the newest
+completed backup is used.
+Restoring over the Engine replaces its data, so it
+asks first (or pass --yes).
+
+Flags:
+
+- `--backup string` - Backup id (default: the newest completed backup).
+- `--to-new string` - Create a new Engine with this name and restore into it.
+- `-y, --yes` - Do not ask before restoring over the source.
+
+#### `miosa engine rm`
+
+Delete a managed Optimal Engine.
+
+```
+miosa engine rm <engine> [flags]
+```
+
+Deletes the Engine and its data volume.
+This cannot be undone; take a backup
+first if the data matters ('miosa engine backup').
+It asks unless --yes is
+given, and a non-interactive run without --yes refuses instead of deleting.
+
+```
+  miosa engine rm qa-brain
+  miosa engine rm qa-brain --yes
+```
+
+Aliases: `delete`, `destroy`.
+
+Flags:
+
+- `-y, --yes` - Delete without asking.
+
+#### `miosa engine rollback`
+
+Return a managed Optimal Engine to the version before its last upgrade.
+
+```
+miosa engine rollback <engine> [flags]
+```
+
+Returns the Engine to the version recorded by its last upgrade.
+The previous
+version is never guessed: it is the one the upgrade recorded, and it must still
+be a staged release.
+Data on /data is not touched; a backup restore is a
+separate action.
+
+```
+  miosa engine rollback qa-brain
+  miosa engine rollback qa-brain --json | jq '{from, to, state}'
+```
+
+Flags:
+
+- `--timeout int` - Seconds to wait for the rollback call to answer. (default `600`)
+
+#### `miosa engine shell`
+
+Run a shell (or a command) with access to an Engine workspace.
+
+```
+miosa engine shell <engine> [-- command [args...]] [flags]
+```
+
+Mints a short-lived read/write key for one workspace of an Engine, runs your
+shell (or the command after --) with OPTIMAL_ENGINE_URL, OPTIMAL_ENGINE_API_KEY
+and OPTIMAL_WORKSPACE set, and revokes the key when it exits.
+Nothing is written
+to disk.
+
+```
+  miosa engine shell brain
+  miosa engine shell brain --workspace kii -- optimal boot
+```
+
+Flags:
+
+- `--ttl duration` - Key lifetime (at most 30 days). (default `1h0m0s`)
+- `--workspace string` - Workspace to connect (default: the Engine's only attached workspace).
+
+#### `miosa engine status`
+
+Show which Engine serves a workspace, or every Engine and its workspaces.
+
+```
+miosa engine status [workspace]
+```
+
+With a workspace, shows the Engine that serves it, its scope, the Engine
+workspace it maps to and the key the workspace's resources use (the key id, not
+the key).
+A workspace that is not attached prints 'not attached' and exits 0.
+
+Without an argument it lists every managed Engine with the workspaces attached
+to it.
+
+```
+  miosa engine status kii
+  miosa engine status
+  miosa engine status --json | jq '.data[] | {engine: .engine.name, workspaces: [.attachments[].workspace_id]}'
+```
 
 #### `miosa engine sync`
 
 Keep one workspace in sync between a local and a cloud Engine.
 
 ```
-miosa engine sync <local> <cloud> [flags]
+miosa engine sync <local> [cloud] [flags]
 ```
 
-Wires two Engines for one workspace:
+Direct mode wires two reachable Engines for one workspace:
 
 ```
   1. mint a replica key on each Engine (scopes sync and read, one workspace)
@@ -3894,18 +4712,33 @@ Wires two Engines for one workspace:
   4. run one cycle unless --no-run, then print both statuses
 
 ```
+Relay mode (--relay and --engine-id) moves the same changes through MIOSA
+instead, for a managed Engine that cannot dial another Engine.
+The local Engine
+is the initiator: it pulls the cloud's changes through the relay, applies them
+locally, then pushes its own ledger back.
+Each side carries the sender's engine
+envelope (migration, replica_id, version), which the receiving Engine checks
+before it applies anything.
+
 The admin keys come from --local-key/--cloud-key or MIOSA_ENGINE_LOCAL_KEY and
 MIOSA_ENGINE_CLOUD_KEY.
-They are never printed.
+The relay takes a MIOSA API key with engine:sync, from
+--api-key or MIOSA_API_KEY.
+No key is ever printed.
 
 Flags:
 
+- `--api-key string` - MIOSA API key with engine:sync (env: MIOSA_API_KEY).
 - `--cloud string` - Cloud Engine URL (defaults to the second positional argument).
 - `--cloud-key string` - Admin key for the cloud Engine (env: MIOSA_ENGINE_CLOUD_KEY).
+- `--engine-id string` - Managed Engine database id on the relay.
 - `--local string` - Local Engine URL (defaults to the first positional argument).
 - `--local-key string` - Admin key for the local Engine (env: MIOSA_ENGINE_LOCAL_KEY).
 - `--no-run` - Wire the peers but do not run a sync cycle now.
 - `--policy string` - Peer policy: push, pull, both, or none. (default `both`)
+- `--relay string` - MIOSA relay base URL (for example https://api.miosa.ai/api/v1); enables relay mode.
+- `--since int` - Ledger sequence to pull from on both sides.
 - `--workspace string` - Workspace id to sync (required).
 
 ##### `miosa engine sync status`
@@ -3913,16 +4746,59 @@ Flags:
 Show sync status and open conflicts on both Engines.
 
 ```
-miosa engine sync status <local> <cloud> [flags]
+miosa engine sync status <local> [cloud] [flags]
 ```
+
+Reads the sync status of both sides.
+In relay mode it reads the cloud
+through MIOSA and reports the migration and version the cloud expects, so a
+schema mismatch is visible before a push fails.
 
 Flags:
 
+- `--api-key string` - MIOSA API key with engine:sync (env: MIOSA_API_KEY).
 - `--cloud string` - Cloud Engine URL (defaults to the second positional argument).
 - `--cloud-key string` - Admin key for the cloud Engine (env: MIOSA_ENGINE_CLOUD_KEY).
+- `--engine-id string` - Managed Engine database id on the relay.
 - `--local string` - Local Engine URL (defaults to the first positional argument).
 - `--local-key string` - Admin key for the local Engine (env: MIOSA_ENGINE_LOCAL_KEY).
+- `--relay string` - MIOSA relay base URL; enables relay mode.
 - `--workspace string` - Workspace id (required).
+
+#### `miosa engine upgrade`
+
+Upgrade a managed Optimal Engine to a staged release.
+
+```
+miosa engine upgrade <engine> --to <version> [flags]
+```
+
+Swaps a managed Engine to a staged release.
+The control plane checks the
+target manifest against the artifact on disk, requires a completed backup,
+requires the release's rootfs image on the host, stops the Engine, boots the
+new release and verifies the guest's own /api/version.
+If the guest does not
+report the target version, the control plane rolls back and reports what it
+restored.
+Data on /data is not touched.
+
+```
+  miosa engine upgrade qa-brain --to 0.3.2 --dry-run
+  miosa engine upgrade qa-brain --to 0.3.2
+
+```
+--force overrides the refusal to upgrade from a version that has no staged
+release to roll back to.
+Use it only when that version is known to be
+recoverable another way.
+
+Flags:
+
+- `--dry-run` - Show what the upgrade would do, without doing it.
+- `--force` - Upgrade even when the current version has no staged release to roll back to.
+- `--timeout int` - Seconds to wait for the upgrade call to answer. (default `600`)
+- `--to string` - Target Engine version (required).
 
 ### `miosa env`
 
@@ -6918,6 +7794,57 @@ Flags:
 
 - `-y, --yes` - Do not ask for confirmation.
 
+### `miosa import`
+
+Load a CSV into a managed database, or a Notion export into an Engine.
+
+```
+miosa import <file> | --from bucket:<bucket>/<key> --to <target> [flags]
+```
+
+Load a CSV into a table of a managed Postgres database, or a Notion export zip
+into a workspace's Optimal Engine.
+
+```
+  miosa import ./people.csv --to db:app-db/people
+  miosa import ./notion.zip --to engine:research --watch
+
+```
+A local file is uploaded to the organization's hidden 'imports' bucket under a
+content-addressed key and imported from there, so the same file lands on the
+same object twice.
+A file already in storage can be named instead:
+
+```
+  miosa import --from bucket:exports/people.csv --to db:app-db/people
+
+```
+Types are inferred from the values (bigint, numeric, boolean, timestamptz,
+text).
+A column that needs another type can be pinned:
+
+```
+  miosa import ./people.csv --to db:app-db/people --override zip=text
+
+```
+An Engine import makes every page one context at optimal://<workspace>/notion/<page>,
+with parent and link edges, and is searchable when the job reports done.
+It is a
+durable job: '--watch' follows it, and 'miosa import --job <id> --to engine:<workspace>'
+reprints it later.
+
+Every import prints its job id and its counts; refused rows come with their line
+numbers.
+
+Flags:
+
+- `--from string` - Source: bucket:<bucket>/<key>.
+- `--idempotency-key string` - Engine import key; a random one is used when empty, and repeating it returns the same job.
+- `--job string` - Reprint one Engine import job by id.
+- `--override stringArray` - Pin a column's type: column=text (repeatable).
+- `--to string` - Destination: db:<database>/<table> or engine:<workspace>.
+- `--watch` - Follow an Engine import until it finishes.
+
 ### `miosa info`
 
 Show a machine's state, environment and setup status.
@@ -7397,6 +8324,117 @@ Flags:
 
 - `--role string` - New role (admin|member|viewer).
 
+### `miosa module`
+
+Apply a manifest of resources to a workspace.
+
+```
+miosa module
+```
+
+A module is a named set of buckets, volumes, databases, schedules, agents and interfaces
+declared in one YAML file.
+
+```
+  module: wo28
+  resources:
+    - {kind: bucket, name: wo28-assets, spec: {visibility: private}}
+    - {kind: schedule, name: wo28-nightly, spec: {schedule: "0 2 * * *", command: "true"}}
+    - {kind: agent, name: wo28-reviewer, spec: {configuration: {instructions: "Review the queue."}}}
+    - {kind: interface, name: wo28-web, spec: {project_id: <project>, kind: static}}
+
+```
+An interface is a node of a project's canvas, so it names its project in spec.project_id.
+plan and diff change nothing. apply creates what is missing and updates what drifted; run twice it
+changes nothing the second time. remove deletes exactly the manifest's resources.
+A literal secret in
+a spec is refused: reference it as ${NAME}, secret://<name> or vault:<name>.
+
+#### `miosa module apply`
+
+Create and update the manifest's resources.
+
+```
+miosa module apply <manifest.yaml> [flags]
+```
+
+Flags:
+
+- `--workspace string` - Workspace slug or id (required).
+
+#### `miosa module diff`
+
+Show where the workspace differs from the manifest.
+
+```
+miosa module diff <manifest.yaml> [flags]
+```
+
+Flags:
+
+- `--workspace string` - Workspace slug or id (required).
+
+#### `miosa module plan`
+
+Show what apply would create or change.
+
+```
+miosa module plan <manifest.yaml> [flags]
+```
+
+Flags:
+
+- `--workspace string` - Workspace slug or id (required).
+
+#### `miosa module remove`
+
+Delete the manifest's resources.
+
+```
+miosa module remove <manifest.yaml> [flags]
+```
+
+Flags:
+
+- `--dry-run` - List what would be removed and remove nothing.
+- `--workspace string` - Workspace slug or id (required).
+- `-y, --yes` - Do not ask for confirmation.
+
+### `miosa move`
+
+Move a resource to another workspace.
+
+```
+miosa move <resource> [flags]
+```
+
+Move a resource to another workspace of the same organization.
+
+```
+  miosa move app-db --to-workspace staging
+  miosa move assets --type bucket --to-workspace staging
+
+```
+<resource> is a name or id.
+Without --type the resource is looked up among
+sandbox, computer, deployment, database, bucket, volume, schedule, agent, project; a name that matches more than one kind
+needs --type.
+A move changes ownership and scope only: names, hostnames,
+connection strings and object URLs keep working, and the data is untouched.
+A
+running database, deployment or machine must be stopped first.
+Moving needs
+admin rights in both workspaces.
+
+Flags:
+
+- `--accept-env-changes` - Move a deployment even though the target's workspace variables differ.
+- `--detach-from-project` - Leave its project behind (deployments, databases, buckets).
+- `--dry-run` - Run every check and show the plan without moving anything (deployments, databases, buckets).
+- `--project string` - Project of the target workspace to put it in (deployments, databases, buckets).
+- `--to-workspace string` - The workspace to move it to (slug, name or id).
+- `--type string` - Kind of resource: sandbox, computer, deployment, database, bucket, volume, schedule, agent, project.
+
 ### `miosa notifications`
 
 Your notifications.
@@ -7465,6 +8503,206 @@ Flags:
 
 - `--print` - Print the URL instead of opening it.
 
+### `miosa optimal`
+
+Chat with Optimal and manage its chats from the terminal.
+
+```
+miosa optimal
+```
+
+Optimal is MIOSA's operator: it reads your workspaces and acts on them with
+your approval.
+These commands use your API key (osa:write).
+Optimal gets exactly your own
+access for a few minutes at a time, never more.
+
+A chat lives in one workspace (--workspace), or reads every workspace you can
+open (--org-wide).
+An org-wide chat never guesses where to write: it asks which
+workspace, and every change it makes becomes an approval in that workspace.
+
+```
+  miosa optimal chat "how many sandboxes are in each workspace?" --org-wide
+  miosa optimal chat "create a sandbox named web in staging" --org-wide --json
+  miosa optimal chat "and its size?" --workspace staging --chat <id>
+  miosa optimal chats --org-wide
+  miosa optimal runs --workspace staging
+  miosa optimal cancel <run>
+  miosa optimal approvals --workspace staging
+  miosa optimal approve <approval> --workspace staging
+
+```
+Deciding an approval needs a key with the osa:approve scope.
+
+#### `miosa optimal approvals`
+
+List the approvals Optimal is waiting on.
+
+```
+miosa optimal approvals [flags]
+```
+
+Every change Optimal makes waits for an approval in the workspace it changes.
+In a workspace (--workspace) this lists that workspace's pending approvals.
+Org-wide
+(--org-wide) it lists the approvals of your running org-wide chats, each in its own
+workspace; --chat narrows to one chat.
+
+```
+  miosa optimal approvals --workspace staging
+  miosa optimal approve <approval> --workspace staging
+```
+
+Flags:
+
+- `--chat string` - Only this chat's approvals.
+- `--org-wide` - Read every workspace you can open (an organization chat).
+- `-w, --workspace string` - The workspace (name or id) the chat lives in.
+
+#### `miosa optimal approve`
+
+Approve a change Optimal is waiting on.
+
+```
+miosa optimal approve <approval> [flags]
+```
+
+Decides one approval from 'miosa optimal approvals'.
+Use the workspace the change is
+in (--workspace), or --org-wide --chat <chat> for an org-wide chat's approval.
+The API key needs the osa:approve scope; a key without it can chat but not decide.
+
+Flags:
+
+- `--chat string` - The org-wide chat the approval belongs to.
+- `--org-wide` - Read every workspace you can open (an organization chat).
+- `--reason string` - Why (kept with the decision).
+- `-w, --workspace string` - The workspace (name or id) the chat lives in.
+
+#### `miosa optimal cancel`
+
+Stop a run (or the running turn of a chat).
+
+```
+miosa optimal cancel <run|chat> [flags]
+```
+
+Stops a run.
+Pass a run id (run_...) from 'miosa optimal runs', or a chat id to stop
+whatever that chat is running.
+A run waiting on an approval stops too: its pending
+approvals are declined.
+
+Flags:
+
+- `--org-wide` - Read every workspace you can open (an organization chat).
+- `-w, --workspace string` - The workspace (name or id) the chat lives in.
+
+#### `miosa optimal chat`
+
+Send Optimal a message and stream its answer.
+
+```
+miosa optimal chat <message...> [flags]
+```
+
+Send a message and stream what Optimal does until it answers, asks you something
+(which workspace, or an approval), or fails.
+Without --chat a new chat starts and
+its id is printed; pass it to --chat to continue.
+
+An org-wide chat asks which workspace before it changes anything ("needs_workspace").
+Answer with --act-in <workspace> on the same chat; the change then waits for your
+approval in that workspace.
+
+With --json each event is one line: {"type", "chat_id", "scope", ...}.
+The answer
+is the line with "type":"message"; "scope" is "org-wide" or "workspace".
+
+Flags:
+
+- `--act-in string` - Org-wide chat: the workspace (name or id) its changes apply to.
+- `--chat string` - Continue this chat (its id) instead of starting one.
+- `--org-wide` - Read every workspace you can open (an organization chat).
+- `--timeout duration` - Stop following after this long (the chat keeps working). (default `10m0s`)
+- `-w, --workspace string` - The workspace (name or id) the chat lives in.
+
+#### `miosa optimal chats`
+
+List Optimal chats, newest first.
+
+```
+miosa optimal chats [flags]
+```
+
+Flags:
+
+- `-n, --limit int` - How many chats. (default `20`)
+- `--org-wide` - Read every workspace you can open (an organization chat).
+- `-w, --workspace string` - The workspace (name or id) the chat lives in.
+
+#### `miosa optimal reject`
+
+Reject a change Optimal is waiting on.
+
+```
+miosa optimal reject <approval> [flags]
+```
+
+Decides one approval from 'miosa optimal approvals'.
+Use the workspace the change is
+in (--workspace), or --org-wide --chat <chat> for an org-wide chat's approval.
+The API key needs the osa:approve scope; a key without it can chat but not decide.
+
+Flags:
+
+- `--chat string` - The org-wide chat the approval belongs to.
+- `--org-wide` - Read every workspace you can open (an organization chat).
+- `--reason string` - Why (kept with the decision).
+- `-w, --workspace string` - The workspace (name or id) the chat lives in.
+
+#### `miosa optimal run`
+
+Show one run: its state, chat, workspace and credits.
+
+```
+miosa optimal run <run> [flags]
+```
+
+Flags:
+
+- `--org-wide` - Read every workspace you can open (an organization chat).
+- `-w, --workspace string` - The workspace (name or id) the chat lives in.
+
+#### `miosa optimal runs`
+
+List Optimal's runs, newest first (running ones by default).
+
+```
+miosa optimal runs [flags]
+```
+
+A run is one turn of a chat: what Optimal did for one message, and how it ended
+(running, succeeded, failed or canceled).
+By default only
+running runs are listed; --all lists every recent run, --state one state.
+
+```
+  miosa optimal runs --org-wide
+  miosa optimal runs --workspace staging --all --json
+  miosa optimal run <run>
+  miosa optimal cancel <run>
+```
+
+Flags:
+
+- `--all` - Every recent run, not only running ones.
+- `-n, --limit int` - How many runs. (default `50`)
+- `--org-wide` - Read every workspace you can open (an organization chat).
+- `--state string` - Only runs in this state: running, succeeded, failed, canceled.
+- `-w, --workspace string` - The workspace (name or id) the chat lives in.
+
 ### `miosa org`
 
 The organization you work in, who pays for new machines, members and limits.
@@ -7494,6 +8732,32 @@ A machine keeps billing the organization it was created under, even if you
 change this later.
 API keys issued in an organization other than your personal
 one are locked to that organization and cannot bill another.
+
+#### `miosa org apply`
+
+Create the workspaces and projects a topology file lists.
+
+```
+miosa org apply <topology.yaml> [flags]
+```
+
+Reads the company topology: every workspace under entities, and its projects, are created if
+missing.
+It never deletes.
+Workspaces in the organization that the file does not list, other than the
+keep_workspaces ones, are reported as extras and left alone.
+A second run creates nothing.
+
+```
+  miosa --org osa org apply topology/miosa-company.yaml --dry-run
+
+```
+The entity, access and bridge attributes are not stored yet (they need workspace metadata); members
+and invites are never created.
+
+Flags:
+
+- `--dry-run` - Show what would be created and create nothing.
 
 #### `miosa org bill`
 
@@ -7572,6 +8836,39 @@ Examples:
 miosa org caps set dana@example.com --spend 25 --concurrent 3
   miosa org caps set dana@example.com --no-spend-cap
 ```
+
+#### `miosa org diff`
+
+Compare the organization with a topology file: undeclared, missing, untagged.
+
+```
+miosa org diff --file <topology.yaml> [flags]
+```
+
+Compare the live organization with a desired-state topology file.
+
+```
+  miosa org diff --file topology/org.yaml
+  miosa org diff --file topology.yaml --json
+  miosa org diff --file topology.yaml --no-tags      # skip the resource tag scan
+
+```
+Reported, in both directions:
+
+```
+  undeclared   exists in the organization, not in the file
+  missing      in the file, not in the organization
+  untagged     sandboxes in a declared workspace with no purpose tag
+
+```
+keep_workspaces are never reported as undeclared.
+Exits 1 when anything is
+reported, so a deploy can gate on it.
+
+Flags:
+
+- `--file string` - Path to the topology file.
+- `--tags` - Scan declared workspaces for resources with no purpose tag. (default `true`)
 
 #### `miosa org invite`
 
@@ -8220,7 +9517,7 @@ Flags:
 - `--set stringArray` - Environment variable KEY=VALUE for the command (repeatable).
 - `--size string` - Sandbox size, as for 'miosa create'.
 - `--template string` - Sandbox template (default miosa-sandbox).
-- `--workspace string` - Workspace slug.
+- `--workspace string` - Workspace slug (default: the profile's default workspace).
 
 #### `miosa run diagnostics`
 
@@ -8536,9 +9833,55 @@ Scheduled jobs.
 miosa schedule
 ```
 
-A schedule runs a command or function at set times. <job> is a name or id.
+A schedule runs a command at set times. <job> is a name or id.
+
+```
+  miosa schedule create --name ingest --cron "*/10 * * * *" --tz America/Chicago \
+      --on my-box --command "sh /workspace/ingest.sh" --overlap skip --timeout 600 \
+      --env MODE=prod --secret TOKEN=secret://org/INGEST_TOKEN
+
+```
+With --on the command runs on that machine, waking it if it is paused, and never
+starts a new one.
+Without it each run starts a fresh sandbox, runs the command and
+destroys the sandbox.
+
+With --agent each tick is a run of that agent, with the workspace's approval
+policies and budgets, and a timeout of up to an hour:
+
+```
+  miosa schedule create --name drafts --cron "0 9 * * 1-5" --agent drafter \
+      --task "Draft follow-up notes for yesterday's calls" --timeout 1800
+  miosa schedule run drafts
+  miosa agent runs drafter
+
+```
+An agent schedule is one of the agent's triggers; change it with 'miosa agent triggers'.
 
 Aliases: `schedules`, `schedule-jobs`.
+
+#### `miosa schedule create`
+
+Create a schedule.
+
+```
+miosa schedule create [flags]
+```
+
+Flags:
+
+- `--agent string` - Run this agent (name or id) instead of a command.
+- `--command string` - Shell command to run.
+- `--cron string` - Five-field cron expression, for example "*/10 * * * *".
+- `--env stringArray` - Environment variable NAME=value, stored encrypted (repeatable).
+- `--name string` - Name, unique in the organization.
+- `--on string` - Run on this existing machine (name or id) instead of a fresh sandbox.
+- `--overlap string` - When a run is due while the previous one is still going (skip|queue|allow).
+- `--secret stringArray` - Environment variable NAME=secret://org/NAME or secret://<workspace>/NAME (repeatable).
+- `--task string` - With --agent: the instruction each run receives.
+- `--timeout int` - Seconds a run may take, up to 3600 (default 300; at least 60 with --agent).
+- `--tz string` - IANA time zone the expression is evaluated in (default UTC).
+- `--workspace string` - Workspace slug or id (default: $MIOSA_WORKSPACE, then the profile's default workspace).
 
 #### `miosa schedule executions`
 
@@ -8622,10 +9965,14 @@ Flags:
 Run a job now.
 
 ```
-miosa schedule run <job>
+miosa schedule run <job> [flags]
 ```
 
 Aliases: `run-now`.
+
+Flags:
+
+- `--agent string` - The agent, for a schedule created with --agent.
 
 ### `miosa secret`
 
@@ -8668,10 +10015,16 @@ Load many names at once.
 Values are read from the file and never echoed; the
 command prints the names it set.
 
+A line the vault cannot take is reported with its line number and the reason
+instead of being skipped silently.
+When every line is unusable the command
+fails, and --strict fails on the first unusable line before anything is set.
+
 Flags:
 
 - `--file string` - Dotenv file to read.
 - `--scope string` - Org or workspace. (default `org`)
+- `--strict` - Fail on the first line that cannot be imported.
 - `--workspace-id string` - Required with --scope workspace.
 
 #### `miosa secret list`
@@ -8749,7 +10102,7 @@ miosa secret share <id|name> [flags]
 
 Flags:
 
-- `--workspace stringSlice` - Workspace id to share with (repeatable).
+- `--workspace stringSlice` - Workspace slug or id to share with (repeatable).
 
 #### `miosa secret unshare`
 
@@ -8761,7 +10114,7 @@ miosa secret unshare <id|name> [flags]
 
 Flags:
 
-- `--workspace string` - Workspace id to stop sharing with.
+- `--workspace string` - Workspace slug or id to stop sharing with.
 
 #### `miosa secret versions`
 
@@ -9181,9 +10534,10 @@ miosa storage create <name> [flags]
 
 Flags:
 
+- `--class string` - Data classification: public, internal, confidential or restricted (public|internal|confidential|restricted).
 - `--region string` - Region.
 - `--visibility string` - Who can read objects (private|public). (default `private`)
-- `--workspace-id string` - Workspace.
+- `--workspace string` - Workspace slug or id (default: $MIOSA_WORKSPACE, then the profile's default workspace).
 
 #### `miosa storage get`
 
@@ -9349,6 +10703,9 @@ The key defaults to
 the file name; with - it is required.
 Files over 256 MiB go up in 64 MiB parts
 automatically (the object appears only when every part is in).
+
+An upload has no overall deadline, so a large file is not cut off while it is
+still moving; --timeout is the idle limit instead, and 0 disables even that.
 
 ```
   miosa storage put assets ./logo.png brand/logo.png
@@ -9743,7 +11100,7 @@ A volume is formatted when it is first attached.
 Flags:
 
 - `--size-gb string` - Size in GB (fractions allowed).
-- `--workspace string` - Workspace slug or id.
+- `--workspace string` - Workspace slug or id (default: the profile's default workspace).
 
 #### `miosa volume detach`
 
@@ -9788,6 +11145,28 @@ Aliases: `ls`.
 Flags:
 
 - `--deleted` - Include deleted volumes.
+
+#### `miosa volume mount`
+
+Mount a volume in a deployed service.
+
+```
+miosa volume mount <volume> <service> [flags]
+```
+
+Adds the volume to the service's settings so every replica mounts it at --mount
+from its next deploy.
+A volume has one writer: a service with a writable volume
+runs one replica, and a redeploy stops the previous version first.
+Use --read-only
+to share it with several replicas. <service> is a name, slug or id.
+
+Flags:
+
+- `--mount string` - Absolute path in the service.
+- `--project string` - Project name or id (default: the workspace's Default project).
+- `--read-only` - Mount read-only.
+- `--workspace string` - Workspace whose project to use (default: the profile's, then the organization's Default workspace).
 
 #### `miosa volume rm`
 
@@ -9834,6 +11213,22 @@ List a volume's snapshots.
 ```
 miosa volume snapshots <volume>
 ```
+
+#### `miosa volume unmount`
+
+Stop mounting a volume in a deployed service.
+
+```
+miosa volume unmount <volume> <service> [flags]
+```
+
+Removes the volume from the service's settings; the volume and its data stay.
+Takes effect on the next deploy.
+
+Flags:
+
+- `--project string` - Project name or id (default: the workspace's Default project).
+- `--workspace string` - Workspace whose project to use (default: the profile's, then the organization's Default workspace).
 
 ### `miosa wait`
 
@@ -9899,7 +11294,7 @@ Flags:
 - `--header stringArray` - Extra header sent with each delivery, NAME=VALUE (repeatable).
 - `--name string` - A label.
 - `--retries int` - Delivery retries, 0-10.
-- `--workspace-id string` - Limit to one workspace.
+- `--workspace string` - Limit to one workspace (slug or id).
 
 #### `miosa webhook deliveries`
 
@@ -10183,6 +11578,41 @@ List the people in a workspace.
 
 ```
 miosa workspace members <workspace>
+```
+
+#### `miosa workspace retire`
+
+Empty a workspace, then delete it (asks you to type its name).
+
+```
+miosa workspace retire <workspace> [flags]
+```
+
+Retire a workspace in the documented order: list what it holds, delete those
+resources in dependency order, then delete the workspace itself.
+
+```
+  miosa workspace retire acme --dry-run   # show what would go, change nothing
+  miosa workspace retire acme             # asks you to type the name
+  miosa workspace retire acme --yes       # no prompt (scripts, CI)
+
+```
+On a terminal it asks you to type the workspace name before anything is
+deleted.
+Off a terminal it refuses unless --yes is given. <workspace> is its
+name, slug or id.
+
+Flags:
+
+- `--dry-run` - Show what would be deleted, change nothing.
+- `--include-production` - Retire even when the workspace holds production resources.
+- `-y, --yes` - Retire without the typed confirmation.
+
+Examples:
+
+```
+miosa workspace retire acme --dry-run
+  miosa workspace retire acme --yes
 ```
 
 #### `miosa workspace stats`

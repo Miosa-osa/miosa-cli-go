@@ -55,10 +55,13 @@ writing (several for reading), and keeps its data when detached.
 			Long: "Creates a volume of the given size on local disk (the only backend). A volume is formatted when it is first attached.",
 			Flags: []Flag{
 				{Name: "size-gb", Usage: "Size in GB (fractions allowed)", Required: true, Field: "size_gb"},
-				{Name: "workspace", Usage: "Workspace slug or id", Field: "workspace_id"},
+				{Name: "workspace", Usage: "Workspace slug or id (default: the profile's default workspace)", Field: "workspace_id"},
 			},
 			Before: func(cmd *cobra.Command, c *api.Client) error {
 				ws, _ := cmd.Flags().GetString("workspace")
+				if ws == "" {
+					ws = defaultWorkspaceRef()
+				}
 				if ws == "" {
 					return nil
 				}
@@ -68,6 +71,7 @@ writing (several for reading), and keeps its data when detached.
 				}
 				return cmd.Flags().Set("workspace", id)
 			},
+			After: reportWorkspaceLanding,
 			// Bytes and the local backend, never the size_gb alias or an implied
 			// backend: every server version understands these.
 			Body: func(a []string, body map[string]any) (map[string]any, error) {
@@ -140,10 +144,21 @@ writing (several for reading), and keeps its data when detached.
 			},
 		},
 		Op{
+			Use: "restore <snapshot>", Hidden: true, Short: "Deprecated: use fork", Method: "POST",
+			Path: "/volume-snapshots/{0}/restore", Args: []Arg{{Name: "snapshot"}}, ResolveArgs: resolveSnapshotArgs,
+			Flags: []Flag{{Name: "to-new", Usage: "Name of the new volume", Required: true, Field: "name"}},
+			Detail: []Col{
+				{Head: "Name", Path: "name"}, {Head: "Id", Path: "id"}, {Head: "Status", Path: "status"},
+				{Head: "Size", Path: "size_bytes", Fmt: "bytes"},
+			},
+		},
+		Op{
 			Use: "attachments <volume>", Short: "Where a volume is attached", Method: "GET", Path: "/volumes/{0}/attachments",
 			Args: []Arg{v}, ResolveArgs: resolveVolumeArgs, Cols: volumeAttachmentCols,
 			Flags: []Flag{{Name: "all", Type: "bool", Usage: "Include past attachments"}},
 		},
+		volumeMountOps(v)[0],
+		volumeMountOps(v)[1],
 	)
 }
 

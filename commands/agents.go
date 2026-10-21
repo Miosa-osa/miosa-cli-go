@@ -97,7 +97,7 @@ connections ('miosa connections add models'). <agent> is a name or an id.
 and capability flags such as new-machine runs and computer use. Needs the
 agents:read scope.`,
 			Method: "GET", Path: "/agents/harnesses",
-			Cols: []Col{{Head: "HARNESS", Path: "harness"}, {Head: "NAME", Path: "name"}, {Head: "DEFAULT MODEL", Path: "default_model"}, {Head: "MODELS", Path: "models", Fmt: "list"}},
+			Cols: []Col{{Head: "HARNESS", Path: "value"}, {Head: "NAME", Path: "label"}, {Head: "DEFAULT MODEL", Path: "default_model"}, {Head: "MODELS", Compute: harnessModelsCell}},
 		},
 		Op{
 			Use: "harness-versions", Short: "Show installed and latest harness CLI versions",
@@ -106,7 +106,7 @@ agents:read scope.`,
 		Op{
 			Use: "templates", Short: "List starter agent templates",
 			Method: "GET", Path: "/agents/templates",
-			Cols: []Col{{Head: "ID", Path: "id"}, {Head: "NAME", Path: "name"}, {Head: "HARNESS", Path: "configuration.harness"}, {Head: "DESCRIPTION", Path: "description", Fmt: "clip"}},
+			Cols: []Col{{Head: "ID", Path: "id"}, {Head: "NAME", Path: "name"}, {Head: "HARNESS", Path: "harness"}, {Head: "CATEGORY", Path: "category"}, {Head: "STARTS WITH", Path: "first_message", Fmt: "clip"}},
 		},
 		Op{
 			Use: "defaults", Short: "Show the workspace's defaults for new agents (harness, model)",
@@ -128,6 +128,10 @@ agents:read scope.`,
 		legacy.Deprecated = "use 'miosa connections'"
 		cmd.AddCommand(legacy)
 	}
+	// The work order's spelling ('miosa agent policy create ...') runs the authority rules.
+	rules := authorityRulesCmd()
+	rules.Use, rules.Aliases, rules.Hidden = "policy", []string{"policies"}, true
+	cmd.AddCommand(rules)
 	cmd.AddCommand(
 		newAgentNewCmd(),
 		newAgentPublishCmd(),
@@ -230,10 +234,11 @@ func normalizeYAML(v any) any {
 
 func newAgentNewCmd() *cobra.Command {
 	var (
-		cf          configFlags
-		description string
-		workspaceID string
-		projectID   string
+		cf           configFlags
+		description  string
+		workspaceID  string
+		workspaceRef string
+		projectID    string
 	)
 	cmd := &cobra.Command{
 		Use:     "new <name>",
@@ -255,15 +260,28 @@ win). Unknown keys are rejected by the server with the offending path.
 			if description != "" {
 				body["description"] = description
 			}
-			if workspaceID != "" {
-				body["workspace_id"] = workspaceID
-			}
 			if projectID != "" {
 				body["project_id"] = projectID
 			}
 			c, _, err := buildClient()
 			if err != nil {
 				return die(err)
+			}
+			// --workspace-id is an id and goes through as typed; --workspace, the
+			// shell's MIOSA_WORKSPACE and the profile default are references.
+			ref := strings.TrimSpace(workspaceRef)
+			if ref == "" && workspaceID == "" {
+				ref = defaultWorkspaceRef()
+			}
+			if workspaceID != "" {
+				body["workspace_id"] = workspaceID
+			}
+			if ref != "" {
+				id, err := resolveWorkspaceRef(cmd.Context(), c.API, ref)
+				if err != nil {
+					return die(err)
+				}
+				body["workspace_id"] = id
 			}
 			resp, err := c.API.JSONAny(cmd.Context(), api.Request{Method: "POST", Path: "/agents", Body: body})
 			if err != nil {
@@ -275,12 +293,15 @@ win). Unknown keys are rejected by the server with the offending path.
 			obj, _ := unwrapObject(resp).(map[string]any)
 			def, _ := obj["definition"].(map[string]any)
 			p.Success("Created agent %q (%s)", args[0], formatValue(lookupPath(def, "id"), ""))
+			_ = reportWorkspaceLanding(cmd, obj["definition"])
 			return nil
 		},
 	}
 	cf.bind(cmd)
 	cmd.Flags().StringVar(&description, "description", "", "What the agent is for")
+	cmd.Flags().StringVar(&workspaceRef, "workspace", "", "Workspace slug or id (default: $MIOSA_WORKSPACE, then the profile's default workspace)")
 	cmd.Flags().StringVar(&workspaceID, "workspace-id", "", "Workspace id")
+	_ = cmd.Flags().MarkHidden("workspace-id")
 	cmd.Flags().StringVar(&projectID, "project-id", "", "Project id")
 	return cmd
 }
@@ -439,6 +460,19 @@ func newAgentRunCmd() *cobra.Command {
 
 // ─── triggers, approvals, authority ──────────────────────────────────────────
 
+// nameTriggerAfterItsKind settles --name when it was not given: "schedule 0 9 * * *", "webhook".
+func nameTriggerAfterItsKind(cmd *cobra.Command, _ *api.Client) error {
+	if f := cmd.Flags().Lookup("name"); f == nil || strings.TrimSpace(f.Value.String()) != "" {
+		return nil
+	}
+	kind, _ := cmd.Flags().GetString("kind")
+	name := kind
+	if cron, _ := cmd.Flags().GetString("schedule"); strings.TrimSpace(cron) != "" {
+		name = kind + " " + strings.TrimSpace(cron)
+	}
+	return cmd.Flags().Set("name", name)
+}
+
 func agentTriggersCmd() *cobra.Command {
 	trig := Arg{Name: "trigger"}
 	return group("triggers", "Run an agent on a schedule, webhook or event",
@@ -446,29 +480,34 @@ func agentTriggersCmd() *cobra.Command {
 		Op{
 			Use: "list <agent>", Aliases: []string{"ls"}, Short: "List an agent's triggers",
 			Method: "GET", Path: "/agents/{0}/triggers", Args: []Arg{agentRef},
-			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "KIND", Path: "kind"}, {Head: "STATUS", Path: "status"}, {Head: "SCHEDULE", Path: "schedule"}, {Head: "NAME", Path: "name"}},
+			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "KIND", Path: "kind"}, {Head: "STATE", Compute: triggerState}, {Head: "SCHEDULE", Path: "config.cron"}, {Head: "NAME", Path: "name"}},
 		},
 		Op{
 			Use: "add <agent>", Short: "Create a trigger",
 			Method: "POST", Path: "/agents/{0}/triggers", Args: []Arg{agentRef},
+			// The API refuses a trigger with no name (422 "name can't be blank"), so a trigger
+			// added without --name is named after what it does.
+			Before: nameTriggerAfterItsKind,
 			Flags: []Flag{
 				{Name: "kind", Usage: "Kind of trigger", Required: true, Enum: []string{"schedule", "webhook"}},
 				{Name: "name", Usage: "A label"},
-				{Name: "schedule", Usage: "Cron expression for a schedule trigger"},
-				{Name: "input", Usage: "The instruction each run receives"},
+				{Name: "schedule", Usage: "Cron expression for a schedule trigger", Field: "config.cron"},
+				{Name: "tz", Usage: "IANA time zone the schedule is evaluated in (default UTC)", Field: "config.timezone"},
+				{Name: "timeout", Usage: "Seconds a scheduled run may take, 60 to 3600", Type: "int", Field: "config.timeout_sec"},
+				{Name: "input", Usage: "The instruction each run receives", Field: "instruction"},
 			},
 		},
 		Op{
 			Use: "rm <agent> <trigger>", Short: "Delete a trigger",
-			Method: "DELETE", Path: "/agents/{0}/triggers/{1}", Args: []Arg{agentRef, trig}, Confirm: "Delete trigger {1}?", Done: "Deleted trigger {1}",
+			Method: "DELETE", Path: "/agents/{0}/triggers/{1}", Args: []Arg{agentRef, trig}, ResolveArgs: resolveTriggerArgs, Confirm: "Delete trigger {1}?", Done: "Deleted trigger {1}",
 		},
 		Op{
 			Use: "fire <agent> <trigger>", Short: "Run a trigger now",
-			Method: "POST", Path: "/agents/{0}/triggers/{1}/fire", Args: []Arg{agentRef, trig},
+			Method: "POST", Path: "/agents/{0}/triggers/{1}/fire", Args: []Arg{agentRef, trig}, ResolveArgs: resolveTriggerArgs,
 		},
 		Op{
 			Use: "rotate-secret <agent> <trigger>", Short: "Rotate a webhook trigger's secret (shown once)",
-			Method: "POST", Path: "/agents/{0}/triggers/{1}/rotate-secret", Args: []Arg{agentRef, trig},
+			Method: "POST", Path: "/agents/{0}/triggers/{1}/rotate-secret", Args: []Arg{agentRef, trig}, ResolveArgs: resolveTriggerArgs,
 		},
 	)
 }
@@ -479,7 +518,7 @@ func agentApprovalsCmd() *cobra.Command {
 		Op{
 			Use: "list", Aliases: []string{"ls"}, Short: "List pending approvals",
 			Method: "GET", Path: "/actions/approvals",
-			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "ACTION", Path: "action"}, {Head: "STATUS", Path: "status"}, {Head: "AGENT", Path: "agent_definition_id", Fmt: "short"}, {Head: "REQUESTED", Path: "inserted_at", Fmt: "age"}},
+			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "ACTION", Path: "capability_name"}, {Head: "STATUS", Path: "status"}, {Head: "BY", Path: "principal_type"}, {Head: "REQUESTED", Path: "inserted_at", Fmt: "age"}, {Head: "EXPIRES", Path: "expires_at", Fmt: "age"}},
 		},
 		Op{
 			Use: "approve <id>", Short: "Approve an action",
@@ -493,8 +532,8 @@ func agentApprovalsCmd() *cobra.Command {
 }
 
 func agentAuthorityCmd() *cobra.Command {
-	return group("authority", "What agents are allowed to do",
-		"The catalog of gated actions, standing grants, and the receipts of what ran.", nil,
+	cmd := group("authority", "What agents are allowed to do",
+		"The catalog of gated actions, the rules for unattended runs, standing grants, and the receipts of what ran.", nil,
 		Op{
 			Use: "catalog", Short: "List gated actions and their scope",
 			Method: "GET", Path: "/actions/catalog",
@@ -503,7 +542,7 @@ func agentAuthorityCmd() *cobra.Command {
 		Op{
 			Use: "grants", Short: "List standing grants",
 			Method: "GET", Path: "/actions/grants",
-			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "ACTION", Path: "action"}, {Head: "SCOPE", Path: "scope"}, {Head: "EXPIRES", Path: "expires_at"}},
+			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "ACTION", Path: "capability_name"}, {Head: "FOR", Path: "principal_type"}, {Head: "STATUS", Path: "status"}, {Head: "EXPIRES", Path: "expires_at"}},
 		},
 		Op{
 			Use: "revoke <grant>", Short: "Revoke a standing grant",
@@ -511,10 +550,21 @@ func agentAuthorityCmd() *cobra.Command {
 		},
 		Op{
 			Use: "receipts", Short: "List receipts of authorized actions",
+			Long: `Every action an agent was allowed or refused leaves a receipt. An approval
+policy's automatic decisions have surface agent_policy; the harness gate's have agent_run.
+
+  miosa agent authority receipts --workspace-id <id> --surface agent_policy`,
 			Method: "GET", Path: "/actions/receipts",
-			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "ACTION", Path: "action"}, {Head: "DECISION", Path: "decision"}, {Head: "WHEN", Path: "inserted_at", Fmt: "age"}},
+			Flags: []Flag{
+				{Name: "workspace-id", Usage: "Only this workspace's receipts", Field: "workspace_id"},
+				{Name: "surface", Usage: "Only receipts from this surface (agent_policy, agent_run, ...)"},
+				{Name: "limit", Usage: "At most this many, newest first (default 100, up to 500)", Type: "int"},
+			},
+			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "ACTION", Path: "capability_name"}, {Head: "DECISION", Path: "decision"}, {Head: "TOOL", Path: "details.tool_name"}, {Head: "REASON", Path: "details.reason"}, {Head: "SURFACE", Path: "surface"}, {Head: "WHEN", Path: "occurred_at", Fmt: "age"}},
 		},
 	)
+	cmd.AddCommand(authorityRulesCmd())
+	return cmd
 }
 
 func newHarnessDefaultCmd() *cobra.Command {

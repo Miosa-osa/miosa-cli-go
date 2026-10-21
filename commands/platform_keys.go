@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -104,6 +105,13 @@ The key goes to standard output on create, so you can capture it:
 		Op{
 			Use: "list", Aliases: []string{"ls"}, Short: "List keys (revoked ones hidden unless --all)",
 			Method: "GET", Path: "/api-keys", Cols: keyCols, Rows: hideRevoked,
+			// Ask the server for active keys, so --json counts what billing plan counts.
+			Query: func(_ []string, q url.Values) error {
+				if q.Get("all") == "" {
+					q.Set("status", "active")
+				}
+				return nil
+			},
 			Flags: []Flag{{Name: "all", Type: "bool", Usage: "Include revoked keys", In: "query", Hidden: false, Field: "all"}},
 		},
 		Op{
@@ -385,12 +393,14 @@ The secret is returned only when the webhook is created.
 		Op{
 			Use: "create <url>", Short: "Register an endpoint",
 			Method: "POST", Path: "/webhooks", Args: []Arg{{Name: "url"}}, Detail: webhookDetail,
-			Long: "Register an endpoint. The signing secret is printed once. Omit --event to receive every event type.",
+			Before: before(settleWorkspace("workspace", false), settleWorkspace("workspace-id", false)),
+			Long:   "Register an endpoint. The signing secret is printed once. Omit --event to receive every event type.",
 			Flags: []Flag{
 				{Name: "event", Type: "strings", Usage: "Event type to subscribe to (repeatable; see 'webhook events')", Field: "events"},
 				{Name: "name", Usage: "A label"},
 				{Name: "description", Usage: "What it is for"},
-				{Name: "workspace-id", Usage: "Limit to one workspace", Field: "workspace_id"},
+				{Name: "workspace", Usage: "Limit to one workspace (slug or id)", Field: "workspace_id"},
+				{Name: "workspace-id", Usage: "Workspace id", Field: "workspace_id", Hidden: true},
 				{Name: "retries", Type: "int", Usage: "Delivery retries, 0-10", Field: "retry_count"},
 				{Name: "header", Type: "kv", Usage: "Extra header sent with each delivery, NAME=VALUE (repeatable)", Field: "headers"},
 			},

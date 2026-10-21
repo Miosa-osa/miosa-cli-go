@@ -259,7 +259,7 @@ func (s *AdminService) UnsuspendTenant(ctx context.Context, tenantID string) err
 
 // ChangeTenantPlanInput is the request body for /admin/tenants/:id/plan.
 type ChangeTenantPlanInput struct {
-	Plan    string `json:"plan"`              // "free" | "starter" | "pro" | "scale"
+	Plan    string `json:"plan"`              // "developer" | "business" | "enterprise"
 	Prorate bool   `json:"prorate,omitempty"` // defaults to true server-side
 }
 

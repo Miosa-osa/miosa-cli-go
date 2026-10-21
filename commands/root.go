@@ -183,6 +183,8 @@ func init() {
 		newURLCmd(),
 		newFilesCmd(),
 		newWorkspaceCmd(),
+		newMoveCmd(),
+		newModuleCmd(),
 		newCheckpointCmd(),
 		newRestoreCmd(),
 		newDaemonCmd(),
@@ -285,7 +287,7 @@ var helpGroups = []struct {
 	{"machines", "Sandboxes and computers:", []string{"create", "list", "info", "use", "destroy", "pause", "resume", "stop", "recover", "fork", "extend", "tag",
 		"exec", "ssh", "console", "files", "logs", "events", "usage", "wait", "ports", "preview", "process", "desktop", "computer", "daemon", "services", "policy", "proxy", "url", "env", "snapshot", "checkpoint", "restore", "catalog", "runtimes", "device", "sandbox"}},
 	{"agents", "Agents:", []string{"prompt", "run", "chat", "agent", "connections"}},
-	{"platform", "Platform:", []string{"api-key", "webhook", "deploy", "template", "workspace", "billing", "audit", "forge", "api", "mcp"}},
+	{"platform", "Platform:", []string{"api-key", "webhook", "deploy", "template", "workspace", "move", "billing", "audit", "forge", "api", "mcp"}},
 }
 
 // sandboxArgCommands take a sandbox as their first argument.

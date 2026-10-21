@@ -58,7 +58,7 @@ may not read is reported as unavailable instead of failing the whole command.
 Signing in with a subscription or an app prints a link or code to finish in a
 browser.`,
 	}
-	cmd.AddCommand(newConnListCmd(), newConnAddCmd(), newConnRmCmd(), newConnTestCmd(), newConnShareCmd(),
+	cmd.AddCommand(newConnListCmd(), newConnAddCmd(), newConnRmCmd(), newConnTestCmd(), newConnShareCmd(), newConnUnshareCmd(),
 		newConnSigninCmd(), newConnToolKeysCmd(), newConnHarnessesCmd(), newConnUseCmd())
 	return cmd
 }
@@ -798,15 +798,4 @@ user's own connection.
 	}
 	addScopeFlags(cmd, &scope, true)
 	return cmd
-}
-
-func newConnShareCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "share <id>",
-		Short: "Share a connection with a workspace (not available yet)",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return die(errors.New("sharing a connection with a workspace is not exposed by the API yet (planned: usable_by/shared on connections); use the console"))
-		},
-	}
 }

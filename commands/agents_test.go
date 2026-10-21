@@ -78,6 +78,9 @@ func TestPromptBodyOptions(t *testing.T) {
 		if c.is("GET", "/agents") {
 			return 200, `{"data":[{"id":"` + boxID + `","name":"reviewer"}]}`, true
 		}
+		if c.is("GET", "/agents/"+boxID) {
+			return 200, `{"data":{"version":{"id":"ver-7"}}}`, true
+		}
 		if c.is("GET", "/workspaces") {
 			return 200, `{"data":[{"id":"w-1","slug":"acme","name":"Acme"}]}`, true
 		}
@@ -94,7 +97,7 @@ func TestPromptBodyOptions(t *testing.T) {
 	b := c.Body
 	m, _ := b["machine"].(map[string]any)
 	n, _ := b["notify"].(map[string]any)
-	if b["agent_definition_id"] != boxID || b["target"] != "new" || b["workspace_id"] != "w-1" || b["runner"] != "codex" || b["timeout_sec"] != float64(600) || b["source"] != "ci" {
+	if b["agent_definition_id"] != boxID || b["agent_version_id"] != "ver-7" || b["target"] != "new" || b["workspace_id"] != "w-1" || b["runner"] != "codex" || b["timeout_sec"] != float64(600) || b["source"] != "ci" {
 		t.Fatalf("body = %v", b)
 	}
 	if m["size"] != "medium" || m["template"] != "nextjs" || m["target"] != "sandbox" || m["after_run"] != "pause" || m["reuse"] != "chat" {
@@ -563,20 +566,21 @@ func TestAgentUnknownNameAndMissingScope(t *testing.T) {
 }
 
 func TestAgentTriggersApprovalsAuthority(t *testing.T) {
+	const trig = "t1t1t1t1-0000-0000-0000-000000000000"
 	f := fakeRoutes(t, map[string]any{
-		"GET /agents":                                          `{"data":[{"id":"` + boxID + `","name":"reviewer"}]}`,
-		"GET /agents/" + boxID + "/triggers":                   `{"data":[{"id":"t1t1t1t1-0000-0000-0000-000000000000","kind":"schedule","status":"active","schedule":"0 9 * * *"}]}`,
-		"POST /agents/" + boxID + "/triggers":                  resp{201, `{"data":{"id":"t2"}}`},
-		"DELETE /agents/" + boxID + "/triggers/t1":             `{}`,
-		"POST /agents/" + boxID + "/triggers/t1/fire":          `{"data":{"run_id":"r1"}}`,
-		"POST /agents/" + boxID + "/triggers/t1/rotate-secret": `{"data":{"secret":"whsec_x"}}`,
-		"GET /actions/approvals":                               `{"data":[{"id":"ap1ap1ap1","action":"deploy.publish","status":"pending"}]}`,
-		"POST /actions/approvals/ap1/approve":                  `{}`,
-		"POST /actions/approvals/ap1/deny":                     `{}`,
-		"GET /actions/catalog":                                 `{"data":[{"name":"deploy.publish","scope":"workspace","risk":"high"}]}`,
-		"GET /actions/grants":                                  `{"data":[]}`,
-		"DELETE /actions/grants/g1":                            `{}`,
-		"GET /actions/receipts":                                `{"data":[]}`,
+		"GET /agents":                                                    `{"data":[{"id":"` + boxID + `","name":"reviewer"}]}`,
+		"GET /agents/" + boxID + "/triggers":                             `{"data":[{"id":"t1t1t1t1-0000-0000-0000-000000000000","name":"daily","kind":"schedule","enabled":true,"config":{"cron":"0 9 * * *"}}]}`,
+		"POST /agents/" + boxID + "/triggers":                            resp{201, `{"data":{"id":"t2"}}`},
+		"DELETE /agents/" + boxID + "/triggers/" + trig:                  `{}`,
+		"POST /agents/" + boxID + "/triggers/" + trig + "/fire":          `{"data":{"run_id":"r1"}}`,
+		"POST /agents/" + boxID + "/triggers/" + trig + "/rotate-secret": `{"data":{"secret":"whsec_x"}}`,
+		"GET /actions/approvals":                                         `{"data":[{"id":"ap1ap1ap1","capability_name":"deploy.publish","status":"pending"}]}`,
+		"POST /actions/approvals/ap1/approve":                            `{}`,
+		"POST /actions/approvals/ap1/deny":                               `{}`,
+		"GET /actions/catalog":                                           `{"data":[{"name":"deploy.publish","scope":"workspace","risk":"high"}]}`,
+		"GET /actions/grants":                                            `{"data":[]}`,
+		"DELETE /actions/grants/g1":                                      `{}`,
+		"GET /actions/receipts":                                          `{"data":[{"id":"rc1rc1rc1","capability_name":"agent.tool.publish","decision":"deny","surface":"agent_policy","details":{"tool_name":"platform_resource","reason":"ask_timeout"}}]}`,
 	})
 	if out, err := run(t, "agent", "triggers", "list", "reviewer"); err != nil || !strings.Contains(out, "0 9 * * *") {
 		t.Fatalf("triggers list: %v\n%s", err, out)
@@ -584,7 +588,10 @@ func TestAgentTriggersApprovalsAuthority(t *testing.T) {
 	if _, err := run(t, "agent", "triggers", "add", "reviewer", "--kind", "schedule", "--schedule", "0 9 * * *", "--input", "daily review"); err != nil {
 		t.Fatal(err)
 	}
-	if a := f.find("POST", "/agents/"+boxID+"/triggers"); len(a) != 1 || a[0].Body["kind"] != "schedule" || a[0].Body["schedule"] != "0 9 * * *" || a[0].Body["input"] != "daily review" {
+	// The trigger API reads the schedule from config.cron and the instruction from instruction.
+	if a := f.find("POST", "/agents/"+boxID+"/triggers"); len(a) != 1 || a[0].Body["kind"] != "schedule" ||
+		a[0].Body["config"].(map[string]any)["cron"] != "0 9 * * *" || a[0].Body["instruction"] != "daily review" ||
+		a[0].Body["schedule"] != nil || a[0].Body["input"] != nil {
 		t.Fatalf("add = %+v", a)
 	}
 	if out, err := run(t, "agent", "triggers", "add", "reviewer", "--kind", "schedule", "--schedule", "0 9 * * *", "--json"); err != nil || !strings.Contains(out, `"t2"`) {
@@ -593,12 +600,28 @@ func TestAgentTriggersApprovalsAuthority(t *testing.T) {
 	if _, err := run(t, "agent", "triggers", "add", "reviewer", "--kind", "cron"); err == nil || commands.ExitCode(err) != commands.ExitUsage {
 		t.Fatalf("bad kind: %v", err)
 	}
-	for _, args := range [][]string{{"agent", "triggers", "fire", "reviewer", "t1"}, {"agent", "triggers", "rotate-secret", "reviewer", "t1"},
-		{"agent", "triggers", "rm", "reviewer", "t1", "-y"}, {"agent", "approvals", "list"}, {"agent", "approvals", "approve", "ap1"}, {"agent", "approvals", "deny", "ap1"},
+	for _, args := range [][]string{{"agent", "triggers", "fire", "reviewer", "daily"}, {"agent", "triggers", "rotate-secret", "reviewer", "t1t1"},
+		{"agent", "triggers", "rm", "reviewer", trig, "-y"}, {"agent", "approvals", "list"}, {"agent", "approvals", "approve", "ap1"}, {"agent", "approvals", "deny", "ap1"},
 		{"agent", "authority", "catalog"}, {"agent", "authority", "grants"}, {"agent", "authority", "receipts"}, {"agent", "authority", "revoke", "g1", "-y"}} {
 		if out, err := run(t, args...); err != nil {
 			t.Fatalf("%v: %v\n%s", args, err, out)
 		}
+	}
+	for _, path := range []string{"/agents/" + boxID + "/triggers/" + trig + "/fire", "/agents/" + boxID + "/triggers/" + trig + "/rotate-secret"} {
+		if len(f.find("POST", path)) != 1 {
+			t.Fatalf("a trigger named by name or short id must reach %s", path)
+		}
+	}
+	if out, err := run(t, "agent", "approvals", "list"); err != nil || !strings.Contains(out, "deploy.publish") {
+		t.Fatalf("approvals must show the action: %v\n%s", err, out)
+	}
+	out, err := run(t, "agent", "authority", "receipts", "--workspace-id", wsID, "--surface", "agent_policy")
+	if err != nil || !strings.Contains(out, "agent.tool.publish") || !strings.Contains(out, "ask_timeout") || !strings.Contains(out, "platform_resource") {
+		t.Fatalf("receipts: %v\n%s", err, out)
+	}
+	q := f.find("GET", "/actions/receipts")
+	if got := q[len(q)-1].Query; !strings.Contains(got, "workspace_id="+wsID) || !strings.Contains(got, "surface=agent_policy") {
+		t.Fatalf("receipts query = %q", got)
 	}
 }
 
@@ -607,6 +630,9 @@ func TestAgentRunIsPromptWithAnAgent(t *testing.T) {
 		if c.is("GET", "/agents") {
 			return 200, `{"data":[{"id":"` + boxID + `","name":"reviewer"}]}`, true
 		}
+		if c.is("GET", "/agents/"+boxID) {
+			return 200, `{"data":{"definition":{"id":"` + boxID + `"},"version":{"id":"ver-3","version":3}}}`, true
+		}
 		return 0, "", false
 	})
 	defer commands.SetRunPollForTest(time.Millisecond)()
@@ -614,7 +640,8 @@ func TestAgentRunIsPromptWithAnAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := f.find("POST", "/runs")[0].Body
-	if b["agent_definition_id"] != boxID || b["instruction"] != "review PR 42" || b["runner"] != nil {
+	// The API binds a definition and a version together: the run carries the current one.
+	if b["agent_definition_id"] != boxID || b["agent_version_id"] != "ver-3" || b["instruction"] != "review PR 42" || b["runner"] != nil {
 		t.Fatalf("body = %v (an agent run takes its harness from the agent)", b)
 	}
 }
@@ -623,5 +650,16 @@ func TestNewUUIDIsV4(t *testing.T) {
 	a, b := commands.NewUUIDForTest(), commands.NewUUIDForTest()
 	if a == b || !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(a) {
 		t.Fatalf("uuids %q %q", a, b)
+	}
+}
+
+func TestAgentRunWithNoPublishedVersionSaysSo(t *testing.T) {
+	fakeRoutes(t, map[string]any{
+		"GET /agents":          `{"data":[{"id":"` + boxID + `","name":"reviewer"}]}`,
+		"GET /agents/" + boxID: `{"data":{"definition":{"id":"` + boxID + `"},"version":null}}`,
+	})
+	_, err := run(t, "agent", "run", "reviewer", "go", "-s", "my-box")
+	if err == nil || !strings.Contains(err.Error(), "no published version") {
+		t.Fatalf("an agent with no version must say so before posting a run: %v", err)
 	}
 }

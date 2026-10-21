@@ -68,6 +68,21 @@ type Col struct {
 	Path string
 	// Fmt names a formatter: age, short, bytes, cents, list, count, json.
 	Fmt string
+	// Compute, when set, builds the cell from the whole row and ignores Path.
+	// Used when a value is spread over several fields (a schedule's machine is
+	// computer_id or sandbox_id, depending on its kind).
+	Compute func(row map[string]any) string
+}
+
+// cellValue is one table or detail cell.
+func cellValue(row any, c Col) string {
+	if c.Compute != nil {
+		if m, ok := row.(map[string]any); ok {
+			return c.Compute(m)
+		}
+		return ""
+	}
+	return formatValue(lookupPath(row, c.Path), c.Fmt)
 }
 
 // Op is one API call exposed as a command.
@@ -89,6 +104,9 @@ type Op struct {
 	Body func(args []string, body map[string]any) (map[string]any, error)
 	// Query adjusts the query after flags are applied.
 	Query func(args []string, q url.Values) error
+	// ResolveQuery adjusts a query value that needs a read, such as a workspace
+	// slug that becomes an id. It runs once the client exists, before the request.
+	ResolveQuery func(ctx context.Context, c *api.Client, q url.Values) error
 
 	// ListKey is the key holding the rows ("data" by default).
 	ListKey string
@@ -110,6 +128,11 @@ type Op struct {
 	// FileBody adds --file: a JSON object read from a file (or - for standard
 	// input) that becomes the request body; flags override its fields.
 	FileBody bool
+	// WorkspaceField is the body field that receives the default workspace
+	// (profile or MIOSA_WORKSPACE) when WorkspaceFlag was not given. Empty
+	// disables it. WorkspaceFlag defaults to "workspace".
+	WorkspaceField string
+	WorkspaceFlag  string
 	// Before runs after the client is built and before the request is sent; an
 	// error stops the command. Used for server-side preview gates.
 	Before func(cmd *cobra.Command, c *api.Client) error
@@ -392,6 +415,21 @@ func (o Op) buildRequest(cmd *cobra.Command, args []string) (api.Request, error)
 			setPath(body, f.field(), val)
 		}
 	}
+	if o.WorkspaceField != "" {
+		name := o.WorkspaceFlag
+		if name == "" {
+			name = "workspace"
+		}
+		given := false
+		if fl := cmd.Flags().Lookup(name); fl != nil {
+			given = fl.Changed
+		}
+		if !given {
+			if ws := defaultWorkspaceRef(); ws != "" {
+				setPath(body, o.WorkspaceField, ws)
+			}
+		}
+	}
 	if o.Query != nil {
 		if err := o.Query(o.pathArgs(args), q); err != nil {
 			return api.Request{}, err
@@ -499,6 +537,11 @@ func (o Op) run(cmd *cobra.Command, args []string, yes bool) error {
 	req, err := o.buildRequest(cmd, args)
 	if err != nil {
 		return usagef("%v", err)
+	}
+	if o.ResolveQuery != nil {
+		if err := o.ResolveQuery(cmd.Context(), c, req.Query); err != nil {
+			return die(err)
+		}
 	}
 	if o.Confirm != "" && !yes {
 		if err := confirmDestructive(cmd, expand(o.Confirm, display)); err != nil {
@@ -628,7 +671,7 @@ func (o Op) render(cmd *cobra.Command, args []string, resp any) error {
 		for _, r := range rows {
 			line := make([]string, len(o.Cols))
 			for i, c := range o.Cols {
-				line[i] = formatValue(lookupPath(r, c.Path), c.Fmt)
+				line[i] = cellValue(r, c)
 			}
 			table = append(table, line)
 		}
@@ -639,7 +682,7 @@ func (o Op) render(cmd *cobra.Command, args []string, resp any) error {
 		rows := make([][2]string, 0, len(o.Detail))
 		shown := false
 		for _, c := range o.Detail {
-			v := formatValue(lookupPath(obj, c.Path), c.Fmt)
+			v := cellValue(obj, c)
 			shown = shown || v != ""
 			rows = append(rows, [2]string{c.Head, v})
 		}

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"strings"
@@ -20,6 +21,21 @@ func init() {
 }
 
 func idArg(name string) Arg { return Arg{Name: name} }
+
+// resolveWorkspaceQuery turns a workspace slug, name or id in the workspace_id query
+// value into the id the list filters expect.
+func resolveWorkspaceQuery(ctx context.Context, c *api.Client, q url.Values) error {
+	ref := q.Get("workspace_id")
+	if ref == "" {
+		return nil
+	}
+	id, err := c.ResolveWorkspace(ctx, ref)
+	if err != nil {
+		return err
+	}
+	q.Set("workspace_id", id)
+	return nil
+}
 
 // ─── deploy ───────────────────────────────────────────────────────────────────
 
@@ -56,7 +72,7 @@ func moveTargetFromArgsOrFlag(args []string, body map[string]any) (map[string]an
 var deployDetail = []Col{
 	{Head: "Name", Path: "name"}, {Head: "Id", Path: "id"}, {Head: "State", Path: "state"}, {Head: "URL", Path: "public_url"},
 	{Head: "Source", Path: "source_type"}, {Head: "Repo", Path: "repo_url"}, {Head: "Branch", Path: "branch"},
-	{Head: "Build", Path: "build_command"}, {Head: "Run", Path: "run_command"}, {Head: "Auto deploy", Path: "auto_deploy"},
+	{Head: "Build", Path: "build_command"}, {Head: "Run", Path: "run_command"}, {Head: "Auto deploy", Path: "auto_deploy"}, {Head: "AI access", Path: "ai_access"},
 	{Head: "Active version", Path: "active_version_id"}, {Head: "Active release", Path: "active_release_id"},
 	{Head: "Workspace", Path: "workspace_id"}, {Head: "Created", Path: "created_at", Fmt: "age"},
 }
@@ -87,17 +103,17 @@ func deployOps() []Op {
 		},
 		Op{
 			Use: "prove <deployment>", Aliases: []string{"proof"}, Short: "Check end to end that a deployment is live and serving",
-			Long:    "Asks the platform to prove the deployment: it exists, is running, has a public URL, and (for App Engine apps) its host and runtime answer. Exits 1 when any check fails, so a script or CI step can gate on it.",
+			Long:    "Asks the platform to prove the deployment: it exists, is running, has a public URL, and (for App Engine apps) its host and runtime answer. The CLI then requests the public URL itself and checks its status and TLS certificate. Exits 1 when any check fails, so a script or CI step can gate on it.",
 			Example: "  miosa deploy prove my-app\n  miosa deploy prove my-app --json",
 			Method:  "GET", Path: "/deployments/{0}/proof", Args: []Arg{d},
-			After: proveExitStatus, Human: renderProof,
+			After: proveAfter, Human: renderProof,
 		},
 		Op{
 			Use: "purge-cache <deployment>", Aliases: []string{"cache-purge"}, Short: "Drop the edge cache of a static deployment",
 			Long:    "Drops every cached file of the deployment's versions, here and on every edge node. Promotes and rollbacks already serve new bytes (files are cached by content), so this is for forcing a refresh.",
 			Example: "  miosa deploy purge-cache my-site",
 			Method:  "POST", Path: "/deployments/{0}/purge-cache", Args: []Arg{d},
-			Detail: []Col{{Head: "Versions", Path: "versions"}, {Head: "Purged here", Path: "local_purged"}, {Head: "Edge nodes", Path: "nodes"}, {Head: "Purged on nodes", Path: "remote_purged"}},
+			Detail: []Col{{Head: "Versions", Path: "versions"}, {Head: "Purged here", Path: "local_purged"}, {Head: "Edge nodes reached", Compute: purgeNodesReached}, {Head: "Failed nodes", Path: "failed_nodes", Fmt: "list"}, {Head: "Entries purged on nodes", Path: "remote_purged"}},
 		},
 		Op{
 			Use: "requests <deployment>", Short: "Show recent HTTP requests",
@@ -149,6 +165,12 @@ guesses which one you meant.`,
 			Method:  "POST", Path: "/deployments/{0}/redeploy", Args: []Arg{d}, Done: "Redeploying {0}",
 		},
 		Op{
+			Use: "start <deployment>", Short: "Start a stopped deployment from its last release",
+			Long:    "Brings a stopped deployment back from the release it was serving, at its current size. Nothing is built or uploaded, so it also works for an uploaded deployment, which has no source to redeploy from. A static site is live again at once; a server reads 'building' until its instance is healthy.",
+			Example: "  miosa deploy start my-site",
+			Method:  "POST", Path: "/deployments/{0}/start", Args: []Arg{d}, Done: "Starting {0}",
+		},
+		Op{
 			Use: "stop <deployment>", Short: "Stop a deployment",
 			Long:    "Stops serving traffic. The deployment, its versions and domains are kept; 'miosa deploy redeploy' or a new push brings it back.",
 			Example: "  miosa deploy stop my-app\n  miosa deploy stop my-app --yes",
@@ -184,19 +206,21 @@ them first with 'miosa deploy domain-move <domain> <other-deployment>', or pass
 		},
 		Op{
 			Use: "env-set <deployment>", Short: "Set the deployment's environment variables (values are encrypted at rest)",
-			Long:    "Sets one or more environment variables. They apply to the next release: run 'miosa deploy redeploy' (or push a new version) to use them.",
-			Example: "  miosa deploy env-set my-app --set DATABASE_URL=postgres://... --set FEATURE=on",
+			Long:    "Sets one or more environment variables. A production change cuts a new release on the server and prints it (id and state); the variables are live once that release is. Pass --no-release to store them without cutting one: they apply at the next release ('miosa deploy redeploy' or a new push).",
+			Example: "  miosa deploy env-set my-app --set DATABASE_URL=postgres://... --set FEATURE=on\n  miosa deploy env-set my-app --set FEATURE=off --no-release",
 			Method:  "POST", Path: "/deployments/{0}/env", Args: []Arg{d},
-			Flags:  []Flag{{Name: "set", Usage: "Environment variable KEY=VALUE (repeatable)", Type: "kv", Field: "env", Required: true}, environmentFlag()},
+			Flags:  []Flag{{Name: "set", Usage: "Environment variable KEY=VALUE (repeatable)", Type: "kv", Field: "env", Required: true}, environmentFlag(), noReleaseFlag()},
+			Body:   noReleaseBody,
 			Before: environmentSupported,
-			Done:   "Updated the environment of {0}",
+			Human:  renderEnvSet,
 		},
 		Op{
 			Use: "env-rm <deployment> <name>", Aliases: []string{"env-unset"}, Short: "Remove environment variables (comma-separated names)",
-			Long:    "Removes the named variables. Like env-set, the change applies to the next release: run 'miosa deploy redeploy' (or push a new version) to use it. A name that is not set is reported, not an error.",
+			Long:    "Removes the named variables. Like env-set, a production change cuts a new release on the server and prints it; pass --no-release to remove them without cutting one. A name that is not set is reported, not an error.",
 			Example: "  miosa deploy env-rm my-app DEBUG\n  miosa deploy env-rm my-app OLD_TOKEN,LEGACY_URL",
 			Method:  "DELETE", Path: "/deployments/{0}/env/{1}", Args: []Arg{d, {Name: "name"}},
-			Flags: []Flag{environmentFlag()}, Before: environmentSupported,
+			Flags: []Flag{environmentFlag(), noReleaseFlag()}, Before: environmentSupported,
+			Query: noReleaseQuery,
 			Human: renderEnvRemoval,
 		},
 		Op{
@@ -298,7 +322,9 @@ func dbCmd() *cobra.Command {
 	cmd := group("db", "Managed databases",
 		`Databases run on MIOSA and bill while running. <database> is a name or id.
 'connection' prints the connection secret: treat the output like a password.`, []string{"database", "databases"},
-		Op{Use: "list", Aliases: []string{"ls"}, Short: "List databases", Method: "GET", Path: "/databases", Cols: dbCols, AllOrgs: true},
+		Op{Use: "list", Aliases: []string{"ls"}, Short: "List databases", Method: "GET", Path: "/databases", Cols: dbCols, AllOrgs: true,
+			Flags:        []Flag{{Name: "workspace", Usage: "Only this workspace (slug, name or id)", Field: "workspace_id"}},
+			ResolveQuery: resolveWorkspaceQuery},
 		Op{
 			Use: "get <database>", Aliases: []string{"show"}, Short: "Show a database", Method: "GET", Path: "/databases/{0}", Args: []Arg{d},
 			Detail: []Col{{Head: "Name", Path: "name"}, {Head: "Id", Path: "id"}, {Head: "Engine", Path: "engine"}, {Head: "State", Path: "state"}, {Head: "Host", Path: "host"}, {Head: "Port", Path: "port"}, {Head: "Memory (MB)", Path: "memory_mb"}, {Head: "Version", Path: "engine_version"}, {Head: "Extensions", Path: "extensions"}, {Head: "Workspace", Path: "workspace_id"}, {Head: "Error", Path: "error.reason"}, {Head: "Failed at", Path: "error.at"}},
@@ -312,18 +338,24 @@ func dbCmd() *cobra.Command {
 
 --extensions applies to PostgreSQL only; allowed: vector, pg_trgm, pgcrypto, uuid-ossp,
 pg_stat_statements, citext, hstore, btree_gin, btree_gist. --version is a version with an
-image (postgres 16, mysql 8, redis 7). --size is one of tiny, xs, small, medium, large.`,
+image (postgres 16, mysql 8, redis 7). --size is one of tiny, xs, small, medium, large.
+
+--engine optimal creates an Optimal Engine; 'miosa engine create' is the same call with
+the Engine-specific flags and an idempotent name.`,
 			Flags: []Flag{
-				{Name: "engine", Usage: "Engine: postgres, mysql, redis or qdrant", Default: "postgres", Enum: []string{"postgres", "postgresql", "mysql", "redis", "qdrant"}},
+				{Name: "engine", Usage: "Engine: postgres, mysql, redis, qdrant or optimal", Default: "postgres", Enum: []string{"postgres", "postgresql", "mysql", "redis", "qdrant", "optimal"}},
 				{Name: "version", Usage: "Engine version (default: the engine's current one)", Field: "engine_version"},
 				{Name: "size", Usage: "Size: tiny, xs, small, medium or large", Enum: []string{"tiny", "xs", "small", "medium", "large"}},
 				{Name: "extensions", Type: "strings", Usage: "PostgreSQL extensions to enable at create, comma separated"},
-				{Name: "workspace", Usage: "Workspace slug", Field: "workspace_slug"},
+				{Name: "workspace", Usage: "Workspace slug (default: the profile's default workspace)", Field: "workspace_slug"},
 				{Name: "workspace-id", Usage: "Workspace id", Field: "workspace_id", Hidden: true},
 				{Name: "region", Usage: "Pin to a region"},
+				{Name: "class", Usage: "Data classification: public, internal, confidential or restricted", Field: "classification", Enum: []string{"public", "internal", "confidential", "restricted"}},
 			},
-			Body:   func(a []string, body map[string]any) (map[string]any, error) { body["name"] = a[0]; return body, nil },
-			Detail: []Col{{Head: "Name", Path: "name"}, {Head: "Id", Path: "id"}, {Head: "Engine", Path: "engine"}, {Head: "Version", Path: "engine_version"}, {Head: "State", Path: "state"}, {Head: "Memory (MB)", Path: "memory_mb"}, {Head: "Workspace", Path: "workspace_id"}},
+			WorkspaceField: "workspace_slug",
+			After:          reportWorkspaceLanding,
+			Body:           func(a []string, body map[string]any) (map[string]any, error) { body["name"] = a[0]; return body, nil },
+			Detail:         []Col{{Head: "Name", Path: "name"}, {Head: "Id", Path: "id"}, {Head: "Engine", Path: "engine"}, {Head: "Version", Path: "engine_version"}, {Head: "State", Path: "state"}, {Head: "Memory (MB)", Path: "memory_mb"}, {Head: "Workspace", Path: "workspace_id"}},
 		},
 		Op{Use: "start <database>", Short: "Start a stopped database", Method: "POST", Path: "/databases/{0}/start", Args: []Arg{d}, Done: "Starting {0}"},
 		Op{Use: "stop <database>", Short: "Stop a database", Method: "POST", Path: "/databases/{0}/stop", Args: []Arg{d}, Confirm: "Stop database {0}?", Done: "Stopping {0}"},
@@ -357,8 +389,10 @@ func storageCmd() *cobra.Command {
 		},
 		Op{
 			Use: "create <name>", Short: "Create a bucket", Method: "POST", Path: "/storage/buckets", Args: []Arg{idArg("name")},
-			Flags: []Flag{{Name: "visibility", Usage: "Who can read objects", Default: "private", Enum: []string{"private", "public"}}, {Name: "region", Usage: "Region"}, {Name: "workspace-id", Usage: "Workspace", Field: "workspace_id"}},
-			Body:  func(a []string, body map[string]any) (map[string]any, error) { body["name"] = a[0]; return body, nil },
+			Flags:  []Flag{{Name: "visibility", Usage: "Who can read objects", Default: "private", Enum: []string{"private", "public"}}, {Name: "region", Usage: "Region"}, {Name: "workspace", Usage: "Workspace slug or id (default: $MIOSA_WORKSPACE, then the profile's default workspace)", Field: "workspace_id"}, {Name: "workspace-id", Usage: "Workspace id", Field: "workspace_id", Hidden: true}, {Name: "class", Usage: "Data classification: public, internal, confidential or restricted", Field: "classification", Enum: []string{"public", "internal", "confidential", "restricted"}}},
+			Before: settleBucketWorkspace,
+			After:  reportWorkspaceLanding,
+			Body:   func(a []string, body map[string]any) (map[string]any, error) { body["name"] = a[0]; return body, nil },
 		},
 		Op{Use: "get <bucket>", Aliases: []string{"show"}, Short: "Show a bucket", Method: "GET", Path: "/storage/buckets/{0}", Args: []Arg{b}},
 		Op{
@@ -415,17 +449,75 @@ func workflowCmd() *cobra.Command {
 	)
 }
 
+// machineCell shows the machine a schedule runs on. The API sends machine_id
+// for the target; older responses carry only computer_id or sandbox_id.
+func machineCell(row map[string]any) string {
+	for _, key := range []string{"machine_id", "computer_id", "sandbox_id"} {
+		if id := strings.TrimSpace(fmt.Sprint(row[key])); id != "" && id != "<nil>" {
+			return id[:min(8, len(id))]
+		}
+	}
+	return "-"
+}
+
 func scheduleCmd() *cobra.Command {
 	j := idArg("job")
-	return group("schedule", "Scheduled jobs", "A schedule runs a command or function at set times. <job> is a name or id.", []string{"schedules", "schedule-jobs"},
+	return group("schedule", "Scheduled jobs", `A schedule runs a command at set times. <job> is a name or id.
+
+  miosa schedule create --name ingest --cron "*/10 * * * *" --tz America/Chicago \
+      --on my-box --command "sh /workspace/ingest.sh" --overlap skip --timeout 600 \
+      --env MODE=prod --secret TOKEN=secret://org/INGEST_TOKEN
+
+With --on the command runs on that machine, waking it if it is paused, and never
+starts a new one. Without it each run starts a fresh sandbox, runs the command and
+destroys the sandbox.
+
+With --agent each tick is a run of that agent, with the workspace's approval
+policies and budgets, and a timeout of up to an hour:
+
+  miosa schedule create --name drafts --cron "0 9 * * 1-5" --agent drafter \
+      --task "Draft follow-up notes for yesterday's calls" --timeout 1800
+  miosa schedule run drafts
+  miosa agent runs drafter
+
+An agent schedule is one of the agent's triggers; change it with 'miosa agent triggers'.`, []string{"schedules", "schedule-jobs"},
 		Op{
 			Use: "list", Aliases: []string{"ls"}, Short: "List jobs", Method: "GET", Path: "/cron-jobs",
 			Cols: []Col{{Head: "NAME", Path: "name"}, {Head: "ID", Path: "id", Fmt: "short"}, {Head: "SCHEDULE", Path: "schedule"}, {Head: "STATE", Path: "state"}, {Head: "LAST RUN", Path: "last_run_at", Fmt: "age"}, {Head: "LAST", Path: "last_status"}},
 		},
-		Op{Use: "get <job>", Aliases: []string{"show"}, Short: "Show a job", Method: "GET", Path: "/cron-jobs/{0}", Args: []Arg{j}},
+		Op{
+			Use: "create", Short: "Create a schedule", Method: "POST", Path: "/cron-jobs",
+			Flags: []Flag{
+				{Name: "name", Usage: "Name, unique in the organization", Required: true},
+				{Name: "cron", Usage: "Five-field cron expression, for example \"*/10 * * * *\"", Field: "schedule", Required: true},
+				{Name: "tz", Usage: "IANA time zone the expression is evaluated in (default UTC)", Field: "timezone"},
+				{Name: "command", Usage: "Shell command to run"},
+				{Name: "agent", Usage: "Run this agent (name or id) instead of a command"},
+				{Name: "task", Usage: "With --agent: the instruction each run receives"},
+				{Name: "on", Usage: "Run on this existing machine (name or id) instead of a fresh sandbox", Field: "computer_id"},
+				{Name: "timeout", Usage: "Seconds a run may take, up to 3600 (default 300; at least 60 with --agent)", Type: "int", Field: "timeout_sec"},
+				{Name: "env", Usage: "Environment variable NAME=value, stored encrypted (repeatable)", Type: "kv"},
+				{Name: "secret", Usage: "Environment variable NAME=secret://org/NAME or secret://<workspace>/NAME (repeatable)", Type: "kv", Field: "secret"},
+				{Name: "overlap", Usage: "When a run is due while the previous one is still going", Enum: []string{"skip", "queue", "allow"}},
+				{Name: "workspace", Usage: "Workspace slug or id (default: $MIOSA_WORKSPACE, then the profile's default workspace)", Field: "workspace_id"},
+			},
+			Before: before(resolveAgentSchedule, settleWorkspace("workspace", true)),
+			After:  reportWorkspaceLanding,
+			Body:   scheduleCreateBody,
+			Human:  printCreatedSchedule,
+		},
+		Op{
+			Use: "get <job>", Aliases: []string{"show"}, Short: "Show a job", Method: "GET", Path: "/cron-jobs/{0}", Args: []Arg{j},
+			Detail: []Col{{Head: "NAME", Path: "name"}, {Head: "ID", Path: "id"}, {Head: "SCHEDULE", Path: "schedule"}, {Head: "TZ", Path: "timezone"}, {Head: "COMMAND", Path: "command"}, {Head: "ON", Compute: machineCell}, {Head: "OVERLAP", Path: "overlap"}, {Head: "TIMEOUT", Path: "timeout_sec"}, {Head: "ENV", Path: "env_names", Fmt: "list"}, {Head: "STATUS", Path: "status"}, {Head: "NEXT", Path: "next_run_at"}, {Head: "LAST", Path: "last_status"}},
+		},
 		Op{Use: "pause <job>", Short: "Pause a job", Method: "POST", Path: "/cron-jobs/{0}/pause", Args: []Arg{j}, Done: "Paused {0}"},
 		Op{Use: "resume <job>", Short: "Resume a job", Method: "POST", Path: "/cron-jobs/{0}/resume", Args: []Arg{j}, Done: "Resumed {0}"},
-		Op{Use: "run <job>", Aliases: []string{"run-now"}, Short: "Run a job now", Method: "POST", Path: "/cron-jobs/{0}/run-now", Args: []Arg{j}},
+		Op{
+			Use: "run <job>", Aliases: []string{"run-now"}, Short: "Run a job now", Method: "POST", Path: "/cron-jobs/{0}/run-now", Args: []Arg{j},
+			Flags:   []Flag{{Name: "agent", Usage: "The agent, for a schedule created with --agent", In: "local"}},
+			Before:  runAgentSchedule,
+			OnError: agentScheduleHint,
+		},
 		Op{
 			Use: "executions <job>", Aliases: []string{"runs"}, Short: "List past runs", Method: "GET", Path: "/cron-jobs/{0}/executions", Args: []Arg{j},
 			Cols: []Col{{Head: "ID", Path: "id"}, {Head: "STATE", Path: "state"}, {Head: "EXIT", Path: "exit_code"}, {Head: "MS", Path: "duration_ms"}, {Head: "STARTED", Path: "started_at", Fmt: "age"}},
@@ -438,6 +530,45 @@ func scheduleCmd() *cobra.Command {
 		},
 		Op{Use: "rm <job>", Aliases: []string{"delete"}, Short: "Delete a job", Method: "DELETE", Path: "/cron-jobs/{0}", Args: []Arg{j}, Confirm: "Delete job {0}?", Done: "Deleted {0}"},
 	)
+}
+
+// scheduleCreateBody folds --env and --secret into one env object, and refuses what
+// the schedule API cannot honour before a request is made.
+func scheduleCreateBody(_ []string, body map[string]any) (map[string]any, error) {
+	if agent, _ := body["agent"].(string); agent != "" {
+		return agentScheduleBody(agent, body)
+	}
+	delete(body, "agent")
+	if task, _ := body["task"].(string); task != "" {
+		return nil, fmt.Errorf("--task needs --agent: a command schedule runs --command")
+	}
+	if cmd, _ := body["command"].(string); strings.TrimSpace(cmd) == "" {
+		return nil, fmt.Errorf("--command is required")
+	}
+	env := map[string]any{}
+	for _, key := range []string{"env", "secret"} {
+		m, _ := body[key].(map[string]any)
+		delete(body, key)
+		for name, value := range m {
+			if _, dup := env[name]; dup {
+				return nil, fmt.Errorf("%s is set twice: give it once with --env or --secret", name)
+			}
+			if key == "secret" {
+				ref, _ := value.(string)
+				if !strings.HasPrefix(ref, "secret://") {
+					return nil, fmt.Errorf("--secret %s=%s: the value must be a vault reference like secret://org/%s", name, ref, name)
+				}
+			}
+			env[name] = value
+		}
+	}
+	if len(env) > 0 {
+		body["env"] = env
+	}
+	if t, ok := body["timeout_sec"].(int); ok && (t < 1 || t > 3600) {
+		return nil, fmt.Errorf("--timeout must be between 1 and 3600 seconds")
+	}
+	return body, nil
 }
 
 func functionCmd() *cobra.Command {
@@ -519,7 +650,7 @@ else the organization's default workspace, else its only workspace.`,
 // ─── billing, audit, alerts, notifications ────────────────────────────────────
 
 func billingCmd() *cobra.Command {
-	return group("billing", "Credits, spend, invoices and plan",
+	cmd := group("billing", "Credits, spend, invoices and plan",
 		`Read-only views of what you have and what you spent. Credits are cents. Changing
 plans and payment methods happens in the console ('miosa open billing').`, nil,
 		Op{
@@ -538,7 +669,11 @@ plans and payment methods happens in the console ('miosa open billing').`, nil,
 		Op{Use: "breakdown", Short: "Spend by resource", Method: "GET", Path: "/credits/breakdown"},
 		Op{
 			Use: "spend", Short: "Compute spend per workspace", Method: "GET", Path: "/usage", ListKey: "results",
-			Cols: []Col{{Head: "WORKSPACE", Path: "workspace_id", Fmt: "short"}, {Head: "SPEND", Path: "credit_cents", Fmt: "cents"}, {Head: "SANDBOX HOURS", Path: "sandbox_seconds", Fmt: "hours"}, {Head: "COMPUTER HOURS", Path: "computer_seconds", Fmt: "hours"}},
+			Flags: []Flag{{Name: "period", Usage: "Window to read (default 30d)", Enum: []string{"7d", "30d", "mtd"}}},
+			// /usage groups by user when asked nothing; the one row it then returns is the whole
+			// organization, which is not a per-workspace figure.
+			Query: func(_ []string, q url.Values) error { q.Set("group_by", "workspace_id"); return nil },
+			Cols:  []Col{{Head: "WORKSPACE", Path: "workspace_id", Fmt: "short"}, {Head: "SPEND", Path: "credit_cents", Fmt: "cents"}, {Head: "SANDBOX HOURS", Path: "sandbox_seconds", Fmt: "hours"}, {Head: "COMPUTER HOURS", Path: "computer_seconds", Fmt: "hours"}},
 		},
 		Op{
 			Use: "invoices", Short: "List invoices", Method: "GET", Path: "/billing/invoices",
@@ -557,6 +692,8 @@ plans and payment methods happens in the console ('miosa open billing').`, nil,
 			},
 		},
 	)
+	cmd.AddCommand(billingCapCmd())
+	return cmd
 }
 
 func auditCmd() *cobra.Command {
@@ -571,7 +708,9 @@ func auditCmd() *cobra.Command {
 		},
 		Cols: []Col{{Head: "WHEN", Path: "ts", Fmt: "age"}, {Head: "TYPE", Path: "type"}, {Head: "STATUS", Path: "status"}, {Head: "ACTOR", Path: "actor.id", Fmt: "short"}, {Head: "IP", Path: "ip_address"}, {Head: "RESOURCE", Path: "resource.type"}, {Head: "RESOURCE ID", Path: "resource.id", Fmt: "short"}},
 	}
-	return o.command("")
+	cmd := o.command("")
+	cmd.AddCommand(newAuditExportCmd())
+	return cmd
 }
 
 func alertsCmd() *cobra.Command {
@@ -588,7 +727,7 @@ func notificationsCmd() *cobra.Command {
 	return group("notifications", "Your notifications", "", []string{"notification", "inbox"},
 		Op{
 			Use: "list", Aliases: []string{"ls"}, Short: "List notifications", Method: "GET", Path: "/notifications",
-			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "WHEN", Path: "inserted_at", Fmt: "age"}, {Head: "READ", Path: "read"}, {Head: "TITLE", Path: "title", Fmt: "clip"}},
+			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "WHEN", Path: "inserted_at", Fmt: "age"}, {Head: "READ", Compute: readCell}, {Head: "TITLE", Compute: notificationTitleCell}},
 		},
 		Op{Use: "unread", Short: "Count unread notifications", Method: "GET", Path: "/notifications/unread-count", Detail: []Col{{Head: "Unread", Path: "count"}}},
 		Op{Use: "read <id>", Short: "Mark one read", Method: "POST", Path: "/notifications/{0}/read", Args: []Arg{idArg("notification")}, Done: "Marked {0} read"},
@@ -704,12 +843,13 @@ moved yet; the command only moves what the platform accepts and reports how many
 		},
 		{
 			Use: "usage <workspace>", Short: "Spend and runtime in a workspace",
-			Method: "GET", Path: "/workspaces/{0}/usage", Args: []Arg{w},
+			Method: "GET", Path: "/workspaces/{0}/usage", Args: []Arg{w}, ListKey: "by_product",
+			Cols: []Col{{Head: "PRODUCT", Path: "product"}, {Head: "TYPE", Path: "resource_type"}, {Head: "SPEND", Path: "total_cost_cents", Fmt: "cents"}, {Head: "HOURS", Path: "total_seconds", Fmt: "hours"}, {Head: "RESOURCES", Path: "resources"}},
 		},
 		{
 			Use: "activity <workspace>", Short: "Recent activity in a workspace",
 			Method: "GET", Path: "/workspaces/{0}/activity", Args: []Arg{w},
-			Cols: []Col{{Head: "WHEN", Path: "inserted_at", Fmt: "age"}, {Head: "TYPE", Path: "type"}, {Head: "MESSAGE", Path: "message", Fmt: "clip"}},
+			Cols: []Col{{Head: "WHEN", Path: "occurred_at", Fmt: "age"}, {Head: "TYPE", Path: "action"}, {Head: "RESOURCE", Path: "resource_type"}, {Head: "MESSAGE", Compute: activityMessageCell}},
 		},
 		{
 			Use: "inventory <workspace>", Short: "Everything a workspace contains",
@@ -987,4 +1127,15 @@ func cloudProvisioningGate(cmd *cobra.Command, c *api.Client) error {
 		return die(fmt.Errorf("bring your own cloud is in private preview: %s (see 'miosa cloud capabilities')", strings.Join(blockers, "; ")))
 	}
 	return nil
+}
+
+// purgeNodesReached renders "8 of 12", the nodes that answered the purge out of
+// the nodes asked. An older server sends neither field, so the cell is empty.
+func purgeNodesReached(row map[string]any) string {
+	reached, ok1 := row["nodes_reached"].(float64)
+	total, ok2 := row["nodes_total"].(float64)
+	if !ok1 || !ok2 {
+		return ""
+	}
+	return fmt.Sprintf("%d of %d", int(reached), int(total))
 }
