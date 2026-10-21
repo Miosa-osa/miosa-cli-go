@@ -280,7 +280,8 @@ func TestEveryForgeCommandHasExamples(t *testing.T) {
 			}
 			// An example may only use flags the command has.
 			for _, field := range strings.Fields(sub.Example) {
-				if !strings.HasPrefix(field, "--") {
+				// A bare -- ends the flags (check run WO-12 -- mix test); it is not one.
+				if !strings.HasPrefix(field, "--") || field == "--" {
 					continue
 				}
 				name := strings.SplitN(strings.TrimPrefix(field, "--"), "=", 2)[0]

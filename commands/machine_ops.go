@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"context"
+
 	"fmt"
 	"net/url"
 	"strings"
@@ -104,6 +106,27 @@ anyone with the link for a limited time. The port must already be listening
 				return body, nil
 			},
 			Detail: previewDetail,
+		},
+		Op{
+			Use: "domain-add [sandbox] <hostname>", Short: "Serve the sandbox's preview at your own domain (then add the DNS record)",
+			Long: `Attaches a custom domain to the sandbox: it serves the sandbox's newest active preview, with
+that preview's visibility. Point a CNAME at proxy.miosa.ai; the domain verifies on its own once
+DNS is right (or run 'miosa deploy domain-verify <hostname>').`,
+			Example: "  miosa preview domain-add my-box app.example.com",
+			Method:  "POST", Path: "/domains", Args: []Arg{sbx, {Name: "hostname"}},
+			ResolveArgs: func(ctx context.Context, c *api.Client, args []string) ([]string, error) {
+				id, err := c.ResolveSandbox(ctx, args[0])
+				if err != nil {
+					return nil, err
+				}
+				return []string{id, args[1]}, nil
+			},
+			Body: func(args []string, body map[string]any) (map[string]any, error) {
+				body["sandbox_id"] = args[0]
+				body["hostname"] = args[1]
+				return body, nil
+			},
+			Done: "Attached {1}",
 		},
 		Op{
 			Use: "unshare [sandbox] <id>", Short: "Revoke a preview's public link",

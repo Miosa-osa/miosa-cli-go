@@ -211,7 +211,9 @@ func newKeyMintCmd(use, short string, argCheck cobra.PositionalArgs, target func
 		Long: `Create an API key. With no --scope or --preset the key gets the default set of
 scopes. Presets: read-only (every :read scope), ci (sandboxes, deployments,
 previews), agent (run agents on sandboxes), cli (what the miosa CLI uses day to
-day, including connections). 'miosa api-key presets' lists them. Scope names look like sandboxes:exec
+day, including connections), automation (server-side scripts: sandboxes with
+files, exec, logs and services, deployments, agents), full-access (every scope;
+organization owners and admins only). 'miosa api-key presets' lists them. Scope names look like sandboxes:exec
 or agents:run; see 'miosa api-key list --json' for what existing keys hold.
 
 The secret is printed once. --quiet-key prints only the secret.`,
@@ -229,13 +231,20 @@ The secret is printed once. --quiet-key prints only the secret.`,
 			list := append([]string(nil), scopes...)
 			if preset != "" {
 				ps, ok := serverPreset(cmd.Context(), c.API, preset)
-				if !ok {
-					ps, ok = keyPreset(preset)
+				switch {
+				case ok && len(list) == 0 && path == "/api-keys":
+					// Name the preset and let the server expand it, so its
+					// rules (full-access is owner/admin only) apply to this key.
+					body["preset"] = preset
+				default:
+					if !ok {
+						ps, ok = keyPreset(preset)
+					}
+					if !ok {
+						return usagef("--preset must be read-only, ci, agent, cli, automation or full-access (see 'miosa api-key presets')")
+					}
+					list = append(ps, list...)
 				}
-				if !ok {
-					return usagef("--preset must be read-only, ci, agent or cli (see 'miosa api-key presets')")
-				}
-				list = append(ps, list...)
 			}
 			if len(list) > 0 {
 				sort.Strings(list)
@@ -275,7 +284,7 @@ The secret is printed once. --quiet-key prints only the secret.`,
 	}
 	f := cmd.Flags()
 	f.StringArrayVar(&scopes, "scope", nil, "A scope to grant, for example sandboxes:exec (repeatable)")
-	f.StringVar(&preset, "preset", "", "Permission preset: read-only, ci, agent or cli")
+	f.StringVar(&preset, "preset", "", "Permission preset: read-only, ci, agent, cli, automation or full-access")
 	f.IntVar(&expiresIn, "expires-in", 0, "Expire after this many days (default: never)")
 	f.StringVar(&workspaceID, "workspace-id", "", "Bind the key to one workspace")
 	f.StringArrayVar(&allowedIPs, "allowed-ip", nil, "Only accept requests from this IP or CIDR (repeatable)")

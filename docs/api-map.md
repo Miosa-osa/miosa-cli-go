@@ -131,7 +131,6 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa deploy observe` | GET | `/deployments/{0}/observability` |
 | `miosa deploy prove` | GET | `/deployments/{0}/proof` |
 | `miosa deploy purge-cache` | POST | `/deployments/{0}/purge-cache` |
-| `miosa deploy redeploy` | POST | `/deployments/{0}/redeploy` |
 | `miosa deploy releases` | GET | `/deployments/{0}/releases` |
 | `miosa deploy requests` | GET | `/deployments/{0}/request-logs` |
 | `miosa deploy rm` | DELETE | `/deployments/{0}` |
@@ -320,6 +319,7 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa pause` | POST | `/sandboxes/{0}/pause` |
 | `miosa ports` | GET | `/sandboxes/{0}/ports` |
 | `miosa preview create` | POST | `/sandboxes/{0}/previews` |
+| `miosa preview domain-add` | POST | `/domains` |
 | `miosa preview get` | GET | `/sandboxes/{0}/previews/{1}` |
 | `miosa preview list` | GET | `/sandboxes/{0}/previews` |
 | `miosa preview rm` | DELETE | `/sandboxes/{0}/previews/{1}` |

@@ -254,6 +254,7 @@ func newConnAddModelsCmd() *cobra.Command {
 		workspaceID string
 		label       string
 		noWait      bool
+		replace     bool
 		scope       connScope
 	)
 	cmd := &cobra.Command{
@@ -291,6 +292,9 @@ Add --no-wait to print the link and code and return, so your own UI can show the
 
 			if sp, ok := signinProvider(provider); ok && !keyStdin {
 				body := scope.apply(map[string]any{"provider": sp})
+				if replace {
+					body["replace"] = true
+				}
 				// An end user's account is never connected from inside a
 				// machine of yours; for a workspace a machine is optional.
 				if scope.ExternalUser == "" {
@@ -358,8 +362,9 @@ Add --no-wait to print the link and code and return, so your own UI can show the
 		},
 	}
 	cmd.Flags().BoolVar(&keyStdin, "key-stdin", false, "Read the API key from standard input")
-	cmd.Flags().StringVarP(&sandbox, "sandbox", "s", "", "Sandbox to sign in inside (subscriptions)")
-	cmd.Flags().StringVar(&computer, "computer", "", "Computer to sign in inside (subscriptions)")
+	cmd.Flags().StringVarP(&sandbox, "sandbox", "s", "", "Sandbox the sign-in runs in (subscriptions); it is saved for the org, workspace or end user, not this sandbox")
+	cmd.Flags().StringVar(&computer, "computer", "", "Computer the sign-in runs in (subscriptions); it is saved for the org, workspace or end user, not this computer")
+	cmd.Flags().BoolVar(&replace, "replace", false, "Replace the organization's existing sign-in for this provider")
 	cmd.Flags().StringVar(&workspaceID, "workspace-id", "", "Workspace the connection belongs to")
 	cmd.Flags().StringVar(&label, "label", "", "A label for the connection")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Subscriptions: print the link and code and return; your UI shows them")

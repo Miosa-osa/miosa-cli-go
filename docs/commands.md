@@ -817,7 +817,9 @@ With no --scope or --preset the key gets the default set of
 scopes.
 Presets: read-only (every :read scope), ci (sandboxes, deployments,
 previews), agent (run agents on sandboxes), cli (what the miosa CLI uses day to
-day, including connections). 'miosa api-key presets' lists them.
+day, including connections), automation (server-side scripts: sandboxes with
+files, exec, logs and services, deployments, agents), full-access (every scope;
+organization owners and admins only). 'miosa api-key presets' lists them.
 Scope names look like sandboxes:exec
 or agents:run; see 'miosa api-key list --json' for what existing keys hold.
 
@@ -827,7 +829,7 @@ Flags:
 
 - `--allowed-ip stringArray` - Only accept requests from this IP or CIDR (repeatable).
 - `--expires-in int` - Expire after this many days (default: never).
-- `--preset string` - Permission preset: read-only, ci, agent or cli.
+- `--preset string` - Permission preset: read-only, ci, agent, cli, automation or full-access.
 - `--quiet-key` - Print only the secret.
 - `--rate-limit int` - Requests per minute for this key.
 - `--scope stringArray` - A scope to grant, for example sandboxes:exec (repeatable).
@@ -2265,12 +2267,13 @@ Add --no-wait to print the link and code and return, so your own UI can show the
 
 Flags:
 
-- `--computer string` - Computer to sign in inside (subscriptions).
+- `--computer string` - Computer the sign-in runs in (subscriptions); it is saved for the org, workspace or end user, not this computer.
 - `--external-user string` - Connect it for one of your end users (your own id for them).
 - `--key-stdin` - Read the API key from standard input.
 - `--label string` - A label for the connection.
 - `--no-wait` - Subscriptions: print the link and code and return; your UI shows them.
-- `-s, --sandbox string` - Sandbox to sign in inside (subscriptions).
+- `--replace` - Replace the organization's existing sign-in for this provider.
+- `-s, --sandbox string` - Sandbox the sign-in runs in (subscriptions); it is saved for the org, workspace or end user, not this sandbox.
 - `--workspace-id string` - Workspace the connection belongs to.
 
 ##### `miosa connections add tools`
@@ -3517,7 +3520,7 @@ Put a version on the air.
 ```
   miosa deploy promote 4bacc5df                        # in a linked folder
   miosa deploy promote 4bacc5df --deployment my-site  # from anywhere
-  miosa deploy promote my-site <release-id>           # promote a release
+  miosa deploy promote my-site <release-id>           # promote a release (full id, or a unique prefix of 6+ characters)
 
 ```
 A version uploaded with 'miosa deploy push --no-promote' is not serving yet.
@@ -3612,12 +3615,21 @@ Build and release again from the same source.
 miosa deploy redeploy <deployment> [flags]
 ```
 
-Rebuilds the deployment from its configured source (repository branch or sandbox) and releases the result.
-An uploaded static site has nothing to rebuild: push a new version with 'miosa deploy push' instead.
+Rebuilds the deployment from its configured source and releases the result.
+
+The command prints the build it starts.
+A failed build marks the deployment failed and records the
+reason: 'miosa deploy get <deployment>' reports it and 'miosa deploy builds <deployment>' lists the
+run.
+A deployment published from a sandbox has no repository to rebuild, so it re-runs the release it
+already has.
+An uploaded static site has nothing to rebuild: push a new version with
+'miosa deploy push'.
 
 Flags:
 
 - `--commit string` - Forge deployments: build this commit instead of the branch head.
+- `--wait` - Wait until the redeployed version is live (10 minutes).
 
 Examples:
 
@@ -5432,6 +5444,151 @@ Work with repositories owned by the organization associated with the current MIO
 Flags:
 
 
+#### `miosa forge accept`
+
+Steer a Work Order: accept.
+
+```
+miosa forge accept WO-12 [text]
+```
+
+Examples:
+
+```
+miosa forge accept WO-12
+```
+
+#### `miosa forge add`
+
+Add work: split into Work Orders, deduplicated, queued.
+
+```
+miosa forge add "text" [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+- `--milestone string` - The phase it goes in.
+- `--mission string` - The Mission it goes in.
+- `--new` - You checked: it is not a duplicate.
+- `--owner string` - The Crew role that owns it.
+- `--priority string` - P0 to P3.
+
+Examples:
+
+```
+miosa forge add "Retry failed webhooks" --milestone phase-1 --owner backend --priority P1
+```
+
+#### `miosa forge answer`
+
+Steer a Work Order: answer.
+
+```
+miosa forge answer WO-12 [text]
+```
+
+Examples:
+
+```
+miosa forge answer WO-12 "Keep it one more release"
+```
+
+#### `miosa forge approve`
+
+Steer a Work Order: approve.
+
+```
+miosa forge approve WO-12 [text]
+```
+
+Examples:
+
+```
+miosa forge approve WO-12
+```
+
+#### `miosa forge approve-spec`
+
+Approve draft specs (agents can't start without one).
+
+```
+miosa forge approve-spec WO-12 | --milestone id [flags]
+```
+
+Flags:
+
+- `--milestone string` - Approve every draft spec in this phase.
+
+Examples:
+
+```
+miosa forge approve-spec WO-12
+  miosa forge approve-spec --milestone phase-1
+```
+
+#### `miosa forge ask`
+
+Ask the person, going ahead with your own call unless they steer.
+
+```
+miosa forge ask WO-12 "question" [flags]
+```
+
+Flags:
+
+- `--default string` - What you'll do if nobody steers.
+- `--minutes string` - How long to wait (default 60).
+- `--option string` - An answer to click, "Label :: what it means" (repeat it).
+- `--recommend string` - The option you'd pick (1 is the first).
+
+Examples:
+
+```
+miosa forge ask WO-12 "Drop the old endpoint?" --default "Keep it one release" --option "Drop it :: remove now" --option "Keep it :: one more release" --recommend 2
+```
+
+#### `miosa forge assign`
+
+Move an agent to another Mission's crew.
+
+```
+miosa forge assign <runner> [flags]
+```
+
+Flags:
+
+- `--as string` - Who is moving it.
+- `--mission string` - The Mission whose crew it joins.
+- `--why string` - Why it moves.
+
+Examples:
+
+```
+miosa forge assign backend-2 --mission client-issues --why "P0 from a customer"
+```
+
+#### `miosa forge assist`
+
+Work one step of a Work Order another agent holds.
+
+```
+miosa forge assist WO-12 [flags]
+```
+
+Flags:
+
+- `--as string` - Your Crew role.
+- `--runner string` - The running agent (default FORGE_RUNNER).
+- `--step string` - The step you work.
+
+Examples:
+
+```
+miosa forge assist WO-12 --step 3
+```
+
 #### `miosa forge auth`
 
 Use your MIOSA API key for Forge git (clone, push and pull over HTTPS).
@@ -5473,6 +5630,91 @@ Examples:
 ```
 miosa forge auth setup-git
   miosa forge repo clone my-repo
+```
+
+#### `miosa forge autonomy`
+
+How long agents wait for you before going with their own call.
+
+```
+miosa forge autonomy <minutes>
+```
+
+Examples:
+
+```
+miosa forge autonomy 60
+```
+
+#### `miosa forge backlog`
+
+Steer a Work Order: backlog.
+
+```
+miosa forge backlog WO-12 [text]
+```
+
+Examples:
+
+```
+miosa forge backlog WO-12
+```
+
+#### `miosa forge brief`
+
+The Mission's brief, or a phase's.
+
+```
+miosa forge brief [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+- `--mission string` - A Mission other than the active one.
+- `--phase string` - A phase's brief instead of the Mission's.
+- `--set string` - Replace it from a file, or - for stdin.
+
+Examples:
+
+```
+miosa forge brief
+  miosa forge brief --phase phase-1
+  miosa forge brief --set brief.md
+```
+
+#### `miosa forge cancel`
+
+Steer a Work Order: cancel.
+
+```
+miosa forge cancel WO-12 [text]
+```
+
+Examples:
+
+```
+miosa forge cancel WO-12
+```
+
+#### `miosa forge charter`
+
+The Charter above every Mission: how MIOSA ships, what comes first.
+
+```
+miosa forge charter [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+- `--set string` - Replace it from a file, or - for stdin.
+
+Examples:
+
+```
+miosa forge charter
+  miosa forge charter --set charter.md
 ```
 
 #### `miosa forge check`
@@ -5561,6 +5803,21 @@ Examples:
 miosa forge check report platform --commit <sha> --name unit-tests --conclusion passed --file evidence.json
 ```
 
+##### `miosa forge check run`
+
+Run a real Check on a Work Order and record the result.
+
+```
+miosa forge check run WO-12 -- <command…>
+```
+
+Examples:
+
+```
+miosa forge check run WO-12 -- mix test
+  miosa forge check run WO-12 -- pnpm test
+```
+
 ##### `miosa forge check show`
 
 Show one check.
@@ -5589,6 +5846,147 @@ Examples:
 
 ```
 miosa forge check suite platform <commit>
+```
+
+#### `miosa forge context`
+
+What to read before working: Mission, phase, Work Order [--full].
+
+```
+miosa forge context WO-12 [flags]
+```
+
+Flags:
+
+- `--full` - Include the Mission's whole brief.
+
+Examples:
+
+```
+miosa forge context WO-12
+  miosa forge context WO-12 --full
+```
+
+#### `miosa forge decide`
+
+Choose an option of a decision (0 is the first).
+
+```
+miosa forge decide <decision> <option>
+```
+
+Examples:
+
+```
+miosa forge decide versioning 0
+```
+
+#### `miosa forge discover`
+
+File something you found outside your Work Order.
+
+```
+miosa forge discover "what" [flags]
+```
+
+Flags:
+
+- `--as string` - Who found it.
+- `--from string` - The Work Order you found it on.
+
+Examples:
+
+```
+miosa forge discover "Billing retries are not idempotent" --from WO-12
+```
+
+#### `miosa forge discoveries`
+
+Orchestrator: discoveries waiting to be placed.
+
+```
+miosa forge discoveries [flags]
+```
+
+Flags:
+
+- `--wait` - Block until there is one (up to 9 minutes).
+
+Examples:
+
+```
+miosa forge discoveries
+  miosa forge discoveries --wait
+```
+
+#### `miosa forge dismiss`
+
+Steer a Work Order: dismiss.
+
+```
+miosa forge dismiss WO-12 [text]
+```
+
+Examples:
+
+```
+miosa forge dismiss WO-12
+```
+
+#### `miosa forge done`
+
+Hand over with a completion report.
+
+```
+miosa forge done WO-12 [flags]
+```
+
+Flags:
+
+- `--report string` - The completion report as JSON: a file, or - for stdin.
+
+Examples:
+
+```
+miosa forge done WO-12 --report report.json
+  cat report.json | miosa forge done WO-12 --report -
+```
+
+#### `miosa forge edit`
+
+Edit a Work Order.
+
+```
+miosa forge edit WO-12 [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+- `--detail string` - New detail.
+- `--done-when string` - New Done when.
+- `--milestone string` - Move it to this phase.
+- `--owner string` - Give it to this role.
+- `--title string` - New title.
+
+Examples:
+
+```
+miosa forge edit WO-12 --title "Retry webhooks twice" --owner backend
+```
+
+#### `miosa forge end`
+
+Steer a Work Order: end.
+
+```
+miosa forge end WO-12 [text]
+```
+
+Examples:
+
+```
+miosa forge end WO-12
 ```
 
 #### `miosa forge fork`
@@ -5639,6 +6037,349 @@ Examples:
 
 ```
 miosa forge grant set platform <user-id> --role write
+```
+
+#### `miosa forge hooks`
+
+In an agent's folder: Claude Code reports its tools and sub-agents to Forge live.
+
+```
+miosa forge hooks install
+```
+
+Examples:
+
+```
+miosa forge hooks install
+```
+
+#### `miosa forge inbox`
+
+What needs you: decisions, questions, approvals, promotions.
+
+```
+miosa forge inbox
+```
+
+Examples:
+
+```
+miosa forge inbox
+```
+
+#### `miosa forge intake`
+
+Notes left in Forge waiting to be planned.
+
+```
+miosa forge intake [flags]
+```
+
+Flags:
+
+- `--save string` - Folder for the attached files.
+
+Examples:
+
+```
+miosa forge intake
+  miosa forge intake --save ./notes
+```
+
+#### `miosa forge join`
+
+Join a Mission's crew as a running agent.
+
+```
+miosa forge join [flags]
+```
+
+Flags:
+
+- `--as string` - Your Crew role.
+- `--harness string` - The harness you run in: claude-code, codex, osa….
+- `--machine string` - The machine you run on.
+- `--mission string` - The Mission whose crew you join.
+- `--on string` - Where you run: local, sandbox:<id>, computer:<id> or machine:<name>.
+- `--sandbox string` - The sandbox you run in.
+- `--specialty string` - Your specialty, for example backend.elixir.
+- `--worktree string` - Your worktree (default: this git repo).
+
+Examples:
+
+```
+miosa forge join --as backend --mission release-pipeline-v1 --on local --harness claude-code
+```
+
+#### `miosa forge leave`
+
+Stop this running agent; what it held goes back to the queue.
+
+```
+miosa forge leave [flags]
+```
+
+Flags:
+
+- `--runner string` - The running agent (default FORGE_RUNNER).
+
+Examples:
+
+```
+miosa forge leave
+```
+
+#### `miosa forge log`
+
+A line in its activity.
+
+```
+miosa forge log WO-12 "text" [flags]
+```
+
+Flags:
+
+- `--as string` - Who is writing it.
+
+Examples:
+
+```
+miosa forge log WO-12 "Found the cause: the retry ignored 429"
+```
+
+#### `miosa forge ls`
+
+Work Orders by status.
+
+```
+miosa forge ls [flags]
+```
+
+Flags:
+
+- `--agent string` - Only this role's.
+- `--all` - Include shipped Work Orders.
+- `--backlog` - The backlog instead of the Mission.
+- `--mine` - Only your role's (FORGE_AGENT).
+
+Examples:
+
+```
+miosa forge ls
+  miosa forge ls --agent backend
+  miosa forge ls --backlog
+```
+
+#### `miosa forge merged`
+
+Record a real merge.
+
+```
+miosa forge merged WO-12 <sha|PR> [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+- `--into string` - The branch it merged into.
+
+Examples:
+
+```
+miosa forge merged WO-12 https://github.com/acme/app/pull/88
+```
+
+#### `miosa forge milestone`
+
+Phases: add one, edit it, give it a branch, record that branch's merge.
+
+```
+miosa forge milestone add|edit|branch|merged [flags]
+```
+
+Flags:
+
+- `--after string` - The phase it follows.
+- `--as string` - Who is recording this.
+- `--done-when string` - Its Done when.
+- `--into string` - The branch it merges into.
+- `--title string` - New title.
+
+Examples:
+
+```
+miosa forge milestone add "Staging" --done-when "Every release runs on staging first" --after phase-2
+  miosa forge milestone branch phase-3 release/staging --into release/v1
+```
+
+#### `miosa forge mission`
+
+Create, start, close or edit a Mission.
+
+```
+miosa forge mission new|start|close|edit [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+- `--done-when string` - Its Done when, lines separated by |.
+- `--goal string` - Why the Mission exists.
+- `--organization` - Spans every workspace.
+- `--owners string` - Roles of a standing Mission, comma-separated.
+- `--standing` - Always open, for ongoing work.
+- `--title string` - New title.
+- `--workspace string` - Workspace it lives in.
+- `--workspace-name string` - That workspace's name.
+
+Examples:
+
+```
+miosa forge mission new "Release pipeline v2" --goal "Ship without restarts" --done-when "No restarts|One deploy path"
+  miosa forge mission new "Client issues" --standing --owners backend,frontend
+  miosa forge mission start release-pipeline-v2
+  miosa forge mission close release-pipeline-v2
+```
+
+#### `miosa forge next`
+
+Steer a Work Order: next.
+
+```
+miosa forge next WO-12 [text]
+```
+
+Examples:
+
+```
+miosa forge next WO-12
+```
+
+#### `miosa forge note`
+
+Steer a Work Order: note.
+
+```
+miosa forge note WO-12 [text]
+```
+
+Examples:
+
+```
+miosa forge note WO-12 "Customer confirmed the fix"
+```
+
+#### `miosa forge p0`
+
+Set the priority to P0.
+
+```
+miosa forge p0 WO-12
+```
+
+Examples:
+
+```
+miosa forge p0 WO-12
+```
+
+#### `miosa forge p1`
+
+Set the priority to P1.
+
+```
+miosa forge p1 WO-12
+```
+
+Examples:
+
+```
+miosa forge p1 WO-12
+```
+
+#### `miosa forge p2`
+
+Set the priority to P2.
+
+```
+miosa forge p2 WO-12
+```
+
+Examples:
+
+```
+miosa forge p2 WO-12
+```
+
+#### `miosa forge p3`
+
+Set the priority to P3.
+
+```
+miosa forge p3 WO-12
+```
+
+Examples:
+
+```
+miosa forge p3 WO-12
+```
+
+#### `miosa forge pause`
+
+Pause a Crew role's agents.
+
+```
+miosa forge pause <agent>
+```
+
+Examples:
+
+```
+miosa forge pause backend
+```
+
+#### `miosa forge place`
+
+Place a discovery in a Mission and phase.
+
+```
+miosa forge place WO-51 [flags]
+```
+
+Flags:
+
+- `--as string` - Who is placing it.
+- `--milestone string` - The phase.
+- `--mission string` - The Mission.
+- `--owner string` - The Crew role.
+- `--priority string` - P0 to P3.
+- `--why string` - Why it goes there.
+
+Examples:
+
+```
+miosa forge place WO-51 --milestone phase-1 --owner backend --priority P1 --why "Blocks the deploy path"
+```
+
+#### `miosa forge planned`
+
+Link a note to the Work Orders it became (or --reason "why none").
+
+```
+miosa forge planned <note> WO-12… [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+- `--reason string` - Why the note needs no work.
+
+Examples:
+
+```
+miosa forge planned note-3 WO-12 WO-13
+  miosa forge planned note-4 --reason "Already shipped"
 ```
 
 #### `miosa forge policy`
@@ -6009,6 +6750,99 @@ miosa forge pr show platform 12
   miosa forge pr show platform 12 --json
 ```
 
+#### `miosa forge prime`
+
+What any agent harness reads first: the rules and where things stand.
+
+```
+miosa forge prime
+```
+
+Examples:
+
+```
+miosa forge prime
+```
+
+#### `miosa forge promote`
+
+Promote what's on staging.
+
+```
+miosa forge promote [version|--ready] [flags]
+```
+
+Flags:
+
+- `--ready` - Promote everything that is ready.
+
+Examples:
+
+```
+miosa forge promote
+  miosa forge promote --ready
+```
+
+#### `miosa forge prompt`
+
+The prompt this agent is pinned to (its Mission's, at its version).
+
+```
+miosa forge prompt [profile] [flags]
+```
+
+Flags:
+
+- `--runner string` - The running agent (default FORGE_RUNNER).
+
+Examples:
+
+```
+miosa forge prompt
+  miosa forge prompt backend
+```
+
+#### `miosa forge propose`
+
+Propose a decision, with your recommendation.
+
+```
+miosa forge propose "question" [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+- `--context string` - What the person needs to know.
+- `--minutes string` - How long to wait before your recommendation applies.
+- `--mission string` - The Mission it belongs to.
+- `--options string` - The options, separated by |.
+- `--recommend string` - The option you recommend (0 is the first).
+
+Examples:
+
+```
+miosa forge propose "Adopt automatic version numbers?" --options "Adopt|Keep manual" --recommend 0
+```
+
+#### `miosa forge push`
+
+Record the branch and commit you just pushed (read from git).
+
+```
+miosa forge push WO-12 [flags]
+```
+
+Flags:
+
+- `--branch string` - The branch (default: this repo's).
+
+Examples:
+
+```
+miosa forge push WO-12
+```
+
 #### `miosa forge release`
 
 Releases: a tag with notes and downloadable assets.
@@ -6129,6 +6963,25 @@ Examples:
 ```
 miosa forge release upload platform v1.2.0 dist/app.tar.gz dist/checksums.txt
   miosa forge release upload platform v1.2.0 --source-archive
+```
+
+#### `miosa forge repin`
+
+Switch to the latest version of its Mission's prompt.
+
+```
+miosa forge repin [runner] [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+
+Examples:
+
+```
+miosa forge repin
+  miosa forge repin backend-2
 ```
 
 #### `miosa forge repo`
@@ -6254,6 +7107,215 @@ Examples:
 ```
 miosa forge repo update platform --name "Marketing site"
   miosa forge repo update platform --visibility private
+```
+
+#### `miosa forge resume`
+
+Resume a Crew role's agents.
+
+```
+miosa forge resume <agent>
+```
+
+Examples:
+
+```
+miosa forge resume backend
+```
+
+#### `miosa forge retry`
+
+Steer a Work Order: retry.
+
+```
+miosa forge retry WO-12 [text]
+```
+
+Examples:
+
+```
+miosa forge retry WO-12
+```
+
+#### `miosa forge seats`
+
+How many agents of a role a Mission's crew has.
+
+```
+miosa forge seats <mission> <role> <n> [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+
+Examples:
+
+```
+miosa forge seats release-pipeline-v1 backend 2
+```
+
+#### `miosa forge show`
+
+One Work Order: spec, steps, activity.
+
+```
+miosa forge show WO-12
+```
+
+Examples:
+
+```
+miosa forge show WO-12
+```
+
+#### `miosa forge spec`
+
+Write a Work Order's spec, a draft for the person to approve.
+
+```
+miosa forge spec WO-12 [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+- `--json string` - The spec as JSON: a file, or - for stdin.
+
+Examples:
+
+```
+miosa forge spec WO-12 --json spec.json
+  cat spec.json | miosa forge spec WO-12 --json -
+```
+
+#### `miosa forge status`
+
+The active Mission, its phases, and who is on what.
+
+```
+miosa forge status
+```
+
+Examples:
+
+```
+miosa forge status
+```
+
+#### `miosa forge step`
+
+Mark a step done, or in progress, by title or number.
+
+```
+miosa forge step WO-12 "a" | 2 | 2 start [flags]
+```
+
+Flags:
+
+- `--by string` - Who did it (default FORGE_RUNNER).
+
+Examples:
+
+```
+miosa forge step WO-12 1
+  miosa forge step WO-12 2 start
+```
+
+#### `miosa forge steps`
+
+Plan its steps.
+
+```
+miosa forge steps WO-12 "a" "b"…
+```
+
+Examples:
+
+```
+miosa forge steps WO-12 "Write the failing test" "Fix the retry" "Run the suite"
+```
+
+#### `miosa forge stop`
+
+Stop a Crew role's agents.
+
+```
+miosa forge stop <agent>
+```
+
+Examples:
+
+```
+miosa forge stop backend
+```
+
+#### `miosa forge take`
+
+Hold a Work Order (the next in your queue if omitted).
+
+```
+miosa forge take [WO-12] [flags]
+```
+
+Flags:
+
+- `--as string` - Your Crew role.
+- `--branch string` - Your branch (default: this repo's).
+- `--runner string` - The running agent (default FORGE_RUNNER).
+- `--worktree string` - Your worktree (default: this repo).
+
+Examples:
+
+```
+miosa forge take
+  miosa forge take WO-12
+```
+
+#### `miosa forge verify`
+
+Sign off a phase: its Done when, checked against real evidence.
+
+```
+miosa forge verify <milestone> "evidence" [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+
+Examples:
+
+```
+miosa forge verify phase-1 "CI run 4821 green on every repo"
+```
+
+#### `miosa forge wait`
+
+Block until the person answers (or your own call applies), then print it.
+
+```
+miosa forge wait WO-12
+```
+
+Examples:
+
+```
+miosa forge wait WO-12
+```
+
+#### `miosa forge watch`
+
+The live feed of everything that happens.
+
+```
+miosa forge watch
+```
+
+Examples:
+
+```
+miosa forge watch
 ```
 
 ### `miosa fork`
@@ -9069,6 +10131,25 @@ Flags:
 - `--ttl string` - Remove it after this long: seconds, 30m, 2h.
 - `--visibility string` - Who can open it (private|public). (default `private`)
 
+#### `miosa preview domain-add`
+
+Serve the sandbox's preview at your own domain (then add the DNS record).
+
+```
+miosa preview domain-add [sandbox] <hostname>
+```
+
+Attaches a custom domain to the sandbox: it serves the sandbox's newest active preview, with
+that preview's visibility.
+Point a CNAME at proxy.miosa.ai; the domain verifies on its own once
+DNS is right (or run 'miosa deploy domain-verify <hostname>').
+
+Examples:
+
+```
+miosa preview domain-add my-box app.example.com
+```
+
 #### `miosa preview get`
 
 Show a preview.
@@ -9524,6 +10605,7 @@ Flags:
 - `--chat string` - Chat id; continues the chat if it has runs.
 - `--computer string` - Computer to run in.
 - `--continue` - Continue the most recent run on the target.
+- `--external-user string` - Run as one of your end users (your own id for them): their connections are used.
 - `--file string` - Read the prompt from a file.
 - `--harness string` - Harness: claude-code, codex, osa, opencode, pi, prime, kimi, mistral, hermes (default: the agent's, or claude-code).
 - `--idempotency-key string` - Replay-safe key: the same key returns the same run.
@@ -10851,7 +11933,9 @@ With no --scope or --preset the key gets the default set of
 scopes.
 Presets: read-only (every :read scope), ci (sandboxes, deployments,
 previews), agent (run agents on sandboxes), cli (what the miosa CLI uses day to
-day, including connections). 'miosa api-key presets' lists them.
+day, including connections), automation (server-side scripts: sandboxes with
+files, exec, logs and services, deployments, agents), full-access (every scope;
+organization owners and admins only). 'miosa api-key presets' lists them.
 Scope names look like sandboxes:exec
 or agents:run; see 'miosa api-key list --json' for what existing keys hold.
 
@@ -10861,7 +11945,7 @@ Flags:
 
 - `--allowed-ip stringArray` - Only accept requests from this IP or CIDR (repeatable).
 - `--expires-in int` - Expire after this many days (default: never).
-- `--preset string` - Permission preset: read-only, ci, agent or cli.
+- `--preset string` - Permission preset: read-only, ci, agent, cli, automation or full-access.
 - `--quiet-key` - Print only the secret.
 - `--rate-limit int` - Requests per minute for this key.
 - `--scope stringArray` - A scope to grant, for example sandboxes:exec (repeatable).

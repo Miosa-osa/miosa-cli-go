@@ -21,7 +21,7 @@ func newDeployPromoteCmd() *cobra.Command {
 
   miosa deploy promote 4bacc5df                        # in a linked folder
   miosa deploy promote 4bacc5df --deployment my-site  # from anywhere
-  miosa deploy promote my-site <release-id>           # promote a release
+  miosa deploy promote my-site <release-id>           # promote a release (full id, or a unique prefix of 6+ characters)
 
 A version uploaded with 'miosa deploy push --no-promote' is not serving yet.
 This makes it live; the deployment keeps its id, URL and domains, and the

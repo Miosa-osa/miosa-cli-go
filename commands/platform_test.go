@@ -41,7 +41,7 @@ func TestPlatformCommandsSendTheRightRequests(t *testing.T) {
 		{args: []string{"deploy", "observe", "my-app"}, method: "GET", path: "/deployments/" + depID + "/observability", reply: `{"summary":{"invocations":330,"error_count":0,"duration_ms":{"p50":3,"p95":9}}}`, wantOut: "330"},
 		{args: []string{"deploy", "releases", "my-app"}, method: "GET", path: "/deployments/" + depID + "/releases", reply: list(`{"id":"e63d6a94-304c-41e4-a028-ef37b2a3d906","state":"ready","port":8080}`), wantOut: "8080"},
 		{args: []string{"deploy", "promote", "my-app", "rel-1"}, method: "POST", path: "/deployments/" + depID + "/releases/rel-1/promote", reply: `{}`, wantOut: "Promoted release rel-1"},
-		{args: []string{"deploy", "redeploy", "my-app"}, method: "POST", path: "/deployments/" + depID + "/redeploy", reply: `{}`, wantOut: "Redeploying my-app"},
+		{args: []string{"deploy", "redeploy", "my-app"}, method: "POST", path: "/deployments/" + depID + "/redeploy", reply: `{}`, wantOut: "Rebuilding my-app"},
 		{args: []string{"deploy", "stop", "my-app", "-y"}, method: "POST", path: "/deployments/" + depID + "/stop", reply: `{}`, wantOut: "Stopped", needsYes: true},
 		{args: []string{"deploy", "builds", "my-app"}, method: "GET", path: "/deployments/" + depID + "/builds", reply: `{"data":[]}`, wantOut: "No results"},
 		{args: []string{"deploy", "env", "my-app"}, method: "GET", path: "/deployments/" + depID + "/env", reply: `{"env_vars":[{"name":"DATABASE_URL"}]}`, wantOut: "DATABASE_URL"},
@@ -396,8 +396,19 @@ func TestAPIKeyCreateTakesThePresetFromTheServer(t *testing.T) {
 	if _, err := run(t, "api-key", "create", "ci", "--preset", "cli"); err != nil {
 		t.Fatal(err)
 	}
-	got, _ := json.Marshal(f.find("POST", "/api-keys")[0].Body["scopes"])
-	if string(got) != `["agents:read","connections:write","zz:server-only"]` {
+	// A preset the server knows is sent by name, so the server expands it and
+	// applies its rules (full-access is owner/admin only).
+	body := f.find("POST", "/api-keys")[0].Body
+	if body["preset"] != "cli" || body["scopes"] != nil {
+		t.Fatalf("the server preset must be sent by name, not as scopes: %v", body)
+	}
+	// With an extra --scope the CLI merges, so it sends the resolved list.
+	if _, err := run(t, "api-key", "create", "ci", "--preset", "cli", "--scope", "billing:read"); err != nil {
+		t.Fatal(err)
+	}
+	merged := f.find("POST", "/api-keys")
+	got, _ := json.Marshal(merged[len(merged)-1].Body["scopes"])
+	if string(got) != `["agents:read","billing:read","connections:write","zz:server-only"]` {
 		t.Fatalf("the server preset must win over the built-in copy: %s", got)
 	}
 	// An older server has no presets route: the built-in copy is used.
@@ -407,6 +418,26 @@ func TestAPIKeyCreateTakesThePresetFromTheServer(t *testing.T) {
 	}
 	if got, _ := json.Marshal(f.find("POST", "/api-keys")[0].Body["scopes"]); !strings.Contains(string(got), "connections:read") {
 		t.Fatalf("fallback preset: %s", got)
+	}
+}
+
+func TestAPIKeyCreateSendsFullAccessAndAutomationByName(t *testing.T) {
+	f := fakeRoutes(t, map[string]any{
+		"GET /api-keys/presets": `{"data":[{"name":"automation","scopes":["sandboxes:exec"]},{"name":"full-access","scopes":["a:read","a:write"]}]}`,
+		"POST /api-keys":        resp{201, `{"data":{"id":"k1","name":"ci","key":"msk_u_SECRET","scopes":[]}}`},
+	})
+	for _, name := range []string{"automation", "full-access"} {
+		if _, err := run(t, "api-key", "create", "k-"+name, "--preset", name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	posts := f.find("POST", "/api-keys")
+	if len(posts) != 2 || posts[0].Body["preset"] != "automation" || posts[1].Body["preset"] != "full-access" {
+		t.Fatalf("bodies = %v", posts)
+	}
+	_, err := run(t, "api-key", "create", "x", "--preset", "everything")
+	if err == nil || commands.ExitCode(err) != commands.ExitUsage || !strings.Contains(err.Error(), "automation or full-access") {
+		t.Fatalf("usage error must list every preset: %v", err)
 	}
 }
 

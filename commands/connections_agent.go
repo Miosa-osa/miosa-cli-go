@@ -253,6 +253,9 @@ func signinHint(err error) error {
 	if errors.As(err, &ae) && (ae.Code == "SIGNIN_TARGET_NOT_FOUND" || ae.Code == "SIGNIN_TARGET_NOT_READY") {
 		return fmt.Errorf("this server signs in inside a machine: pass --sandbox NAME or --computer NAME: %w", err)
 	}
+	if errors.As(err, &ae) && ae.Code == "WOULD_REPLACE_ORGANIZATION_LOGIN" {
+		return fmt.Errorf("this would replace your organization's sign-in for every run; add --replace to do that, or --external-user / --workspace-id to add a separate one: %w", err)
+	}
 	return sessionHint(err)
 }
 

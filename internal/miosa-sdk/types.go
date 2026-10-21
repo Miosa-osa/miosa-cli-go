@@ -40,7 +40,7 @@ type ComputerData struct {
 	TenantID      string             `json:"tenant_id"`
 	WorkspaceID   *string            `json:"workspace_id"`
 	IPAddress     *string            `json:"ip_address"`
-	Metadata      map[string]string  `json:"metadata"`
+	Metadata      map[string]any     `json:"metadata"`
 	PreviewDomain string             `json:"preview_domain"`
 	CreatedAt     string             `json:"created_at"`
 	UpdatedAt     string             `json:"updated_at"`
@@ -334,13 +334,13 @@ type CreditUsage struct {
 
 // Workspace groups related computers under a shared namespace.
 type Workspace struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	TenantID    string            `json:"tenant_id"`
-	Description string            `json:"description"`
-	Metadata    map[string]string `json:"metadata"`
-	CreatedAt   string            `json:"created_at"`
-	UpdatedAt   string            `json:"updated_at"`
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	TenantID    string         `json:"tenant_id"`
+	Description string         `json:"description"`
+	Metadata    map[string]any `json:"metadata"`
+	CreatedAt   string         `json:"created_at"`
+	UpdatedAt   string         `json:"updated_at"`
 }
 
 // CreateWorkspaceInput is the request body for POST /workspaces.
