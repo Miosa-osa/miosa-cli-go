@@ -61,6 +61,7 @@ Regenerate with `make docs`.
 - [`miosa import`](#miosa-import) - Load a CSV into a managed database, or a Notion export into an Engine
 - [`miosa info`](#miosa-info) - Show a machine's state, environment and setup status
 - [`miosa limits`](#miosa-limits) - Limits of the organization a new machine would bill
+- [`miosa link`](#miosa-link) - Attach this directory to a project, Deploy target and service
 - [`miosa list`](#miosa-list) - List sandboxes
 - [`miosa login`](#miosa-login) - Sign in to MIOSA
 - [`miosa logout`](#miosa-logout) - Sign out: revoke the stored key on the server and remove it
@@ -101,10 +102,12 @@ Regenerate with `make docs`.
 - [`miosa tag`](#miosa-tag) - Show, add or remove sandbox tags
 - [`miosa template`](#miosa-template) - Sandbox templates
 - [`miosa token`](#miosa-token) - Mint short-lived tokens for your end users
+- [`miosa unlink`](#miosa-unlink) - Detach this directory from its project
 - [`miosa update`](#miosa-update) - Update the miosa CLI to the latest release
 - [`miosa url`](#miosa-url) - Print the public URL for a sandbox
 - [`miosa usage`](#miosa-usage) - Show runtime, time left and estimated cost
 - [`miosa use`](#miosa-use) - Set (or show) the current sandbox
+- [`miosa variables`](#miosa-variables) - Read and write variables of the linked project, target or service
 - [`miosa version`](#miosa-version) - Print the CLI version
 - [`miosa volume`](#miosa-volume) - Persistent volumes shared between machines
 - [`miosa wait`](#miosa-wait) - Wait until a sandbox reaches a state
@@ -7343,6 +7346,39 @@ miosa function
 
 Aliases: `functions`, `fn`.
 
+#### `miosa function create`
+
+Create a function from a source file.
+
+```
+miosa function create <name> [flags]
+```
+
+Create a function. --kind http runs it on the host function pool: a Node module whose
+default export is a web handler (Request in, Response out) or a (req, res) function.
+Without
+--kind the server creates the original stdout-envelope script function.
+
+```
+  miosa function create hook --kind http --code-file index.js
+  miosa function create hook --kind http --code-file index.js --env MODE=prod --memory-mb 512
+
+```
+An http function answers 'serving: false' with a reason (no_fn_hosts, not_published) until a host
+that has its runtime accepts it; invoke answers FUNCTION_NOT_PUBLISHED meanwhile.
+
+Flags:
+
+- `--code-file string` - File holding the function source.
+- `--entrypoint string` - Module file name inside the bundle (default index.js).
+- `--env stringArray` - Environment variable KEY=VALUE (repeatable).
+- `--kind string` - Kind: script (default) or http (host function pool) (script|http).
+- `--memory-mb int` - Memory in MB; an http function runs only at the sizes a host serves (default 512).
+- `--project string` - Project id to attach the function to.
+- `--runtime string` - Runtime (an http function supports node).
+- `--timeout-sec int` - Per-request time limit in seconds, 1-300.
+- `--workspace-id string` - Workspace id.
+
 #### `miosa function get`
 
 Show a function.
@@ -7375,6 +7411,29 @@ miosa function list
 
 Aliases: `ls`.
 
+#### `miosa function logs`
+
+Show an http function's recent output.
+
+```
+miosa function logs <function> [flags]
+```
+
+Prints what the function's handler wrote to stdout and stderr, merged across the hosts that
+serve it and oldest first.
+This is a recent window kept by the running instances, not a log
+store: lines from instances that were replaced or stopped are gone.
+
+```
+  miosa function logs hook
+  miosa function logs hook --since 15m -n 200
+```
+
+Flags:
+
+- `-n, --lines int` - Most lines to show (default 500, at most 2000).
+- `--since string` - Only lines newer than this, such as 90s, 15m or 2h.
+
 #### `miosa function rm`
 
 Delete a function.
@@ -7388,6 +7447,33 @@ Aliases: `delete`.
 Flags:
 
 - `-y, --yes` - Do not ask for confirmation.
+
+#### `miosa function update`
+
+Change a function's code or settings.
+
+```
+miosa function update <function> [flags]
+```
+
+Change a function.
+Only the flags you pass are sent.
+A new --code-file or a changed setting
+publishes a new version of an http function to its hosts.
+
+```
+  miosa function update hook --code-file index.js
+  miosa function update hook --state disabled
+```
+
+Flags:
+
+- `--code-file string` - File holding the function source.
+- `--entrypoint string` - Module file name inside the bundle (default index.js).
+- `--env stringArray` - Environment variable KEY=VALUE (repeatable).
+- `--memory-mb int` - Memory in MB; an http function runs only at the sizes a host serves (default 512).
+- `--state string` - State: active or disabled (active|disabled).
+- `--timeout-sec int` - Per-request time limit in seconds, 1-300.
 
 ### `miosa gateway`
 
@@ -8916,6 +9002,64 @@ Flags:
 - `--to string` - Destination: db:<database>/<table> or engine:<workspace>.
 - `--watch` - Follow an Engine import until it finishes.
 
+#### `miosa import railway`
+
+Import a Railway project (dry run unless --apply).
+
+```
+miosa import railway [flags]
+```
+
+Read one Railway project through Railway's public API with your own token and
+write a plan: the MIOSA project, Deploy targets, services, databases and variable
+names it would create, and everything it cannot carry (build commands, health
+checks, volumes, Railway domains, custom domains).
+
+```
+  miosa import railway --project acme-api                      # review the plan
+  miosa import railway --project acme-api --out plan.json      # keep it
+  miosa import railway --apply --plan plan.json                # create it
+
+```
+The token is read from RAILWAY_TOKEN, --token-file, or a prompt.
+It is never
+stored.
+Variable values are not copied unless you pass --copy-variables, which
+prints a warning: Railway's secrets were exposed in 2025, so rotate them.
+
+With --from-file, a railway.json or railway.toml is read locally and no token
+or network call is needed.
+
+RAILWAY_API_URL overrides the Railway endpoint (for a proxy or recorded
+fixtures).
+
+Guide: https://miosa.ai/docs/migrate/railway
+
+Flags:
+
+- `--allow-missing-values` - Create variables with no value as empty strings.
+- `--apply` - Create what the plan says.
+- `--cleanup` - Delete exactly the ids recorded in --state.
+- `--copy-variables` - Copy variable values, not just names (prints a warning).
+- `--environment string` - Railway environment to import. (default `production`)
+- `--from-file string` - Read railway.json or railway.toml instead of the API.
+- `--include-targets` - Also import other Railway environments as Deploy targets.
+- `--into string` - Import into an existing MIOSA project.
+- `--name string` - MIOSA project name (default: the Railway project name).
+- `--only stringSlice` - Import only these services (comma separated).
+- `--out string` - Write the plan JSON here.
+- `--plan string` - With --apply: the plan to apply.
+- `--project string` - Railway project id or name.
+- `--region string` - With --apply: MIOSA region for services whose Railway region has no equivalent.
+- `--resume` - Continue an interrupted apply.
+- `--service-name string` - With --from-file: the service name.
+- `--state string` - Where created ids are recorded (default .miosa/import-railway-<project>.json).
+- `--token string` - Railway token (prefer RAILWAY_TOKEN or --token-file).
+- `--token-file string` - File holding the Railway token.
+- `--via string` - How to read Railway: token (default) or railway-cli (its logged-in session).
+- `--workspace string` - MIOSA workspace (slug, name or id).
+- `--yes` - With --cleanup: do not ask.
+
 ### `miosa info`
 
 Show a machine's state, environment and setup status.
@@ -8950,6 +9094,32 @@ spend cap, and your own caps in it.
 It changes nothing.
 
 Use --bill-to to ask about another organization you can bill.
+
+### `miosa link`
+
+Attach this directory to a project, Deploy target and service.
+
+```
+miosa link <project> [flags]
+```
+
+Write the project, Deploy target and service to .miosa/link.json so later
+commands need no arguments.
+
+```
+  miosa link cliniciq
+  miosa link cliniciq --environment staging --service API
+  miosa status            # the linked project and service
+  miosa unlink
+
+```
+The link holds names and ids, never a key.
+
+Flags:
+
+- `--deploy-target string` - Alias of --environment.
+- `--environment string` - Deploy target (default: the project's default).
+- `--service string` - Service to link.
 
 ### `miosa list`
 
@@ -10750,6 +10920,7 @@ Flags:
 - `--meta stringArray` - Metadata KEY=VALUE on the sandbox (repeatable).
 - `--name string` - Name for the sandbox.
 - `--rm` - Destroy the sandbox when the command finishes.
+- `--sandbox` - In a linked directory, use a sandbox instead of running here.
 - `--set stringArray` - Environment variable KEY=VALUE for the command (repeatable).
 - `--size string` - Sandbox size, as for 'miosa create'.
 - `--template string` - Sandbox template (default miosa-sandbox).
@@ -12718,6 +12889,14 @@ Flags:
 
 - `-y, --yes` - Do not ask for confirmation.
 
+### `miosa unlink`
+
+Detach this directory from its project.
+
+```
+miosa unlink
+```
+
 ### `miosa update`
 
 Update the miosa CLI to the latest release.
@@ -12794,6 +12973,127 @@ The sandbox must exist.
 Flags:
 
 - `--clear` - Forget the current sandbox.
+
+### `miosa variables`
+
+Read and write variables of the linked project, target or service.
+
+```
+miosa variables
+```
+
+Read and write variables without repeating the project and service.
+
+```
+  miosa variables list                     # the linked service
+  miosa variables list --shared            # the Deploy target's shared variables
+  miosa variables set API_BASE=https://example.test
+  miosa variables set CALLBACK='${{API_BASE}}/cb'
+  miosa variables unset OLD_KEY
+  miosa variables import .env
+  miosa variables export > .env
+
+```
+A value may be a reference: ${{Service.NAME}}, ${{shared.NAME}}, ${{NAME}} (this
+service) or ${{secret(32)}}.
+References are checked before the write.
+
+--skip-deploys is accepted for Railway compatibility: a variable write never
+redeploys here; the service reports a pending rebuild or redeploy instead.
+
+Aliases: `vars`.
+
+#### `miosa variables export`
+
+Print the target's variables as .env lines.
+
+```
+miosa variables export [flags]
+```
+
+Print KEY="VALUE" lines, or `export KEY="VALUE"` with --shell so the output
+can be sourced.
+Values are printed to stdout only; nothing is written to disk.
+
+Flags:
+
+- `--deploy-target string` - Alias of --environment.
+- `--environment string` - Deploy target (default: the linked one).
+- `--service string` - Service (default: the linked one).
+- `--shared` - The Deploy target's shared variables.
+- `--shell` - Prefix each line with export.
+
+#### `miosa variables import`
+
+Set variables from a .env file (or stdin).
+
+```
+miosa variables import <file|-> [flags]
+```
+
+Read KEY=VALUE lines and set them on the target.
+Blank lines, comments and a
+leading "export " are ignored; quotes are stripped. "-" reads stdin, so a pasted
+block works:
+
+```
+  miosa variables import -
+  miosa variables import .env
+```
+
+Flags:
+
+- `--deploy-target string` - Alias of --environment.
+- `--environment string` - Deploy target (default: the linked one).
+- `--service string` - Service (default: the linked one).
+- `--shared` - Write the Deploy target's shared variables.
+
+#### `miosa variables list`
+
+List variables of the linked service or the shared set.
+
+```
+miosa variables list [project] [service] [flags]
+```
+
+Flags:
+
+- `--deploy-target string` - Alias of --environment.
+- `--environment string` - Deploy target (default: the linked one).
+- `--kv` - Print NAME=VALUE lines.
+- `--service string` - Service (default: the linked one).
+- `--shared` - The Deploy target's shared variables.
+
+#### `miosa variables set`
+
+Set variables on the linked service or the shared set.
+
+```
+miosa variables set KEY=VALUE [KEY=VALUE...] [flags]
+```
+
+Flags:
+
+- `--deploy-target string` - Alias of --environment.
+- `--environment string` - Deploy target (default: the linked one).
+- `--service string` - Service (default: the linked one).
+- `--shared` - Write the Deploy target's shared variables.
+- `--skip-deploys` - Railway compatibility: do not redeploy (never does).
+
+#### `miosa variables unset`
+
+Delete variables from the linked service or the shared set.
+
+```
+miosa variables unset NAME [NAME...] [flags]
+```
+
+Flags:
+
+- `--deploy-target string` - Alias of --environment.
+- `--environment string` - Deploy target (default: the linked one).
+- `--service string` - Service (default: the linked one).
+- `--shared` - Write the Deploy target's shared variables.
 
 ### `miosa version`
 

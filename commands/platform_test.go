@@ -5,8 +5,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Miosa-osa/miosa-cli-go/commands"
 )
@@ -526,5 +528,114 @@ func TestScheduleOnASandboxShowsTheSandbox(t *testing.T) {
 	}
 	if !strings.Contains(out, "44aa11bb") {
 		t.Fatalf("ON should show the sandbox: %s", out)
+	}
+}
+
+func TestFunctionCreateReadsTheCodeFileAndSendsTheKind(t *testing.T) {
+	f := fakeRoutes(t, map[string]any{
+		"POST /functions": resp{201, `{"id":"f2f2f2f2-0000-0000-0000-000000000000","name":"hook","kind":"http","runtime":"node","state":"active","serving":false,"serving_reason":"no_fn_hosts"}`},
+	})
+	p := filepath.Join(t.TempDir(), "index.js")
+	if err := os.WriteFile(p, []byte("export default () => new Response('ok')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, "function", "create", "hook", "--kind", "http", "--code-file", p, "--entrypoint", "index.js",
+		"--env", "MODE=prod", "--memory-mb", "512", "--timeout-sec", "10", "--workspace-id", wsID, "--project", tzID)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	b := f.find("POST", "/functions")[0].Body
+	env, _ := b["env"].(map[string]any)
+	if b["name"] != "hook" || b["kind"] != "http" || b["code"] != "export default () => new Response('ok')\n" ||
+		b["entrypoint"] != "index.js" || env["MODE"] != "prod" || b["memory_mb"] != float64(512) ||
+		b["timeout_sec"] != float64(10) || b["workspace_id"] != wsID || b["project_id"] != tzID {
+		t.Fatalf("body = %v", b)
+	}
+	if _, has := b["code_file"]; has {
+		t.Fatalf("the file path must not be sent: %v", b)
+	}
+	// a function nobody serves says so, with the reason, instead of looking healthy
+	if !strings.Contains(out, "no_fn_hosts") {
+		t.Fatalf("serving state missing from the output:\n%s", out)
+	}
+}
+
+func TestFunctionCreateWithoutKindLeavesItToTheServer(t *testing.T) {
+	f := fakeRoutes(t, map[string]any{"POST /functions": resp{201, `{"id":"f3","name":"old","kind":"script","state":"active"}`}})
+	p := filepath.Join(t.TempDir(), "main.js")
+	_ = os.WriteFile(p, []byte("console.log(1)"), 0o600)
+	if _, err := run(t, "function", "create", "old", "--code-file", p); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := f.find("POST", "/functions")[0].Body["kind"]; has {
+		t.Fatalf("no --kind means the server default, got %v", f.find("POST", "/functions")[0].Body)
+	}
+}
+
+func TestFunctionCreateRefusesAMissingOrUnreadableCodeFile(t *testing.T) {
+	fakeRoutes(t, map[string]any{"POST /functions": resp{201, `{}`}})
+	if _, err := run(t, "function", "create", "hook"); err == nil {
+		t.Fatal("--code-file is required")
+	}
+	if _, err := run(t, "function", "create", "hook", "--code-file", filepath.Join(t.TempDir(), "nope.js")); err == nil {
+		t.Fatal("an unreadable code file must fail before any request")
+	}
+	if _, err := run(t, "function", "create", "hook", "--code-file", "x.js", "--kind", "wasm"); err == nil {
+		t.Fatal("an unknown kind is refused")
+	}
+}
+
+func TestFunctionUpdateSendsOnlyWhatChanged(t *testing.T) {
+	f := fakeRoutes(t, map[string]any{"PATCH /functions/hook": `{"id":"f2","name":"hook","kind":"http","serving":true}`})
+	p := filepath.Join(t.TempDir(), "index.js")
+	_ = os.WriteFile(p, []byte("v2"), 0o600)
+	if _, err := run(t, "function", "update", "hook", "--code-file", p, "--timeout-sec", "20"); err != nil {
+		t.Fatal(err)
+	}
+	b := f.find("PATCH", "/functions/hook")[0].Body
+	if b["code"] != "v2" || b["timeout_sec"] != float64(20) || len(b) != 2 {
+		t.Fatalf("body = %v", b)
+	}
+	if _, err := run(t, "function", "update", "hook", "--state", "disabled"); err != nil {
+		t.Fatal(err)
+	}
+	if b := f.find("PATCH", "/functions/hook")[1].Body; b["state"] != "disabled" || len(b) != 1 {
+		t.Fatalf("body = %v", b)
+	}
+}
+
+func TestFunctionLogsAsksForTheWindowAndPrintsTheLines(t *testing.T) {
+	f := fakeRoutes(t, map[string]any{
+		"GET /functions/hook/logs": `{"data":[{"line":"starting","stream":"stdout","node":"host-a","time_ms":1},{"line":"warn: slow","stream":"stderr","node":"host-a","time_ms":2}],"hosts_read":["host-a"],"hosts_failed":[]}`,
+	})
+	before := time.Now().Add(-15 * time.Minute).UnixMilli()
+	out, err := run(t, "function", "logs", "hook", "--since", "15m", "-n", "50")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "starting") || !strings.Contains(out, "warn: slow") {
+		t.Fatalf("lines missing:\n%s", out)
+	}
+	q, _ := url.ParseQuery(f.find("GET", "/functions/hook/logs")[0].Query)
+	since, _ := strconv.ParseInt(q.Get("since_ms"), 10, 64)
+	if q.Get("limit") != "50" || since < before-2000 || since > before+60000 {
+		t.Fatalf("query = %v (since %d, want about %d)", q, since, before)
+	}
+}
+
+func TestFunctionLogsWithoutFlagsSendsNoWindow(t *testing.T) {
+	f := fakeRoutes(t, map[string]any{"GET /functions/hook/logs": `{"data":[],"hosts_read":["host-a"],"hosts_failed":[]}`})
+	if _, err := run(t, "function", "logs", "hook"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.find("GET", "/functions/hook/logs")[0].Query; got != "" {
+		t.Fatalf("query = %q", got)
+	}
+}
+
+func TestFunctionLogsRefusesABadSince(t *testing.T) {
+	fakeRoutes(t, map[string]any{"GET /functions/hook/logs": `{"data":[]}`})
+	if _, err := run(t, "function", "logs", "hook", "--since", "soon"); err == nil {
+		t.Fatal("a --since that is not a duration is refused before any request")
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -564,6 +566,69 @@ func scheduleCreateBody(_ []string, body map[string]any) (map[string]any, error)
 	return body, nil
 }
 
+// functionFlags are the settings create and update share. --code-file is read by the command
+// and sent as `code`; the path itself never reaches the server.
+func functionFlags(create bool) []Flag {
+	flags := []Flag{
+		{Name: "code-file", Usage: "File holding the function source", Field: "code_file", Required: create},
+		{Name: "entrypoint", Usage: "Module file name inside the bundle (default index.js)"},
+		{Name: "env", Usage: "Environment variable KEY=VALUE (repeatable)", Type: "kv"},
+		{Name: "memory-mb", Usage: "Memory in MB; an http function runs only at the sizes a host serves (default 512)", Type: "int", Field: "memory_mb"},
+		{Name: "timeout-sec", Usage: "Per-request time limit in seconds, 1-300", Type: "int", Field: "timeout_sec"},
+	}
+	if create {
+		flags = append(flags,
+			Flag{Name: "kind", Usage: "Kind: script (default) or http (host function pool)", Enum: []string{"script", "http"}},
+			Flag{Name: "runtime", Usage: "Runtime (an http function supports node)"},
+			Flag{Name: "workspace-id", Usage: "Workspace id", Field: "workspace_id"},
+			Flag{Name: "project", Usage: "Project id to attach the function to", Field: "project_id"},
+		)
+	}
+	return flags
+}
+
+// functionCodeBody turns --code-file into the `code` field and, for create, the name argument
+// into `name`. An unreadable file stops the command before any request.
+func functionCodeBody(withName bool) func(args []string, body map[string]any) (map[string]any, error) {
+	return func(args []string, body map[string]any) (map[string]any, error) {
+		if withName {
+			body["name"] = args[0]
+		}
+		if path, ok := body["code_file"].(string); ok {
+			delete(body, "code_file")
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return nil, fmt.Errorf("--code-file: %w", err)
+			}
+			body["code"] = string(raw)
+		}
+		return body, nil
+	}
+}
+
+// functionLogsQuery turns --since (a duration) into the unix-millisecond cursor the API takes.
+func functionLogsQuery(_ []string, q url.Values) error {
+	raw := q.Get("since_ms")
+	if raw == "" {
+		return nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return fmt.Errorf("--since must be a duration such as 90s, 15m or 2h (got %q)", raw)
+	}
+	q.Set("since_ms", strconv.FormatInt(time.Now().Add(-d).UnixMilli(), 10))
+	return nil
+}
+
+func functionDetail() []Col {
+	return []Col{
+		{Head: "Name", Path: "name"}, {Head: "Id", Path: "id"}, {Head: "Kind", Path: "kind"},
+		{Head: "Runtime", Path: "runtime"}, {Head: "State", Path: "state"},
+		{Head: "Serving", Path: "serving"}, {Head: "Why not", Path: "serving_reason"},
+		{Head: "Version", Path: "pool_version"},
+	}
+}
+
 func functionCmd() *cobra.Command {
 	f := idArg("function")
 	return group("function", "Edge functions", "<function> is a name or id.", []string{"functions", "fn"},
@@ -581,6 +646,49 @@ func functionCmd() *cobra.Command {
 				}
 				return body, nil
 			},
+		},
+		Op{
+			Use: "create <name>", Short: "Create a function from a source file",
+			Long: `Create a function. --kind http runs it on the host function pool: a Node module whose
+default export is a web handler (Request in, Response out) or a (req, res) function. Without
+--kind the server creates the original stdout-envelope script function.
+
+  miosa function create hook --kind http --code-file index.js
+  miosa function create hook --kind http --code-file index.js --env MODE=prod --memory-mb 512
+
+An http function answers 'serving: false' with a reason (no_fn_hosts, not_published) until a host
+that has its runtime accepts it; invoke answers FUNCTION_NOT_PUBLISHED meanwhile.`,
+			Method: "POST", Path: "/functions", Args: []Arg{idArg("name")},
+			Flags:  functionFlags(true),
+			Body:   functionCodeBody(true),
+			Detail: functionDetail(),
+		},
+		Op{
+			Use: "logs <function>", Short: "Show an http function's recent output",
+			Long: `Prints what the function's handler wrote to stdout and stderr, merged across the hosts that
+serve it and oldest first. This is a recent window kept by the running instances, not a log
+store: lines from instances that were replaced or stopped are gone.
+
+  miosa function logs hook
+  miosa function logs hook --since 15m -n 200`,
+			Method: "GET", Path: "/functions/{0}/logs", Args: []Arg{f}, Lines: "data",
+			Flags: []Flag{
+				{Name: "since", Usage: "Only lines newer than this, such as 90s, 15m or 2h", Field: "since_ms"},
+				{Name: "lines", Short: "n", Type: "int", Usage: "Most lines to show (default 500, at most 2000)", Field: "limit"},
+			},
+			Query: functionLogsQuery,
+		},
+		Op{
+			Use: "update <function>", Short: "Change a function's code or settings",
+			Long: `Change a function. Only the flags you pass are sent. A new --code-file or a changed setting
+publishes a new version of an http function to its hosts.
+
+  miosa function update hook --code-file index.js
+  miosa function update hook --state disabled`,
+			Method: "PATCH", Path: "/functions/{0}", Args: []Arg{f},
+			Flags:  append(functionFlags(false), Flag{Name: "state", Usage: "State: active or disabled", Enum: []string{"active", "disabled"}}),
+			Body:   functionCodeBody(false),
+			Detail: functionDetail(),
 		},
 		Op{Use: "rm <function>", Aliases: []string{"delete"}, Short: "Delete a function", Method: "DELETE", Path: "/functions/{0}", Args: []Arg{f}, Confirm: "Delete function {0}?", Done: "Deleted {0}"},
 	)

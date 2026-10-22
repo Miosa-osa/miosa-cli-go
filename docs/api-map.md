@@ -198,10 +198,13 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa forge release show` | GET | `/forge/repositories/{0}/releases/{1}` |
 | `miosa forge release tag` | POST | `/forge/repositories/{0}/tags` |
 | `miosa fork` | POST | `/sandboxes/{0}/fork` |
+| `miosa function create` | POST | `/functions` |
 | `miosa function get` | GET | `/functions/{0}` |
 | `miosa function invoke` | POST | `/functions/{0}/invoke` |
 | `miosa function list` | GET | `/functions` |
+| `miosa function logs` | GET | `/functions/{0}/logs` |
 | `miosa function rm` | DELETE | `/functions/{0}` |
+| `miosa function update` | PATCH | `/functions/{0}` |
 | `miosa gateway budget set` | PUT | `/ai-gateway/budget` |
 | `miosa gateway budget show` | GET | `/ai-gateway/budget` |
 | `miosa gateway environments` | GET | `/ai-gateway/environments` |
