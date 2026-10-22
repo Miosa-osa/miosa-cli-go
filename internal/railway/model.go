@@ -110,6 +110,7 @@ type Service struct {
 	HealthcheckPath    string
 	HealthcheckTimeout int
 	RestartPolicy      string
+	RestartMaxRetries  int
 	NumReplicas        int
 	Region             string
 	CronSchedule       string

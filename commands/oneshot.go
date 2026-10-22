@@ -25,6 +25,11 @@ func attachOneShot(cmd *cobra.Command) {
 	cmd.Args = cobra.ArbitraryArgs
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
+			if link, err := readLink(); err == nil && link.Service != "" {
+				fmt.Fprintf(cmd.ErrOrStderr(),
+					"In %s: `miosa run -- <cmd>` runs a command here with this service's variables; `miosa run list` lists agent runs.\n",
+					link.Service)
+			}
 			return cmd.Help()
 		}
 		if cmd.ArgsLenAtDash() < 0 {

@@ -212,8 +212,9 @@ func waitSandbox(ctx context.Context, c *api.Client, id, target string, timeout 
 
 func newLogsCmd() *cobra.Command {
 	var (
-		lines  int
-		follow bool
+		lines    int
+		follow   bool
+		buildLog bool
 	)
 	cmd := &cobra.Command{
 		Use:   "logs [sandbox]",
@@ -229,6 +230,13 @@ For a background process use 'miosa process logs'. With --json each line is an o
 			c, cfg, err := buildClient()
 			if err != nil {
 				return die(err)
+			}
+			// In a linked directory with no sandbox named, `miosa logs` is the
+			// linked service's log (Railway's meaning).
+			if len(args) == 0 {
+				if link, lerr := readLink(); lerr == nil && link.ServiceID != "" {
+					return linkedServiceLogs(cmd, c.API, link, buildLog, follow, lines)
+				}
 			}
 			ref := ""
 			if len(args) > 0 {
@@ -277,6 +285,7 @@ For a background process use 'miosa process logs'. With --json each line is an o
 	}
 	cmd.Flags().IntVarP(&lines, "lines", "n", 100, "Number of recent lines")
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "Keep streaming new lines")
+	cmd.Flags().BoolVar(&buildLog, "build", false, "With a link: the service's build log instead of its runtime log")
 	return cmd
 }
 

@@ -15,7 +15,7 @@ const PlanVersion = 1
 
 // RotationWarning is printed on every plan, because it is the one thing a
 // Railway user must hear before trusting an import.
-const RotationWarning = "Railway's secrets were exposed in the 2025 leak. " +
+const RotationWarning = "Railway disclosed on 2026-10-21 that its secrets were exposed. " +
 	"Rotate every secret you rely on; no literal secret is copied unless you pass --copy-variables."
 
 // Plan is what the user reviews and what --apply executes.
@@ -100,10 +100,15 @@ type BuildSetting struct {
 
 // ServiceSetting is the run half of a service.
 type ServiceSetting struct {
-	StartCommand string `json:"start_command,omitempty"`
-	Replicas     int    `json:"replicas,omitempty"`
-	Region       string `json:"region,omitempty"`
-	CronSchedule string `json:"cron_schedule,omitempty"`
+	StartCommand       string `json:"start_command,omitempty"`
+	Replicas           int    `json:"replicas,omitempty"`
+	Region             string `json:"region,omitempty"`
+	CronSchedule       string `json:"cron_schedule,omitempty"`
+	HealthcheckPath    string `json:"healthcheck_path,omitempty"`
+	HealthcheckTimeout int    `json:"healthcheck_timeout_s,omitempty"`
+	RestartPolicy      string `json:"restart_policy,omitempty"`
+	MaxRetries         int    `json:"max_retries,omitempty"`
+	PreDeployCommand   string `json:"pre_deploy_command,omitempty"`
 }
 
 // Options shape the plan: where it writes and how far it goes.
@@ -115,6 +120,8 @@ type Options struct {
 	CopyVariables  bool
 	// Only keeps these services (case-insensitive). Empty keeps every one.
 	Only []string
+	// Exclude leaves these services out; it is applied after Only.
+	Exclude []string
 }
 
 // Build turns a Railway read into a plan. It touches nothing: the same source
@@ -125,6 +132,7 @@ func Build(src Source, opts Options) (Plan, error) {
 		name = src.ProjectName
 	}
 	src, skipped := filterServices(src, opts.Only)
+	src, excluded := excludeServices(src, opts.Exclude)
 	digest, err := digestOf(src)
 	if err != nil {
 		return Plan{}, err
@@ -213,6 +221,10 @@ func Build(src Source, opts Options) (Plan, error) {
 		plan.Warnings = append(plan.Warnings, fmt.Sprintf(
 			"not imported (--only): %s", strings.Join(skipped, ", ")))
 	}
+	if len(excluded) > 0 {
+		plan.Warnings = append(plan.Warnings, fmt.Sprintf(
+			"not imported (--exclude): %s", strings.Join(excluded, ", ")))
+	}
 	if needsValue > 0 {
 		plan.Warnings = append(plan.Warnings, fmt.Sprintf(
 			"%d variable(s) have no value: fill them in before the first deploy (--allow-missing-values creates them empty).",
@@ -224,9 +236,13 @@ func Build(src Source, opts Options) (Plan, error) {
 func serviceActions(svc Service) []Action {
 	kind, schedule := serviceKind(svc)
 	setting := &ServiceSetting{
-		StartCommand: svc.StartCommand,
-		Region:       mapRegion(svc.Region),
-		CronSchedule: schedule,
+		StartCommand:       svc.StartCommand,
+		Region:             mapRegion(svc.Region),
+		CronSchedule:       schedule,
+		HealthcheckPath:    svc.HealthcheckPath,
+		HealthcheckTimeout: svc.HealthcheckTimeout,
+		RestartPolicy:      mapRestartPolicy(svc.RestartPolicy),
+		MaxRetries:         svc.RestartMaxRetries,
 	}
 	setting.Replicas = svc.NumReplicas
 	if setting.Replicas > 50 {
@@ -296,11 +312,9 @@ func unmappedServiceActions(svc Service) []Action {
 		add("buildCommand", "MIOSA builds from the Dockerfile or detects the stack; there is no build command setting",
 			"move it into the Dockerfile or a build script")
 	}
-	if svc.HealthcheckPath != "" {
-		add("healthcheckPath", "MIOSA checks readiness on the service's port", "none")
-	}
-	if svc.RestartPolicy != "" {
-		add("restartPolicyType", "MIOSA restarts a failed release by policy", "none")
+	if svc.RestartPolicy != "" && mapRestartPolicy(svc.RestartPolicy) == "" {
+		add("restartPolicyType", fmt.Sprintf("Railway policy %q has no MIOSA equivalent", svc.RestartPolicy),
+			"set restart_policy to always, on_failure or never after the import")
 	}
 	for _, v := range svc.Volumes {
 		add("volume "+v.MountPath, fmt.Sprintf("the Services API has no service volumes; Railway mounted %d MB at %s", v.SizeMB, v.MountPath),
@@ -376,9 +390,25 @@ func unmappedDatabase(svc Service, engine string) []Action {
 	}
 	for _, v := range svc.Volumes {
 		add("volume "+v.MountPath, fmt.Sprintf("Railway mounted %d MB at %s", v.SizeMB, v.MountPath),
-			"the managed database has its own storage")
+			fmt.Sprintf("MIOSA provisions %s at size small; confirm its storage covers %d MB, or resize it after the import", engine, v.SizeMB))
 	}
 	return actions
+}
+
+// mapRestartPolicy maps Railway's restart policy onto the service setting the
+// engine enforces (always, on_failure, never). An unknown value is "" and the
+// plan reports it instead of guessing.
+func mapRestartPolicy(policy string) string {
+	switch strings.ToUpper(strings.TrimSpace(policy)) {
+	case "ALWAYS":
+		return "always"
+	case "ON_FAILURE", "ON-FAILURE":
+		return "on_failure"
+	case "NEVER":
+		return "never"
+	default:
+		return ""
+	}
 }
 
 // mapRegion turns Railway's region ids into MIOSA's three regions. An unknown
@@ -437,6 +467,34 @@ func filterServices(src Source, only []string) (Source, []string) {
 	}
 	sort.Strings(skipped)
 	return src, skipped
+}
+
+// excludeServices drops the named services and reports them, including a name
+// that matches nothing so a typo is visible.
+func excludeServices(src Source, names []string) (Source, []string) {
+	if len(names) == 0 {
+		return src, nil
+	}
+	drop := map[string]bool{}
+	for _, name := range names {
+		drop[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	kept := make([]Service, 0, len(src.Services))
+	var removed []string
+	for _, svc := range src.Services {
+		if drop[strings.ToLower(svc.Name)] {
+			removed = append(removed, svc.Name)
+			delete(drop, strings.ToLower(svc.Name))
+			continue
+		}
+		kept = append(kept, svc)
+	}
+	src.Services = kept
+	for missing := range drop {
+		removed = append(removed, missing+" (not in this project)")
+	}
+	sort.Strings(removed)
+	return src, removed
 }
 
 // repoURL expands Railway's "owner/repo" to a URL. Anything with a scheme or a

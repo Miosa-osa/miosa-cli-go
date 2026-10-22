@@ -44,10 +44,12 @@ Regenerate with `make docs`.
 - [`miosa destroy`](#miosa-destroy) - Permanently destroy sandboxes
 - [`miosa device`](#miosa-device) - Every machine you can run work on, across runtime kinds
 - [`miosa doctor`](#miosa-doctor) - Diagnose configuration, connectivity and authentication
+- [`miosa domain`](#miosa-domain) - Custom domains of the linked service
 - [`miosa egress`](#miosa-egress) - Outbound network policy for sandboxes
 - [`miosa email`](#miosa-email) - Send email from your apps through MIOSA
 - [`miosa engine`](#miosa-engine) - Operate an Optimal Engine: managed Engines on MIOSA, and two-Engine sync
 - [`miosa env`](#miosa-env) - Manage environments (what new machines start with)
+- [`miosa environment`](#miosa-environment) - List, create, fork and remove a project's Deploy targets
 - [`miosa events`](#miosa-events) - Stream a sandbox's lifecycle events
 - [`miosa exec`](#miosa-exec) - Execute a command in a sandbox
 - [`miosa export`](#miosa-export) - Export everything an organization (or one workspace) owns
@@ -85,9 +87,11 @@ Regenerate with `make docs`.
 - [`miosa proxy`](#miosa-proxy) - Forward local ports to sandbox ports
 - [`miosa ps`](#miosa-ps) - List background processes (same as 'process list')
 - [`miosa recover`](#miosa-recover) - Recover a sandbox from its disk into a NEW sandbox
+- [`miosa redeploy`](#miosa-redeploy) - Build and release the linked service again
 - [`miosa regions`](#miosa-regions) - List regions and whether they have capacity
 - [`miosa restore`](#miosa-restore) - Restore a sandbox from a checkpoint
 - [`miosa resume`](#miosa-resume) - Resume a paused sandbox
+- [`miosa rollback`](#miosa-rollback) - Serve the linked service's previous release
 - [`miosa run`](#miosa-run) - List, follow and stop agent runs
 - [`miosa runtimes`](#miosa-runtimes) - Show the sandbox runtimes the platform offers
 - [`miosa sandbox`](#miosa-sandbox) - Inspect and resize a sandbox's vCPU and memory
@@ -103,6 +107,7 @@ Regenerate with `make docs`.
 - [`miosa template`](#miosa-template) - Sandbox templates
 - [`miosa token`](#miosa-token) - Mint short-lived tokens for your end users
 - [`miosa unlink`](#miosa-unlink) - Detach this directory from its project
+- [`miosa up`](#miosa-up) - Deploy this directory to the linked service
 - [`miosa update`](#miosa-update) - Update the miosa CLI to the latest release
 - [`miosa url`](#miosa-url) - Print the public URL for a sandbox
 - [`miosa usage`](#miosa-usage) - Show runtime, time left and estimated cost
@@ -4132,6 +4137,87 @@ Run quick checks and say what to fix: CLI version, config file, the API endpoint
 your key, and clock skew (a skewed clock breaks signed webhooks and tokens).
 Exit status is non-zero when a check fails.
 
+### `miosa domain`
+
+Custom domains of the linked service.
+
+```
+miosa domain
+```
+
+Add, check, verify and remove custom domains on the linked service.
+
+```
+  miosa link cliniciq --service API
+  miosa domain add app.example.com
+  miosa domain list
+  miosa domain verify app.example.com --wait
+  miosa domain remove app.example.com
+
+```
+A domain cannot end in miosa.ai.
+The DNS records to create are printed on add
+and whenever a verify is still pending.
+
+#### `miosa domain add`
+
+Add a custom domain to the linked service.
+
+```
+miosa domain add <fqdn> [flags]
+```
+
+Add a custom domain and print the DNS records to create.
+With --wait it then
+polls verify until the domain is active or failed.
+
+```
+  miosa domain add app.example.com
+  miosa domain add app.example.com --redirect to-primary --wait
+```
+
+Flags:
+
+- `--no-wait` - Add and return without checking DNS.
+- `--redirect string` - Redirect policy for this domain.
+
+#### `miosa domain list`
+
+List the linked service's custom domains.
+
+```
+miosa domain list
+```
+
+#### `miosa domain remove`
+
+Remove a custom domain from the linked service.
+
+```
+miosa domain remove <fqdn|id> [flags]
+```
+
+Flags:
+
+- `--yes` - Do not ask.
+
+#### `miosa domain verify`
+
+Check a domain's DNS now.
+
+```
+miosa domain verify <fqdn|id> [flags]
+```
+
+Ask the API to verify the domain.
+Active is immediate when DNS is right; a
+pending answer prints the records that are still missing. --wait polls until the
+domain is active or failed.
+
+Flags:
+
+- `--no-wait` - Check once and return.
+
 ### `miosa egress`
 
 Outbound network policy for sandboxes.
@@ -4861,8 +4947,6 @@ the default environment of that scope.
   miosa create my-box --env staging
 ```
 
-Aliases: `environment`, `environments`.
-
 Flags:
 
 
@@ -5193,6 +5277,79 @@ List an environment's versions and how many machines sit on each.
 ```
 miosa env versions <name>
 ```
+
+### `miosa environment`
+
+List, create, fork and remove a project's Deploy targets.
+
+```
+miosa environment
+```
+
+Deploy targets are what Railway calls environments: production, staging, one
+per preview.
+The linked project is used unless a project is named.
+
+```
+  miosa environment list
+  miosa environment new staging
+  miosa environment fork production --name staging
+  miosa environment rm staging
+```
+
+Aliases: `environments`.
+
+#### `miosa environment fork`
+
+Copy a Deploy target's settings into a new one.
+
+```
+miosa environment fork <from> [flags]
+```
+
+Copy a Deploy target: its services, variables and settings, without its data.
+
+```
+  miosa environment fork production --name staging
+```
+
+Flags:
+
+- `--name string` - Name for the new Deploy target.
+
+#### `miosa environment list`
+
+List a project's Deploy targets.
+
+```
+miosa environment list [project]
+```
+
+#### `miosa environment new`
+
+Create a Deploy target.
+
+```
+miosa environment new <name> [flags]
+```
+
+Flags:
+
+- `--slug string` - URL-safe name (default: from the name).
+
+#### `miosa environment rm`
+
+Remove a Deploy target and everything in it.
+
+```
+miosa environment rm <name> [flags]
+```
+
+Aliases: `remove`, `delete`.
+
+Flags:
+
+- `--yes` - Do not ask.
 
 ### `miosa events`
 
@@ -9025,7 +9182,7 @@ The token is read from RAILWAY_TOKEN, --token-file, or a prompt.
 It is never
 stored.
 Variable values are not copied unless you pass --copy-variables, which
-prints a warning: Railway's secrets were exposed in 2025, so rotate them.
+prints a warning: Railway disclosed on 2026-10-21 that its secrets were exposed, so rotate them.
 
 With --from-file, a railway.json or railway.toml is read locally and no token
 or network call is needed.
@@ -9042,6 +9199,7 @@ Flags:
 - `--cleanup` - Delete exactly the ids recorded in --state.
 - `--copy-variables` - Copy variable values, not just names (prints a warning).
 - `--environment string` - Railway environment to import. (default `production`)
+- `--exclude stringSlice` - Leave these services out (comma separated).
 - `--from-file string` - Read railway.json or railway.toml instead of the API.
 - `--include-targets` - Also import other Railway environments as Deploy targets.
 - `--into string` - Import into an existing MIOSA project.
@@ -9260,6 +9418,7 @@ With --json each line is an object.
 
 Flags:
 
+- `--build` - With a link: the service's build log instead of its runtime log.
 - `-f, --follow` - Keep streaming new lines.
 - `-n, --lines int` - Number of recent lines. (default `100`)
 
@@ -10849,6 +11008,26 @@ Recover a failed or errored sandbox: MIOSA provisions a new sandbox from the pre
 disk and returns its id.
 The original keeps existing until you destroy it.
 
+### `miosa redeploy`
+
+Build and release the linked service again.
+
+```
+miosa redeploy [flags]
+```
+
+Queue a release from the linked service's own source and wait for it.
+
+```
+  miosa link cliniciq --service API
+  miosa redeploy
+```
+
+Flags:
+
+- `--no-wait` - Queue the release and return.
+- `--timeout duration` - How long to wait for the release. (default `10m0s`)
+
 ### `miosa regions`
 
 List regions and whether they have capacity.
@@ -10883,6 +11062,29 @@ Resume a paused sandbox.
 ```
 miosa resume [sandbox]
 ```
+
+### `miosa rollback`
+
+Serve the linked service's previous release.
+
+```
+miosa rollback [flags]
+```
+
+Queue a release that serves an earlier build with its frozen source and settings.
+The previous release is the newest one that is not the active one; --to names one
+(number, unique id prefix or id).
+
+```
+  miosa rollback
+  miosa rollback --to 42
+```
+
+Flags:
+
+- `--no-wait` - Queue the rollback and return.
+- `--timeout duration` - How long to wait for the release. (default `10m0s`)
+- `--to string` - Release number, id or unique id prefix (default: the previous one).
 
 ### `miosa run`
 
@@ -11749,7 +11951,7 @@ Flags:
 
 #### `miosa service logs`
 
-Show a release's events and failure reason.
+Show a release's events, or a build's log.
 
 ```
 miosa service logs <project> <service> [flags]
@@ -11759,14 +11961,19 @@ Show what happened to a release: every state transition, and the reason a releas
 failed.
 The newest release is used unless --release names one (a release number or id).
 
-Build and runtime logs stream once the log route ships (Railway parity row 12);
-until then this reads the release events, which carry the failure reason.
+With --build this shows the build log instead: the build the release used, or the
+build named by --build-id. --tail limits the first page, and --follow keeps reading
+until the build finishes.
+A service built from an image has no build log.
 
 Flags:
 
+- `--build` - Show the build log instead of release events.
+- `--build-id string` - Build id to read with --build (default: latest).
 - `--deploy-target string` - Deploy target name or id (default: the project's default).
-- `--follow` - Stream new events (not available yet).
+- `--follow` - With --build: keep reading until the build finishes.
 - `--release string` - Release number or id (default: the newest).
+- `--tail int` - Lines from the end of the build log (1-2000). (default `200`)
 
 #### `miosa service promote`
 
@@ -11875,6 +12082,24 @@ Flags:
 - `--deploy-target string` - Deploy target name or id (default: the project's default).
 - `--region string` - Region: us-west, us-east or us-mia.
 - `--replicas int` - Replicas to run (1-50).
+
+#### `miosa service select`
+
+Point this directory's link at another service.
+
+```
+miosa service select <service>
+```
+
+Update .miosa/link.json so later commands use this service.
+
+```
+  miosa link cliniciq
+  miosa service select API
+  miosa redeploy
+```
+
+Aliases: `use`.
 
 #### `miosa service settings`
 
@@ -12896,6 +13121,33 @@ Detach this directory from its project.
 ```
 miosa unlink
 ```
+
+### `miosa up`
+
+Deploy this directory to the linked service.
+
+```
+miosa up [dir] [flags]
+```
+
+Upload the directory (the current one by default) as the linked service's source,
+queue a release, and wait for it.
+Then print the build's log.
+
+```
+  miosa link cliniciq --service API
+  miosa up
+  miosa up ./dist --message "hotfix" --no-wait
+
+```
+Needs a linked directory: `miosa link <project> --service <name>`.
+
+Flags:
+
+- `--logs` - Print the build's log after the release. (default `true`)
+- `--message string` - Release message.
+- `--no-wait` - Queue the release and return.
+- `--timeout duration` - How long to wait for the release. (default `10m0s`)
 
 ### `miosa update`
 

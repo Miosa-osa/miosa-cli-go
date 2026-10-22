@@ -240,3 +240,113 @@ func TestRunWithSandboxFlagStillUsesASandbox(t *testing.T) {
 		t.Fatal("--sandbox must not reveal the service's values")
 	}
 }
+
+func TestLogsInALinkedDirectoryReadTheBuildLog(t *testing.T) {
+	t.Chdir(t.TempDir())
+	routes := linkedRoutes()
+	routes["GET /projects/"+linkProjectID+"/services/"+linkServiceID+"/builds/latest/logs"] = `{"data":{"text":"step 1\nstep 2\n","offset":14,"complete":true}}`
+	f := fakeRoutes(t, routes)
+	setupEnv(t, f.srv)
+	if _, err := run(t, "link", "cliniciq", "--service", "API"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, "logs", "--build")
+	if err != nil {
+		t.Fatalf("logs --build: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "step 1") {
+		t.Fatalf("out = %q", out)
+	}
+	if got := f.find("GET", "/projects/"+linkProjectID+"/services/"+linkServiceID+"/builds/latest/logs"); len(got) == 0 {
+		t.Fatal("the build log route was not called")
+	}
+}
+
+func TestLogsInALinkedDirectoryFallBackToReleaseEvents(t *testing.T) {
+	t.Chdir(t.TempDir())
+	routes := linkedRoutes()
+	routes["GET /projects/"+linkProjectID+"/services/"+linkServiceID+"/logs"] = resp{404, `{"error":{"code":"NOT_FOUND","message":"no route"}}`}
+	routes["GET /projects/"+linkProjectID+"/services/"+linkServiceID+"/deployments/r1/events"] = `{"data":[{"seq":1,"to_state":"active","actor":"system","at":"2026-10-22T10:00:00Z"}]}`
+	f := fakeRoutes(t, routes)
+	setupEnv(t, f.srv)
+	if _, err := run(t, "link", "cliniciq", "--service", "API"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, "logs")
+	if err != nil {
+		t.Fatalf("logs: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Runtime logs are not live yet") || !strings.Contains(out, "active") {
+		t.Fatalf("out = %s", out)
+	}
+}
+
+func TestRunWithoutACommandHintsAtTheLinkedForm(t *testing.T) {
+	t.Chdir(t.TempDir())
+	f := fakeRoutes(t, linkedRoutes())
+	setupEnv(t, f.srv)
+	if _, err := run(t, "link", "cliniciq", "--service", "API"); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := run(t, "run")
+	if !strings.Contains(out, "miosa run -- <cmd>") {
+		t.Fatalf("no hint:\n%s", out)
+	}
+}
+
+func TestRedeployInALinkedDirectoryQueuesAndWaits(t *testing.T) {
+	t.Chdir(t.TempDir())
+	routes := linkedRoutes()
+	routes["POST /projects/"+linkProjectID+"/services/"+linkServiceID+"/deployments"] = `{"data":{"id":"r9","service_id":"` + linkServiceID + `","number":9,"state":"queued"}}`
+	routes["GET /projects/"+linkProjectID+"/services/"+linkServiceID+"/deployments/r9"] = `{"data":{"id":"r9","service_id":"` + linkServiceID + `","number":9,"state":"active"}}`
+	f := fakeRoutes(t, routes)
+	setupEnv(t, f.srv)
+	if _, err := run(t, "link", "cliniciq", "--service", "API"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, "redeploy")
+	if err != nil {
+		t.Fatalf("redeploy: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "9") || !strings.Contains(out, "active") {
+		t.Fatalf("out = %s", out)
+	}
+	if got := f.find("POST", "/projects/"+linkProjectID+"/services/"+linkServiceID+"/deployments"); len(got) != 1 {
+		t.Fatalf("want one deploy, got %d", len(got))
+	}
+}
+
+func TestRollbackInALinkedDirectoryServesThePreviousRelease(t *testing.T) {
+	t.Chdir(t.TempDir())
+	routes := linkedRoutes()
+	routes["GET /projects/"+linkProjectID+"/services/"+linkServiceID+"/deployments"] = `{"data":[
+		{"id":"r3","service_id":"` + linkServiceID + `","number":3,"state":"active"},
+		{"id":"r2","service_id":"` + linkServiceID + `","number":2,"state":"built"}]}`
+	routes["POST /service-deployments/r2/rollback"] = `{"data":{"id":"r4","service_id":"` + linkServiceID + `","number":4,"state":"queued"}}`
+	routes["GET /projects/"+linkProjectID+"/services/"+linkServiceID+"/deployments/r4"] = `{"data":{"id":"r4","service_id":"` + linkServiceID + `","number":4,"state":"active"}}`
+	f := fakeRoutes(t, routes)
+	setupEnv(t, f.srv)
+	if _, err := run(t, "link", "cliniciq", "--service", "API"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, "rollback")
+	if err != nil {
+		t.Fatalf("rollback: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Rolled back to release 2") {
+		t.Fatalf("out = %s", out)
+	}
+	if got := f.find("POST", "/service-deployments/r2/rollback"); len(got) != 1 {
+		t.Fatalf("want the previous release, got %d calls", len(got))
+	}
+}
+
+func TestUpWithoutALinkSaysHowToLink(t *testing.T) {
+	t.Chdir(t.TempDir())
+	f := fakeRoutes(t, linkedRoutes())
+	setupEnv(t, f.srv)
+	_, err := run(t, "up", ".")
+	if err == nil || !strings.Contains(err.Error(), "miosa link") {
+		t.Fatalf("want a linking hint, got %v", err)
+	}
+}

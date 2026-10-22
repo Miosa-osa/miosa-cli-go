@@ -110,10 +110,15 @@ func BuildFile(cfg FileConfig, serviceName string, opts Options) Plan {
 		Build:   dockerfileSetting(cfg.Build.DockerfilePath),
 		Address: &address,
 		Settings: &ServiceSetting{
-			StartCommand: svc.StartCommand,
-			Replicas:     svc.NumReplicas,
-			Region:       mapRegion(svc.Region),
-			CronSchedule: svc.CronSchedule,
+			StartCommand:       svc.StartCommand,
+			Replicas:           svc.NumReplicas,
+			Region:             mapRegion(svc.Region),
+			CronSchedule:       svc.CronSchedule,
+			HealthcheckPath:    cfg.Deploy.HealthcheckPath,
+			HealthcheckTimeout: cfg.Deploy.HealthcheckTimeout,
+			RestartPolicy:      mapRestartPolicy(cfg.Deploy.RestartPolicyType),
+			MaxRetries:         cfg.Deploy.RestartPolicyMaxRetries,
+			PreDeployCommand:   strings.Join(cfg.Deploy.PreDeployCommand, " && "),
 		},
 	})
 	plan.Actions = append(plan.Actions, unmappedServiceActions(svc)...)
@@ -147,18 +152,12 @@ func unmappedFileActions(cfg FileConfig, service string) []Action {
 	if len(cfg.Build.WatchPatterns) > 0 {
 		add("build.watchPatterns", "MIOSA builds on every push", "none")
 	}
-	if cfg.Deploy.HealthcheckPath != "" {
-		add("deploy.healthcheckPath", "MIOSA checks readiness on the service's port", "none")
-	}
-	if cfg.Deploy.RestartPolicyType != "" {
-		add("deploy.restartPolicyType", "MIOSA restarts a failed release by policy", "none")
+	if cfg.Deploy.RestartPolicyType != "" && mapRestartPolicy(cfg.Deploy.RestartPolicyType) == "" {
+		add("deploy.restartPolicyType", fmt.Sprintf("Railway policy %q has no MIOSA equivalent", cfg.Deploy.RestartPolicyType),
+			"set restart_policy to always, on_failure or never after the import")
 	}
 	if cfg.Deploy.SleepApplication {
 		add("deploy.sleepApplication", "MIOSA has no sleep-on-idle setting", "none")
-	}
-	if len(cfg.Deploy.PreDeployCommand) > 0 {
-		add("deploy.preDeployCommand", "MIOSA has no pre-deploy hook yet",
-			"run it from the start command or a release step")
 	}
 	if path := cfg.Deploy.Region; path != "" && mapRegion(path) == "" {
 		add("deploy.region", fmt.Sprintf("Railway region %q has no MIOSA equivalent (us-east, us-west, us-mia)", path),

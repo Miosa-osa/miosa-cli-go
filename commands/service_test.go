@@ -23,6 +23,13 @@ const webServiceJSON = `{"data":[
  "private_domain":"worker.miosa.internal","public_address":{"label":null,"host":null,"url":null},
  "lock_version":1,"created_at":"2026-10-20T10:00:00Z","updated_at":"2026-10-20T10:00:00Z"}]}`
 
+const imageServiceJSON = `{"data":[
+{"id":"33333333-3333-3333-3333-333333333333","project_id":"11111111-1111-1111-1111-111111111111",
+ "environment_id":"e1","name":"API","slug":"api","kind":"server","source":{"type":"image","ref":"nginx:1.27"},
+ "build":{},"settings":{},"private_domain":"api.miosa.internal",
+ "public_address":{"label":null,"host":null,"url":null},
+ "lock_version":1,"created_at":"2026-10-20T10:00:00Z","updated_at":"2026-10-20T10:00:00Z"}]}`
+
 const oneWebServiceJSON = `{"data":{"id":"33333333-3333-3333-3333-333333333333","project_id":"11111111-1111-1111-1111-111111111111",
 "environment_id":"e1","name":"API","slug":"api","kind":"server","source":{"type":"git","ref":"https://github.com/acme/api"},
 "build":{},"settings":{"replicas":2},"active_deployment_id":"44444444-4444-4444-4444-444444444444",
@@ -316,8 +323,8 @@ func TestServiceLogsPrintsReleaseEvents(t *testing.T) {
 func TestServiceLogsFollowIsRefused(t *testing.T) {
 	servicesAPI(t)
 	_, err := run(t, "service", "logs", "cliniciq", "API", "--follow")
-	if err == nil || !strings.Contains(err.Error(), "row 12") {
-		t.Fatalf("want a clear refusal that streaming needs row 12, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "--build") {
+		t.Fatalf("want a refusal that --follow needs --build, got: %v", err)
 	}
 }
 
@@ -457,5 +464,152 @@ func TestServiceGetShowsPendingVariableChanges(t *testing.T) {
 	}
 	if !strings.Contains(out, "miosa service deploy") {
 		t.Fatalf("want the action, got:\n%s", out)
+	}
+}
+func TestServiceLogsBuildPrintsTheLogAndTails(t *testing.T) {
+	f := fakeRoutes(t, map[string]any{
+		"GET /projects": serviceProjectJSON,
+		"GET /projects/11111111-1111-1111-1111-111111111111/services":                                                         webServiceJSON,
+		"GET /projects/11111111-1111-1111-1111-111111111111/services/33333333-3333-3333-3333-333333333333/builds/latest/logs": `{"data":{"build":{"id":"b1","state":"succeeded"},"text":"npm ci\nbuilt\n","offset":15,"complete":true}}`,
+	})
+	out, err := run(t, "service", "logs", "cliniciq", "API", "--build")
+	if err != nil {
+		t.Fatalf("service logs --build: %v", err)
+	}
+	if !strings.Contains(out, "built") {
+		t.Fatalf("want the build output, got:\n%s", out)
+	}
+	calls := f.find("GET", "/projects/11111111-1111-1111-1111-111111111111/services/33333333-3333-3333-3333-333333333333/builds/latest/logs")
+	if len(calls) != 1 {
+		t.Fatalf("want one read, got %d", len(calls))
+	}
+	if !strings.Contains(calls[0].Query, "tail=200") {
+		t.Fatalf("want the default tail, got %q", calls[0].Query)
+	}
+}
+
+func TestServiceLogsBuildIDSelectsOneBuild(t *testing.T) {
+	fakeRoutes(t, map[string]any{
+		"GET /projects": serviceProjectJSON,
+		"GET /projects/11111111-1111-1111-1111-111111111111/services":                                                     webServiceJSON,
+		"GET /projects/11111111-1111-1111-1111-111111111111/services/33333333-3333-3333-3333-333333333333/builds/b7/logs": `{"data":{"build":{"id":"b7"},"text":"old build\n","offset":10,"complete":true}}`,
+	})
+	out, err := run(t, "service", "logs", "cliniciq", "API", "--build-id", "b7", "--tail", "50")
+	if err != nil {
+		t.Fatalf("service logs --build-id: %v", err)
+	}
+	if !strings.Contains(out, "old build") {
+		t.Fatalf("want the named build, got:\n%s", out)
+	}
+}
+
+func TestServiceLogsBuildOfAnImageSaysSo(t *testing.T) {
+	fakeRoutes(t, map[string]any{
+		"GET /projects": serviceProjectJSON,
+		"GET /projects/11111111-1111-1111-1111-111111111111/services":                                                         imageServiceJSON,
+		"GET /projects/11111111-1111-1111-1111-111111111111/services/33333333-3333-3333-3333-333333333333/builds/latest/logs": resp{404, `{"error":{"code":"NOT_FOUND","message":"no build log"}}`},
+	})
+	_, err := run(t, "service", "logs", "cliniciq", "API", "--build")
+	if err == nil || !strings.Contains(err.Error(), "built from an image") {
+		t.Fatalf("want the image-source explanation, got: %v", err)
+	}
+}
+
+func TestServiceLogsBuildIDOfSomeoneElsesBuildSaysNoSuchBuild(t *testing.T) {
+	fakeRoutes(t, map[string]any{
+		"GET /projects": serviceProjectJSON,
+		"GET /projects/11111111-1111-1111-1111-111111111111/services":                                                     webServiceJSON,
+		"GET /projects/11111111-1111-1111-1111-111111111111/services/33333333-3333-3333-3333-333333333333/builds/b9/logs": resp{404, `{"error":{"code":"NOT_FOUND","message":"not found"}}`},
+	})
+	_, err := run(t, "service", "logs", "cliniciq", "API", "--build-id", "b9")
+	if err == nil || !strings.Contains(err.Error(), "no such build for this service") {
+		t.Fatalf("want a missing-build message, got: %v", err)
+	}
+}
+
+func TestServiceLogsBuildShowsTheCommitAndHowLongItRan(t *testing.T) {
+	fakeRoutes(t, map[string]any{
+		"GET /projects": serviceProjectJSON,
+		"GET /projects/11111111-1111-1111-1111-111111111111/services":                                                         webServiceJSON,
+		"GET /projects/11111111-1111-1111-1111-111111111111/services/33333333-3333-3333-3333-333333333333/builds/latest/logs": `{"data":{"build":{"id":"b1","state":"succeeded","source_commit":"9f3c0a1b2c3d4e5f60718293a4b5c6d7e8f90123","duration_ms":90000},"text":"built\n","offset":6,"complete":true}}`,
+	})
+	out, err := run(t, "service", "logs", "cliniciq", "API", "--build")
+	if err != nil {
+		t.Fatalf("service logs --build: %v", err)
+	}
+	if !strings.Contains(out, "Build b1 succeeded 9f3c0a1 1m30s") {
+		t.Fatalf("want the build line with its commit and run time, got:\n%s", out)
+	}
+}
+
+func TestServiceLogsBuildJSONCarriesTheNewFields(t *testing.T) {
+	fakeRoutes(t, map[string]any{
+		"GET /projects": serviceProjectJSON,
+		"GET /projects/11111111-1111-1111-1111-111111111111/services":                                                         webServiceJSON,
+		"GET /projects/11111111-1111-1111-1111-111111111111/services/33333333-3333-3333-3333-333333333333/builds/latest/logs": `{"data":{"build":{"id":"b1","state":"queued","source_commit":null,"duration_ms":null},"text":"","offset":0,"complete":false}}`,
+	})
+	out, err := run(t, "service", "logs", "cliniciq", "API", "--build", "--output", "json")
+	if err != nil {
+		t.Fatalf("service logs --build --output json: %v", err)
+	}
+	if !strings.Contains(out, `"source_commit":null`) || !strings.Contains(out, `"duration_ms":null`) {
+		t.Fatalf("want both build fields in the JSON page, got:\n%s", out)
+	}
+}
+
+func TestServiceLogsBuildIDOnAnImageServiceSaysNoSuchBuild(t *testing.T) {
+	fakeRoutes(t, map[string]any{
+		"GET /projects": serviceProjectJSON,
+		"GET /projects/11111111-1111-1111-1111-111111111111/services":                                                     imageServiceJSON,
+		"GET /projects/11111111-1111-1111-1111-111111111111/services/33333333-3333-3333-3333-333333333333/builds/b9/logs": resp{404, `{"error":{"code":"NOT_FOUND","message":"not found"}}`},
+	})
+	_, err := run(t, "service", "logs", "cliniciq", "API", "--build-id", "b9")
+	if err == nil || !strings.Contains(err.Error(), "no such build for this service") {
+		t.Fatalf("want the missing-build message even on an image service, got: %v", err)
+	}
+}
+
+func TestServiceLogsBuildStoreUnavailable(t *testing.T) {
+	fakeRoutes(t, map[string]any{
+		"GET /projects": serviceProjectJSON,
+		"GET /projects/11111111-1111-1111-1111-111111111111/services":                                                         webServiceJSON,
+		"GET /projects/11111111-1111-1111-1111-111111111111/services/33333333-3333-3333-3333-333333333333/builds/latest/logs": resp{503, `{"error":{"code":"BUILD_LOG_UNAVAILABLE","message":"store down"}}`},
+	})
+	_, err := run(t, "service", "logs", "cliniciq", "API", "--build")
+	if err == nil || !strings.Contains(err.Error(), "could not be read") {
+		t.Fatalf("want a retryable message, got: %v", err)
+	}
+}
+
+func TestServiceLogsBuildFollowReadsFromTheOffset(t *testing.T) {
+	pages := 0
+	f := newFakeAPI(t, func(c call) (int, string) {
+		switch {
+		case c.is("GET", "/projects"):
+			return 200, serviceProjectJSON
+		case c.is("GET", "/projects/11111111-1111-1111-1111-111111111111/services"):
+			return 200, webServiceJSON
+		case c.is("GET", "/projects/11111111-1111-1111-1111-111111111111/services/33333333-3333-3333-3333-333333333333/builds/latest/logs"):
+			pages++
+			if pages == 1 {
+				return 200, `{"data":{"build":{"id":"b1","state":"building"},"text":"step 1\n","offset":7,"complete":false}}`
+			}
+			return 200, `{"data":{"build":{"id":"b1","state":"succeeded"},"text":"step 2\n","offset":14,"complete":true}}`
+		}
+		return 404, `{"error":{"code":"NOT_FOUND","message":"no route"}}`
+	})
+	out, err := run(t, "service", "logs", "cliniciq", "API", "--build", "--follow")
+	if err != nil {
+		t.Fatalf("service logs --build --follow: %v", err)
+	}
+	if !strings.Contains(out, "step 1") || !strings.Contains(out, "step 2") {
+		t.Fatalf("want both pages, got:\n%s", out)
+	}
+	calls := f.find("GET", "/projects/11111111-1111-1111-1111-111111111111/services/33333333-3333-3333-3333-333333333333/builds/latest/logs")
+	if len(calls) != 2 {
+		t.Fatalf("want two reads, got %d", len(calls))
+	}
+	if !strings.Contains(calls[1].Query, "after=7") {
+		t.Fatalf("want the second read to continue after offset 7, got %q", calls[1].Query)
 	}
 }

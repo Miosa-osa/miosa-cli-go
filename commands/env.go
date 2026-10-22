@@ -82,9 +82,10 @@ func resolveWorkspaceID(ctx context.Context, c *client.Client, slugOrID string) 
 
 func newEnvCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "env",
-		Aliases: []string{"environment", "environments"},
-		Short:   "Manage environments (what new machines start with)",
+		Use: "env",
+		// "environment" is the Railway-shaped name for a project's Deploy
+		// targets; a machine environment is always "env" or "env ...".
+		Short: "Manage environments (what new machines start with)",
 		Long: `Manage environments: the template a new sandbox or computer inherits when it
 starts. An environment decides which repositories are cloned, which variables
 and secret files are injected, and which of your connections the machine may use.

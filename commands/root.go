@@ -212,6 +212,11 @@ func init() {
 		newLinkCmd(),
 		newUnlinkCmd(),
 		newVariablesCmd(),
+		newUpCmd(),
+		newRedeployCmd(),
+		newRollbackCmd(),
+		newDomainCmd(),
+		newEnvironmentCmd(),
 	)
 }
 
