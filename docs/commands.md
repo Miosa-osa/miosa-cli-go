@@ -10780,6 +10780,25 @@ miosa project list
 
 Aliases: `ls`.
 
+#### `miosa project rm`
+
+Delete a project and everything in it.
+
+```
+miosa project rm <project> [flags]
+```
+
+Delete a project.
+A workspace's default project cannot be deleted, and a
+project that still owns services, databases or deployments answers 409: move or
+delete those first.
+
+Aliases: `delete`.
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
+
 #### `miosa project target`
 
 Deploy targets of a project (production, staging, ...).

@@ -804,6 +804,17 @@ else the organization's default workspace, else its only workspace.`,
 			Body:   func(a []string, body map[string]any) (map[string]any, error) { body["name"] = a[0]; return body, nil },
 			Before: settleProjectWorkspace,
 		},
+		Op{
+			Use: "rm <project>", Aliases: []string{"delete"}, Short: "Delete a project and everything in it",
+			// The API answers /projects/<id> only; a name or slug is rewritten to the
+			// id before the request (internal/api.ResolvePath), so `miosa project rm
+			// shop` works the way `miosa project get shop` does.
+			Long: `Delete a project. A workspace's default project cannot be deleted, and a
+project that still owns services, databases or deployments answers 409: move or
+delete those first.`,
+			Method: "DELETE", Path: "/projects/{0}", Args: []Arg{idArg("project")},
+			Confirm: "Permanently delete project {0} and everything in it?", Done: "Deleted {0}",
+		},
 	)
 	cmd.AddCommand(projectVarsCmd())
 	cmd.AddCommand(projectEnvironmentCmd())
