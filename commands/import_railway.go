@@ -69,6 +69,7 @@ Guide: https://miosa.ai/docs/migrate/railway`,
 	fs.StringVar(&f.tokenFile, "token-file", "", "File holding the Railway token")
 	fs.StringSliceVar(&f.only, "only", nil, "Import only these services (comma separated)")
 	fs.StringSliceVar(&f.exclude, "exclude", nil, "Leave these services out (comma separated)")
+	fs.StringVar(&f.suffix, "suffix", "", "Append this to every service name and insert it before each custom domain's first dot")
 	fs.StringVar(&f.via, "via", "", "How to read Railway: token (default) or railway-cli (its logged-in session)")
 	fs.StringVar(&f.region, "region", "", "With --apply: MIOSA region for services whose Railway region has no equivalent")
 	fs.StringVar(&f.dumpDir, "dump-graphql", "", "Write every Railway exchange to this directory (fixtures)")
@@ -99,6 +100,7 @@ type railwayImportFlags struct {
 	dumpDir        string
 	only           []string
 	exclude        []string
+	suffix         string
 	via            string
 	region         string
 	yes            bool
@@ -153,6 +155,7 @@ func buildImportPlan(ctx context.Context, f *railwayImportFlags) (railway.Plan, 
 		CopyVariables:  f.copyVars,
 		Only:           f.only,
 		Exclude:        f.exclude,
+		Suffix:         f.suffix,
 	}
 	if f.fromFile != "" {
 		cfg, err := railway.ReadFile(f.fromFile)

@@ -7503,6 +7503,21 @@ miosa function
 
 Aliases: `functions`, `fn`.
 
+#### `miosa function build-log`
+
+Show the dependency install of an uploaded project.
+
+```
+miosa function build-log <function>
+```
+
+Prints the last lines of the newest install of a function made from --dir: what the package
+manager printed on the build cell. 'miosa function get' shows its state and, for a failure, the reason.
+
+```
+  miosa function build-log hook
+```
+
 #### `miosa function create`
 
 Create a function from a source file.
@@ -7519,20 +7534,28 @@ Without
 ```
   miosa function create hook --kind http --code-file index.js
   miosa function create hook --kind http --code-file index.js --env MODE=prod --memory-mb 512
+  miosa function create api --kind http --dir ./api --runtime node
 
 ```
 An http function answers 'serving: false' with a reason (no_fn_hosts, not_published) until a host
 that has its runtime accepts it; invoke answers FUNCTION_NOT_PUBLISHED meanwhile.
 
+--dir uploads a project directory instead of one file.
+Its dependencies are installed on a build
+cell (npm ci with a package-lock.json, pip install with a requirements.txt), so the function reads
+'serving_reason: building' until that finishes; 'miosa function get' shows the build and
+'miosa function build-log' its output.
+
 Flags:
 
 - `--code-file string` - File holding the function source.
-- `--entrypoint string` - Module file name inside the bundle (default index.js).
+- `--dir string` - Project directory to upload; its dependencies (package-lock.json, requirements.txt) are installed on a build cell. http functions only.
+- `--entrypoint string` - Module file name inside the bundle (default index.js; for python module:attr, default main:app).
 - `--env stringArray` - Environment variable KEY=VALUE (repeatable).
 - `--kind string` - Kind: script (default) or http (host function pool) (script|http).
 - `--memory-mb int` - Memory in MB; an http function runs only at the sizes a host serves (default 512).
 - `--project string` - Project id to attach the function to.
-- `--runtime string` - Runtime (an http function supports node).
+- `--runtime string` - Runtime (an http function supports node and python).
 - `--timeout-sec int` - Per-request time limit in seconds, 1-300.
 - `--workspace-id string` - Workspace id.
 
@@ -7620,13 +7643,18 @@ publishes a new version of an http function to its hosts.
 
 ```
   miosa function update hook --code-file index.js
+  miosa function update hook --dir ./api
   miosa function update hook --state disabled
+
 ```
+--dir builds the project first; the function keeps serving its current version until the build is
+ready, and the other flags of that command are applied together with it.
 
 Flags:
 
 - `--code-file string` - File holding the function source.
-- `--entrypoint string` - Module file name inside the bundle (default index.js).
+- `--dir string` - Project directory to upload; its dependencies (package-lock.json, requirements.txt) are installed on a build cell. http functions only.
+- `--entrypoint string` - Module file name inside the bundle (default index.js; for python module:attr, default main:app).
 - `--env stringArray` - Environment variable KEY=VALUE (repeatable).
 - `--memory-mb int` - Memory in MB; an http function runs only at the sizes a host serves (default 512).
 - `--state string` - State: active or disabled (active|disabled).
@@ -9212,6 +9240,7 @@ Flags:
 - `--resume` - Continue an interrupted apply.
 - `--service-name string` - With --from-file: the service name.
 - `--state string` - Where created ids are recorded (default .miosa/import-railway-<project>.json).
+- `--suffix string` - Append this to every service name and insert it before each custom domain's first dot.
 - `--token string` - Railway token (prefer RAILWAY_TOKEN or --token-file).
 - `--token-file string` - File holding the Railway token.
 - `--via string` - How to read Railway: token (default) or railway-cli (its logged-in session).
