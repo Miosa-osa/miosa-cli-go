@@ -40,7 +40,7 @@ Finish by hand:
   api buildCommand: MIOSA builds from the Dockerfile or detects the stack; there is no build command setting -> move it into the Dockerfile or a build script
   api volume /data: the Services API has no service volumes; Railway mounted 5000 MB at /data -> miosa volume create api-data --size-gb 5, then attach it where the data is needed
 
-warning: Railway's secrets were exposed in the 2025 leak. Rotate every secret you rely on; no literal secret is copied unless you pass --copy-variables.
+warning: Railway disclosed on 2026-10-21 that its secrets were exposed. Rotate every secret you rely on; no literal secret is copied unless you pass --copy-variables.
 ```
 
 Every field that cannot be carried is listed under "Finish by hand" with the
@@ -53,8 +53,9 @@ Names are carried by default, and references such as
 not a secret. MIOSA uses the same syntax, so a reference keeps working when the
 service names match.
 
-`--copy-variables` copies literal values too, and prints a warning: Railway's
-secrets were exposed in 2025, so rotate every one you rely on.
+`--copy-variables` copies literal values too, and prints a warning: Railway
+disclosed on 2026-10-21 that its secrets were exposed, so rotate every one you
+rely on.
 
 An apply refuses to run while a variable has no value. Fill the values into the
 plan, or pass `--allow-missing-values` to create them empty and fill them in

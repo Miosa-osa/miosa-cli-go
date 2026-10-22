@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -184,6 +185,7 @@ process inside a sandbox is 'miosa daemon', a different product.`, []string{"ser
 		serviceConnectionCmd(),
 		serviceSettingsCmd(),
 		serviceTemplatesCmd(),
+		serviceSelectCmd(),
 	)
 	return cmd
 }
@@ -609,21 +611,23 @@ func serviceDeployCmd() *cobra.Command {
 // ── logs ─────────────────────────────────────────────────────────────────────
 
 func serviceLogsCmd() *cobra.Command {
-	var env, releaseRef string
-	var follow bool
+	var env, releaseRef, buildID string
+	var follow, build bool
+	var tail int
 	cmd := &cobra.Command{
 		Use:   "logs <project> <service>",
-		Short: "Show a release's events and failure reason",
+		Short: "Show a release's events, or a build's log",
 		Long: `Show what happened to a release: every state transition, and the reason a release
 failed. The newest release is used unless --release names one (a release number or id).
 
-Build and runtime logs stream once the log route ships (Railway parity row 12);
-until then this reads the release events, which carry the failure reason.`,
+With --build this shows the build log instead: the build the release used, or the
+build named by --build-id. --tail limits the first page, and --follow keeps reading
+until the build finishes. A service built from an image has no build log.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p := printerFor(cmd)
-			if follow {
-				return usagef("--follow needs the Services log stream (Railway parity row 12); it is not available yet")
+			if follow && !build && buildID == "" {
+				return usagef("--follow needs --build; release events are a finished history")
 			}
 			c, _, err := buildClient()
 			if err != nil {
@@ -634,6 +638,15 @@ until then this reads the release events, which carry the failure reason.`,
 			if err != nil {
 				return err
 			}
+
+			if build || buildID != "" {
+				target := buildID
+				if target == "" {
+					target = "latest"
+				}
+				return serviceBuildLogs(ctx, cmd, c.API, projectID, svc, target, tail, follow)
+			}
+
 			release, err := latestOrNamedRelease(ctx, c.API, projectID, svc.ID, releaseRef)
 			if err != nil {
 				return err
@@ -669,8 +682,151 @@ until then this reads the release events, which carry the failure reason.`,
 	fs := cmd.Flags()
 	fs.StringVar(&env, "deploy-target", "", "Deploy target name or id (default: the project's default)")
 	fs.StringVar(&releaseRef, "release", "", "Release number or id (default: the newest)")
-	fs.BoolVar(&follow, "follow", false, "Stream new events (not available yet)")
+	fs.BoolVar(&build, "build", false, "Show the build log instead of release events")
+	fs.StringVar(&buildID, "build-id", "", "Build id to read with --build (default: latest)")
+	fs.IntVar(&tail, "tail", 200, "Lines from the end of the build log (1-2000)")
+	fs.BoolVar(&follow, "follow", false, "With --build: keep reading until the build finishes")
 	return cmd
+}
+
+// serviceBuildLog is one page of a build log.
+type serviceBuildLog struct {
+	Build    serviceBuild `json:"build"`
+	Text     string       `json:"text"`
+	Offset   int64        `json:"offset"`
+	Complete bool         `json:"complete"`
+}
+
+// serviceBuild is the build a log page belongs to. SourceCommit is the commit the
+// build packed, and DurationMS how long it ran (still counting while it builds);
+// both are absent on a build that has not started or that packed no commit.
+type serviceBuild struct {
+	ID           string         `json:"id"`
+	DeploymentID *string        `json:"deployment_id"`
+	State        string         `json:"state"`
+	Attempt      int            `json:"attempt"`
+	Builder      string         `json:"builder"`
+	SourceCommit *string        `json:"source_commit"`
+	DurationMS   *int64         `json:"duration_ms"`
+	Reason       *serviceReason `json:"reason"`
+	StartedAt    *string        `json:"started_at"`
+	FinishedAt   *string        `json:"finished_at"`
+}
+
+// serviceBuildLogs reads a build log, and with follow keeps reading from the
+// offset the server reports until the build is complete.
+func serviceBuildLogs(ctx context.Context, cmd *cobra.Command, c *api.Client, projectID string, svc *projectServiceRow, buildID string, tail int, follow bool) error {
+	p := printerFor(cmd)
+	path := servicePath(projectID, svc.ID) + "/builds/" + url.PathEscape(buildID) + "/logs"
+	after := int64(-1)
+	shownState := ""
+
+	for {
+		q := url.Values{}
+		if after >= 0 {
+			q.Set("after", strconv.FormatInt(after, 10))
+		} else if tail > 0 {
+			q.Set("tail", strconv.Itoa(tail))
+		}
+
+		var page struct {
+			Data serviceBuildLog `json:"data"`
+		}
+		if err := c.Get(ctx, path, q, &page); err != nil {
+			return serviceBuildLogError(err, svc, buildID)
+		}
+
+		if isJSON() {
+			if err := p.JSONLine(page.Data); err != nil {
+				return err
+			}
+		} else {
+			// The log text is the output and goes to stdout; the build it belongs to
+			// goes to stderr, so `... --build | grep` still reads only the log.
+			if page.Data.Build.State != shownState {
+				fmt.Fprintln(cmd.ErrOrStderr(), buildLine(page.Data.Build))
+				shownState = page.Data.Build.State
+			}
+			if page.Data.Text != "" {
+				fmt.Fprint(p.Writer(), page.Data.Text)
+			}
+		}
+
+		if !follow || page.Data.Complete {
+			return nil
+		}
+		after = page.Data.Offset
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// buildLine is the one-line summary of the build a log came from: which build it
+// is, what state it is in, the commit it packed, and how long it has run.
+func buildLine(b serviceBuild) string {
+	commit := "-"
+	if b.SourceCommit != nil {
+		if len(*b.SourceCommit) >= 7 {
+			commit = (*b.SourceCommit)[:7]
+		} else if *b.SourceCommit != "" {
+			commit = *b.SourceCommit
+		}
+	}
+	return fmt.Sprintf("Build %s %s %s %s", b.ID, b.State, commit, buildDuration(b.DurationMS))
+}
+
+func buildDuration(ms *int64) string {
+	if ms == nil {
+		return "-"
+	}
+	d := time.Duration(*ms) * time.Millisecond
+	switch {
+	case d < time.Second:
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	case d < time.Minute:
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	default:
+		return d.Round(time.Second).String()
+	}
+}
+
+// serviceBuildLogError names the condition a reader can act on instead of passing
+// the raw status through. A 404 covers three cases, so it reads the service to tell
+// an image-built service (which has no build log) from a build id that is not this
+// service's.
+func serviceBuildLogError(err error, svc *projectServiceRow, buildID string) error {
+	var ae *api.Error
+	if errors.As(err, &ae) {
+		switch {
+		case ae.Status == http.StatusNotFound:
+			message := "this service has no builds yet"
+			switch {
+			case buildID != "latest":
+				// An explicit id that is not this service's is the more useful answer,
+				// even when the service also happens to be built from an image.
+				message = "no such build for this service"
+			case svc.Source["type"] == "image":
+				message = "no build log for this service; a service built from an image has none"
+			}
+			return die(&api.Error{
+				Status:  http.StatusNotFound,
+				Code:    "BUILD_LOG_NOT_FOUND",
+				Message: message,
+			})
+		case ae.Code == "BUILD_LOG_UNAVAILABLE":
+			return die(&api.Error{
+				Status:    ae.Status,
+				Code:      ae.Code,
+				Message:   "the build log store could not be read; try again",
+				RequestID: ae.RequestID,
+			})
+		}
+	}
+	return die(err)
 }
 
 // ── scale, start, stop, restart ──────────────────────────────────────────────

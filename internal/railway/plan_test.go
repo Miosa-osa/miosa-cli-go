@@ -139,7 +139,7 @@ func TestBuildReportsEverythingItCannotCarry(t *testing.T) {
 	for _, a := range actionsOf(plan, "unmapped") {
 		fields[a.Field] = a
 	}
-	for _, want := range []string{"buildCommand", "healthcheckPath", "restartPolicyType", "volume /data", "plugin mongodb"} {
+	for _, want := range []string{"buildCommand", "volume /data", "plugin mongodb"} {
 		if _, ok := fields[want]; !ok {
 			t.Fatalf("no unmapped action for %q; got %v", want, keysOf(fields))
 		}
@@ -229,6 +229,9 @@ func TestBuildFileCarriesConfigAndReportsTheRest(t *testing.T) {
 	if svc.Build == nil || svc.Build.Dockerfile != "Dockerfile" {
 		t.Fatalf("build = %+v", svc.Build)
 	}
+	if svc.Settings.HealthcheckPath != "/health" || svc.Settings.RestartPolicy != "on_failure" || svc.Settings.PreDeployCommand != "npm run migrate" {
+		t.Fatalf("settings must carry health check, restart policy and pre-deploy: %+v", svc.Settings)
+	}
 	if svc.Settings.StartCommand != "npm start" || svc.Settings.Replicas != 3 {
 		t.Fatalf("settings = %+v", svc.Settings)
 	}
@@ -243,7 +246,7 @@ func TestBuildFileCarriesConfigAndReportsTheRest(t *testing.T) {
 	for _, a := range actionsOf(plan, "unmapped") {
 		fields[a.Field] = true
 	}
-	for _, want := range []string{"build.builder", "build.buildCommand", "build.watchPatterns", "deploy.healthcheckPath", "deploy.restartPolicyType", "deploy.sleepApplication", "deploy.preDeployCommand", "deploy.region"} {
+	for _, want := range []string{"build.builder", "build.buildCommand", "build.watchPatterns", "deploy.sleepApplication", "deploy.region"} {
 		if !fields[want] {
 			t.Fatalf("no unmapped action for %q", want)
 		}
@@ -403,5 +406,131 @@ func TestWorkersAreInferredFromNameOrCommand(t *testing.T) {
 	}
 	if kinds["backend-worker-media"] != "worker" || kinds["jobs"] != "worker" {
 		t.Fatalf("kinds = %v", kinds)
+	}
+}
+
+func TestHealthCheckAndRestartPolicyCarryOver(t *testing.T) {
+	plan, err := Build(fixtureSource(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := actionsOf(plan, "service.create")[0]
+	if api.Settings.HealthcheckPath != "/health" {
+		t.Fatalf("healthcheck_path = %q", api.Settings.HealthcheckPath)
+	}
+	if api.Settings.RestartPolicy != "on_failure" {
+		t.Fatalf("restart_policy = %q", api.Settings.RestartPolicy)
+	}
+	for _, a := range actionsOf(plan, "unmapped") {
+		if a.Field == "healthcheckPath" || a.Field == "restartPolicyType" {
+			t.Fatalf("%s must be carried, not reported: %+v", a.Field, a)
+		}
+	}
+}
+
+func TestRestartPolicyMapping(t *testing.T) {
+	cases := map[string]string{
+		"ALWAYS":     "always",
+		"ON_FAILURE": "on_failure",
+		"NEVER":      "never",
+		"":           "",
+		"sometimes":  "",
+	}
+	for in, want := range cases {
+		if got := mapRestartPolicy(in); got != want {
+			t.Fatalf("mapRestartPolicy(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestAnUnknownRestartPolicyIsReportedNotGuessed(t *testing.T) {
+	src := fixtureSource()
+	src.Services[0].RestartPolicy = "SOMETIMES"
+	plan, err := Build(src, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := actionsOf(plan, "service.create")[0].Settings.RestartPolicy; got != "" {
+		t.Fatalf("restart_policy = %q, want empty", got)
+	}
+	found := false
+	for _, a := range actionsOf(plan, "unmapped") {
+		if a.Field == "restartPolicyType" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("an unknown policy must be reported")
+	}
+}
+
+func TestDatabaseVolumeReportsTheSizeAgainstTheManagedSize(t *testing.T) {
+	src := fixtureSource()
+	src.Services = append(src.Services, Service{
+		Name:    "Postgres",
+		Image:   "postgres:18",
+		Volumes: []VolumeRef{{MountPath: "/var/lib/postgresql/data", SizeMB: 50000}},
+	})
+	plan, err := Build(src, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var next string
+	for _, a := range actionsOf(plan, "unmapped") {
+		if a.Name == "Postgres" && a.Field == "volume /var/lib/postgresql/data" {
+			next = a.Next
+		}
+	}
+	if !strings.Contains(next, "50000 MB") || !strings.Contains(next, "size small") {
+		t.Fatalf("next = %q", next)
+	}
+}
+
+func TestRotationWarningNamesTheDisclosureDate(t *testing.T) {
+	plan, err := Build(fixtureSource(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, w := range plan.Warnings {
+		if strings.Contains(w, "2026-10-21") {
+			found = true
+		}
+		if strings.Contains(w, "2025") {
+			t.Fatalf("the warning must not name 2025: %q", w)
+		}
+	}
+	if !found {
+		t.Fatalf("the warning must name the disclosure date: %v", plan.Warnings)
+	}
+}
+
+func TestExcludeDropsNamedServicesAndReportsThem(t *testing.T) {
+	plan, err := Build(fixtureSource(), Options{Exclude: []string{"worker", "ghost"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range actionsOf(plan, "service.create") {
+		if a.Name == "worker" {
+			t.Fatal("an excluded service must not be created")
+		}
+	}
+	joined := strings.Join(plan.Warnings, " ")
+	if !strings.Contains(joined, "not imported (--exclude): ghost (not in this project), worker") {
+		t.Fatalf("warnings = %v", plan.Warnings)
+	}
+}
+
+func TestExcludeAppliesAfterOnly(t *testing.T) {
+	plan, err := Build(fixtureSource(), Options{Only: []string{"api", "worker"}, Exclude: []string{"worker"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{}
+	for _, a := range actionsOf(plan, "service.create") {
+		names = append(names, a.Name)
+	}
+	if len(names) != 1 || names[0] != "api" {
+		t.Fatalf("names = %v", names)
 	}
 }

@@ -3,7 +3,9 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,6 +65,11 @@ func writeLinkFile(link linkFile) (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", err
+	}
+	// An existing link (found upwards, or from MIOSA_LINK) is updated in place so
+	// `miosa service select` in a subdirectory rewrites the repository's link.
+	if found := linkDir(); found != "" {
+		dir = found
 	}
 	path := filepath.Join(dir, ".miosa")
 	if err := os.MkdirAll(path, 0o755); err != nil {
@@ -251,4 +258,57 @@ func getService(ctx context.Context, c *api.Client, projectID, serviceID, env st
 		}
 	}
 	return projectServiceRow{}, usagef("the linked service no longer exists; run `miosa link` again")
+}
+
+// linkedServiceLogs is `miosa logs` in a linked directory. The build log exists
+// today; the runtime route is not live yet, so it falls back to the release
+// events with a line that says which one answered.
+func linkedServiceLogs(cmd *cobra.Command, c *api.Client, link linkFile, build, follow bool, lines int) error {
+	if link.ServiceID == "" {
+		return usagef("the link names no service; run `miosa link <project> --service <name>`")
+	}
+	if lines <= 0 {
+		lines = 100
+	}
+	if build {
+		return serviceBuildLogs(cmd.Context(), cmd, c, link.ProjectID, &projectServiceRow{ID: link.ServiceID, Name: link.Service}, "latest", lines, follow)
+	}
+
+	p := printerFor(cmd)
+	var out struct {
+		Data struct {
+			Lines []string `json:"lines"`
+		} `json:"data"`
+	}
+	q := url.Values{"tail": {fmt.Sprint(lines)}}
+	err := c.Get(cmd.Context(), servicePath(link.ProjectID, link.ServiceID)+"/logs", q, &out)
+	if err == nil {
+		for _, line := range out.Data.Lines {
+			p.Line("%s", line)
+		}
+		return nil
+	}
+	var ae *api.Error
+	if !errors.As(err, &ae) || ae.Status != 404 {
+		return die(err)
+	}
+
+	p.Line("Runtime logs are not live yet; the service's release events follow (--build shows the build log).")
+	release, rerr := latestOrNamedRelease(cmd.Context(), c, link.ProjectID, link.ServiceID, "")
+	if rerr != nil {
+		return rerr
+	}
+	events, eerr := serviceEvents(cmd.Context(), c, link.ProjectID, link.ServiceID, release.ID)
+	if eerr != nil {
+		return eerr
+	}
+	p.Line("Release %d (%s) %s", release.Number, release.State, release.ID)
+	for _, e := range events {
+		from := "-"
+		if e.FromState != nil {
+			from = *e.FromState
+		}
+		p.Line("  %s  %s -> %s", e.At, from, e.ToState)
+	}
+	return nil
 }

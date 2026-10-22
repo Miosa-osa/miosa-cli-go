@@ -99,6 +99,7 @@ func (r Reader) service(ctx context.Context, projectID, environmentID string, in
 		CronSchedule:       inst.CronSchedule,
 		Volumes:            volumes,
 		HealthcheckTimeout: derefInt(inst.HealthcheckTimeout),
+		RestartMaxRetries:  derefInt(inst.RestartPolicyMaxRetries),
 		NumReplicas:        derefInt(inst.NumReplicas),
 	}
 

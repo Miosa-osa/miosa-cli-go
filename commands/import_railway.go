@@ -34,7 +34,7 @@ checks, volumes, Railway domains, custom domains).
 
 The token is read from RAILWAY_TOKEN, --token-file, or a prompt. It is never
 stored. Variable values are not copied unless you pass --copy-variables, which
-prints a warning: Railway's secrets were exposed in 2025, so rotate them.
+prints a warning: Railway disclosed on 2026-10-21 that its secrets were exposed, so rotate them.
 
 With --from-file, a railway.json or railway.toml is read locally and no token
 or network call is needed.
@@ -68,6 +68,7 @@ Guide: https://miosa.ai/docs/migrate/railway`,
 	fs.StringVar(&f.token, "token", "", "Railway token (prefer RAILWAY_TOKEN or --token-file)")
 	fs.StringVar(&f.tokenFile, "token-file", "", "File holding the Railway token")
 	fs.StringSliceVar(&f.only, "only", nil, "Import only these services (comma separated)")
+	fs.StringSliceVar(&f.exclude, "exclude", nil, "Leave these services out (comma separated)")
 	fs.StringVar(&f.via, "via", "", "How to read Railway: token (default) or railway-cli (its logged-in session)")
 	fs.StringVar(&f.region, "region", "", "With --apply: MIOSA region for services whose Railway region has no equivalent")
 	fs.StringVar(&f.dumpDir, "dump-graphql", "", "Write every Railway exchange to this directory (fixtures)")
@@ -97,6 +98,7 @@ type railwayImportFlags struct {
 	tokenFile      string
 	dumpDir        string
 	only           []string
+	exclude        []string
 	via            string
 	region         string
 	yes            bool
@@ -150,6 +152,7 @@ func buildImportPlan(ctx context.Context, f *railwayImportFlags) (railway.Plan, 
 		IncludeTargets: f.includeTargets,
 		CopyVariables:  f.copyVars,
 		Only:           f.only,
+		Exclude:        f.exclude,
 	}
 	if f.fromFile != "" {
 		cfg, err := railway.ReadFile(f.fromFile)
@@ -705,6 +708,21 @@ func railwayApply(ctx context.Context, cmd *cobra.Command, f *railwayImportFlags
 			}
 			if a.Settings.CronSchedule != "" {
 				settings["cron_schedule"] = a.Settings.CronSchedule
+			}
+			if a.Settings.HealthcheckPath != "" {
+				settings["healthcheck_path"] = a.Settings.HealthcheckPath
+			}
+			if a.Settings.HealthcheckTimeout > 0 {
+				settings["healthcheck_timeout_s"] = a.Settings.HealthcheckTimeout
+			}
+			if a.Settings.RestartPolicy != "" {
+				settings["restart_policy"] = a.Settings.RestartPolicy
+			}
+			if a.Settings.MaxRetries > 0 {
+				settings["max_retries"] = a.Settings.MaxRetries
+			}
+			if a.Settings.PreDeployCommand != "" {
+				settings["pre_deploy_command"] = a.Settings.PreDeployCommand
 			}
 			if len(settings) > 0 {
 				body["settings"] = settings
