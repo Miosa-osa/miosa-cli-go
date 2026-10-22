@@ -20,6 +20,7 @@ func attachOneShot(cmd *cobra.Command) {
 		cwd, name      string
 		workspace      string
 		vars, tags     []string
+		sandbox        bool
 	)
 	cmd.Args = cobra.ArbitraryArgs
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
@@ -32,6 +33,13 @@ func attachOneShot(cmd *cobra.Command) {
 		command := strings.TrimSpace(joinCommand(args[cmd.ArgsLenAtDash():]))
 		if command == "" {
 			return usagef("no command given after --")
+		}
+		// In a linked directory the command runs here with the service's
+		// variables (Railway's `run`), unless a sandbox is asked for.
+		if !sandbox && !rm && size == "" && template == "" && cwd == "" && name == "" {
+			if _, err := readLink(); err == nil {
+				return runLinkedLocal(cmd, args[cmd.ArgsLenAtDash():])
+			}
 		}
 		body := map[string]any{"command": command, "persistent": !rm}
 		if size != "" {
@@ -128,6 +136,7 @@ func attachOneShot(cmd *cobra.Command) {
 	}
 	f := cmd.Flags()
 	f.BoolVar(&rm, "rm", false, "Destroy the sandbox when the command finishes")
+	f.BoolVar(&sandbox, "sandbox", false, "In a linked directory, use a sandbox instead of running here")
 	f.StringVar(&size, "size", "", "Sandbox size, as for 'miosa create'")
 	f.StringVar(&template, "template", "", "Sandbox template (default miosa-sandbox)")
 	f.StringVar(&cwd, "cwd", "", "Working directory for the command")

@@ -98,6 +98,16 @@ Example:
 			if err != nil {
 				return die(err)
 			}
+			// In a linked directory with no sandbox named, status is about the
+			// project and service this directory works on (Railway parity).
+			if len(args) == 0 {
+				if link, lerr := readLink(); lerr == nil {
+					if isJSON() {
+						return p.JSON(link)
+					}
+					return printLinkedStatus(cmd.Context(), c.API, link, p)
+				}
+			}
 			nameOrID := ""
 			if len(args) > 0 {
 				nameOrID = args[0]

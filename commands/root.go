@@ -209,6 +209,9 @@ func init() {
 		newOpenCmd(),
 		newSandboxCmd(),
 		newAdminCmd(),
+		newLinkCmd(),
+		newUnlinkCmd(),
+		newVariablesCmd(),
 	)
 }
 

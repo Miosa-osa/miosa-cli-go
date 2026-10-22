@@ -193,6 +193,7 @@ numbers.`,
 	cmd.Flags().StringVar(&idempotencyKey, "idempotency-key", "",
 		"Engine import key; a random one is used when empty, and repeating it returns the same job")
 	_ = cmd.MarkFlagRequired("to")
+	cmd.AddCommand(railwayImportCmd())
 	return cmd
 }
 

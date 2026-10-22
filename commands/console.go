@@ -36,6 +36,14 @@ non-interactive commands.
   miosa console my-box -- htop`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// In a linked directory, `miosa shell` is the local shell with the
+			// service's variables (Railway's meaning); naming a sandbox keeps the
+			// remote terminal.
+			if len(args) == 0 && shell == "" && cwd == "" {
+				if _, err := readLink(); err == nil {
+					return shellLinkedLocal(cmd)
+				}
+			}
 			return runConsole(cmd, args, shell, cwd)
 		},
 	}
