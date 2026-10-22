@@ -9247,6 +9247,47 @@ Flags:
 - `--workspace string` - MIOSA workspace (slug, name or id).
 - `--yes` - With --cleanup: do not ask.
 
+#### `miosa import vercel`
+
+Read a vercel.json and write a reviewable plan.
+
+```
+miosa import vercel --from-file vercel.json [flags]
+```
+
+Read a Vercel project's vercel.json and write a plan: the MIOSA project,
+the production Deploy target, one service, and the environment variable names
+it declares.
+Review the plan, then --apply it.
+
+What maps: the app, its region (when the file names one MIOSA has), and the
+environment variable names.
+What does not, and is listed with the reason:
+rewrites, redirects, headers, builds, the functions block, cleanUrls,
+trailingSlash, buildCommand, installCommand, outputDirectory and crons.
+
+```
+  miosa import vercel --from-file vercel.json --name shop --repo https://github.com/acme/shop
+  miosa import vercel --from-file vercel.json --out plan.json
+  miosa import vercel --apply --plan plan.json
+```
+
+Flags:
+
+- `--allow-missing-values` - Create variables with no value as empty strings.
+- `--apply` - Create what the plan says.
+- `--from-file string` - The vercel.json to read.
+- `--into string` - Import into an existing MIOSA project.
+- `--name string` - MIOSA project name (default: vercel-app).
+- `--out string` - Write the plan JSON here.
+- `--plan string` - With --apply: the plan to apply.
+- `--region string` - Region: us-east, us-west or us-mia (overrides the file).
+- `--repo string` - Git URL for the service's source.
+- `--resume` - Continue an interrupted apply.
+- `--service string` - Service name inside the project. (default `web`)
+- `--state string` - Where created ids are recorded (default .miosa/import-vercel-<project>.json).
+- `--workspace string` - MIOSA workspace (slug, name or id).
+
 ### `miosa info`
 
 Show a machine's state, environment and setup status.
