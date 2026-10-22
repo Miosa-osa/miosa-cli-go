@@ -534,3 +534,41 @@ func TestExcludeAppliesAfterOnly(t *testing.T) {
 		t.Fatalf("names = %v", names)
 	}
 }
+
+func TestSuffixRenamesServicesAndCustomDomains(t *testing.T) {
+	src := fixtureSource()
+	src.Services[0].CustomDomains = []string{"api.cliniciq.com"}
+	plan, err := Build(src, Options{Suffix: "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, a := range actionsOf(plan, "service.create") {
+		names = append(names, a.Name)
+	}
+	if !strings.Contains(strings.Join(names, ","), "api2") || !strings.Contains(strings.Join(names, ","), "worker2") {
+		t.Fatalf("names = %v", names)
+	}
+	var fqdn string
+	for _, a := range actionsOf(plan, "domain.custom") {
+		fqdn = a.Domains[0]
+	}
+	if fqdn != "api2.cliniciq.com" {
+		t.Fatalf("domain = %q", fqdn)
+	}
+	// Variables point at the renamed service, not the Railway name.
+	for _, a := range actionsOf(plan, "variable.set") {
+		if a.Service == "api" {
+			t.Fatalf("a variable still names the unsuffixed service: %+v", a)
+		}
+	}
+}
+
+func TestSuffixOnADomainWithoutADot(t *testing.T) {
+	if got := suffixFirstLabel("localhost", "2"); got != "localhost2" {
+		t.Fatalf("got %q", got)
+	}
+	if got := suffixFirstLabel("app.cliniciq.com", "2"); got != "app2.cliniciq.com" {
+		t.Fatalf("got %q", got)
+	}
+}

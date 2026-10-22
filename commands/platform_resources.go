@@ -566,12 +566,14 @@ func scheduleCreateBody(_ []string, body map[string]any) (map[string]any, error)
 	return body, nil
 }
 
-// functionFlags are the settings create and update share. --code-file is read by the command
-// and sent as `code`; the path itself never reaches the server.
+// functionFlags are the settings create and update share. The source of the code is --code-file (one
+// file) or --dir (a project directory, uploaded as a .tar.gz; for an http function its dependencies are
+// installed on a build cell). Exactly one is needed to create.
 func functionFlags(create bool) []Flag {
 	flags := []Flag{
-		{Name: "code-file", Usage: "File holding the function source", Field: "code_file", Required: create},
-		{Name: "entrypoint", Usage: "Module file name inside the bundle (default index.js)"},
+		{Name: "code-file", Usage: "File holding the function source", Field: "code_file"},
+		{Name: "dir", Usage: "Project directory to upload; its dependencies (package-lock.json, requirements.txt) are installed on a build cell. http functions only", Field: "dir"},
+		{Name: "entrypoint", Usage: "Module file name inside the bundle (default index.js; for python module:attr, default main:app)"},
 		{Name: "env", Usage: "Environment variable KEY=VALUE (repeatable)", Type: "kv"},
 		{Name: "memory-mb", Usage: "Memory in MB; an http function runs only at the sizes a host serves (default 512)", Type: "int", Field: "memory_mb"},
 		{Name: "timeout-sec", Usage: "Per-request time limit in seconds, 1-300", Type: "int", Field: "timeout_sec"},
@@ -579,7 +581,7 @@ func functionFlags(create bool) []Flag {
 	if create {
 		flags = append(flags,
 			Flag{Name: "kind", Usage: "Kind: script (default) or http (host function pool)", Enum: []string{"script", "http"}},
-			Flag{Name: "runtime", Usage: "Runtime (an http function supports node)"},
+			Flag{Name: "runtime", Usage: "Runtime (an http function supports node and python)"},
 			Flag{Name: "workspace-id", Usage: "Workspace id", Field: "workspace_id"},
 			Flag{Name: "project", Usage: "Project id to attach the function to", Field: "project_id"},
 		)
@@ -587,16 +589,48 @@ func functionFlags(create bool) []Flag {
 	return flags
 }
 
-// functionCodeBody turns --code-file into the `code` field and, for create, the name argument
-// into `name`. An unreadable file stops the command before any request.
-func functionCodeBody(withName bool) func(args []string, body map[string]any) (map[string]any, error) {
-	return func(args []string, body map[string]any) (map[string]any, error) {
-		if withName {
+// functionSource wires the two sources of code. Body turns --code-file into `code` (and, for create, the name
+// argument into `name`), refuses a wrong combination before anything is sent, and adds the upload as `source`.
+// Before uploads --dir once the client exists. Body runs twice (a usage check, then the real request), so the
+// upload is kept between them; one command runs one function, so the closure is not shared.
+func functionSource(create bool) (func(*cobra.Command, *api.Client) error, func([]string, map[string]any) (map[string]any, error)) {
+	var source map[string]any
+	before := func(cmd *cobra.Command, c *api.Client) error {
+		source = nil
+		dir, _ := cmd.Flags().GetString("dir")
+		if dir == "" {
+			return nil
+		}
+		name := dir
+		if args := cmd.Flags().Args(); len(args) > 0 {
+			name = args[0]
+		}
+		var err error
+		source, err = uploadServiceSource(cmd.Context(), c, name, dir)
+		return err
+	}
+	body := func(args []string, body map[string]any) (map[string]any, error) {
+		if create {
 			body["name"] = args[0]
 		}
-		if path, ok := body["code_file"].(string); ok {
-			delete(body, "code_file")
-			raw, err := os.ReadFile(path)
+		file, hasFile := body["code_file"].(string)
+		dir, hasDir := body["dir"].(string)
+		delete(body, "code_file")
+		delete(body, "dir")
+		switch {
+		case hasFile && hasDir:
+			return nil, fmt.Errorf("give --code-file or --dir, not both")
+		case !hasFile && !hasDir && create:
+			return nil, fmt.Errorf("give the source of the code: --code-file for one file, or --dir for a project directory")
+		case hasDir:
+			if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+				return nil, fmt.Errorf("--dir: %q is not a directory", dir)
+			}
+			if source != nil {
+				body["source"] = source
+			}
+		case hasFile:
+			raw, err := os.ReadFile(file)
 			if err != nil {
 				return nil, fmt.Errorf("--code-file: %w", err)
 			}
@@ -604,6 +638,7 @@ func functionCodeBody(withName bool) func(args []string, body map[string]any) (m
 		}
 		return body, nil
 	}
+	return before, body
 }
 
 // functionLogsQuery turns --since (a duration) into the unix-millisecond cursor the API takes.
@@ -626,11 +661,15 @@ func functionDetail() []Col {
 		{Head: "Runtime", Path: "runtime"}, {Head: "State", Path: "state"},
 		{Head: "Serving", Path: "serving"}, {Head: "Why not", Path: "serving_reason"},
 		{Head: "Version", Path: "pool_version"},
+		{Head: "Build", Path: "build.state"}, {Head: "Build error", Path: "build.error.code"},
+		{Head: "Build hint", Path: "build.error.hint"},
 	}
 }
 
 func functionCmd() *cobra.Command {
 	f := idArg("function")
+	createBefore, createBody := functionSource(true)
+	updateBefore, updateBody := functionSource(false)
 	return group("function", "Edge functions", "<function> is a name or id.", []string{"functions", "fn"},
 		Op{
 			Use: "list", Aliases: []string{"ls"}, Short: "List functions", Method: "GET", Path: "/functions",
@@ -655,12 +694,19 @@ default export is a web handler (Request in, Response out) or a (req, res) funct
 
   miosa function create hook --kind http --code-file index.js
   miosa function create hook --kind http --code-file index.js --env MODE=prod --memory-mb 512
+  miosa function create api --kind http --dir ./api --runtime node
 
 An http function answers 'serving: false' with a reason (no_fn_hosts, not_published) until a host
-that has its runtime accepts it; invoke answers FUNCTION_NOT_PUBLISHED meanwhile.`,
+that has its runtime accepts it; invoke answers FUNCTION_NOT_PUBLISHED meanwhile.
+
+--dir uploads a project directory instead of one file. Its dependencies are installed on a build
+cell (npm ci with a package-lock.json, pip install with a requirements.txt), so the function reads
+'serving_reason: building' until that finishes; 'miosa function get' shows the build and
+'miosa function build-log' its output.`,
 			Method: "POST", Path: "/functions", Args: []Arg{idArg("name")},
 			Flags:  functionFlags(true),
-			Body:   functionCodeBody(true),
+			Before: createBefore,
+			Body:   createBody,
 			Detail: functionDetail(),
 		},
 		Op{
@@ -684,11 +730,24 @@ store: lines from instances that were replaced or stopped are gone.
 publishes a new version of an http function to its hosts.
 
   miosa function update hook --code-file index.js
-  miosa function update hook --state disabled`,
+  miosa function update hook --dir ./api
+  miosa function update hook --state disabled
+
+--dir builds the project first; the function keeps serving its current version until the build is
+ready, and the other flags of that command are applied together with it.`,
 			Method: "PATCH", Path: "/functions/{0}", Args: []Arg{f},
 			Flags:  append(functionFlags(false), Flag{Name: "state", Usage: "State: active or disabled", Enum: []string{"active", "disabled"}}),
-			Body:   functionCodeBody(false),
+			Before: updateBefore,
+			Body:   updateBody,
 			Detail: functionDetail(),
+		},
+		Op{
+			Use: "build-log <function>", Short: "Show the dependency install of an uploaded project",
+			Long: `Prints the last lines of the newest install of a function made from --dir: what the package
+manager printed on the build cell. 'miosa function get' shows its state and, for a failure, the reason.
+
+  miosa function build-log hook`,
+			Method: "GET", Path: "/functions/{0}", Args: []Arg{f}, Lines: "build.log_tail",
 		},
 		Op{Use: "rm <function>", Aliases: []string{"delete"}, Short: "Delete a function", Method: "DELETE", Path: "/functions/{0}", Args: []Arg{f}, Confirm: "Delete function {0}?", Done: "Deleted {0}"},
 	)

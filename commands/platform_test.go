@@ -1,12 +1,18 @@
 package commands_test
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -637,5 +643,155 @@ func TestFunctionLogsRefusesABadSince(t *testing.T) {
 	fakeRoutes(t, map[string]any{"GET /functions/hook/logs": `{"data":[]}`})
 	if _, err := run(t, "function", "logs", "hook", "--since", "soon"); err == nil {
 		t.Fatal("a --since that is not a duration is refused before any request")
+	}
+}
+
+// projectDir writes a small Node project and returns its path.
+func projectDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"package.json":      `{"name":"hook","dependencies":{"left-pad":"1.3.0"}}`,
+		"package-lock.json": `{"lockfileVersion":3}`,
+		"index.js":          "module.exports = (req, res) => res.end('ok')\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// uploadRoutes serves POST /uploads and a presigned PUT target, recording the archive it receives.
+func uploadRoutes(t *testing.T, routes map[string]any) (*fakeAPI, func() []byte) {
+	t.Helper()
+	var mu sync.Mutex
+	var archive []byte
+	put := plainServer(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		archive = b
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	routes["POST /uploads"] = `{"data":{"upload_id":"up1","url":"` + put.URL + `/put/up1","expires_at":"2026-10-22T13:00:00Z"}}`
+	f := fakeRoutes(t, routes)
+	return f, func() []byte { mu.Lock(); defer mu.Unlock(); return archive }
+}
+
+func tarGzNames(t *testing.T, b []byte) []string {
+	t.Helper()
+	gz, err := gzip.NewReader(bytes.NewReader(b))
+	if err != nil {
+		t.Fatalf("the upload is not gzip: %v", err)
+	}
+	var names []string
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return names
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, h.Name)
+	}
+}
+
+func TestFunctionCreateWithDirUploadsTheProjectAndSendsTheSource(t *testing.T) {
+	f, archive := uploadRoutes(t, map[string]any{
+		"POST /functions": resp{201, `{"id":"f9f9f9f9-0000-0000-0000-000000000000","name":"hook","kind":"http","runtime":"node","state":"active","serving":false,"serving_reason":"building","build":{"id":"b1","state":"building","error":null}}`},
+	})
+	out, err := run(t, "function", "create", "hook", "--kind", "http", "--dir", projectDir(t), "--memory-mb", "512")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	names := tarGzNames(t, archive())
+	if strings.Join(names, ",") != "index.js,package-lock.json,package.json" {
+		t.Fatalf("archive holds %v", names)
+	}
+	up := f.find("POST", "/uploads")[0].Body
+	if up["filename"] != "hook.tar.gz" || up["size"] == nil || up["sha256"] == nil {
+		t.Fatalf("upload request = %v", up)
+	}
+	b := f.find("POST", "/functions")[0].Body
+	src, _ := b["source"].(map[string]any)
+	if src["type"] != "upload" || src["upload_id"] != "up1" || b["kind"] != "http" || b["memory_mb"] != float64(512) {
+		t.Fatalf("body = %v", b)
+	}
+	for _, key := range []string{"code", "dir", "code_file"} {
+		if _, has := b[key]; has {
+			t.Fatalf("%s must not be sent: %v", key, b)
+		}
+	}
+	// the function says it is building, so a person does not wait for a host that is not coming
+	if !strings.Contains(out, "building") {
+		t.Fatalf("build state missing from the output:\n%s", out)
+	}
+}
+
+func TestFunctionCreateTakesOneSourceOfCode(t *testing.T) {
+	f, _ := uploadRoutes(t, map[string]any{"POST /functions": resp{201, `{}`}})
+	file := filepath.Join(t.TempDir(), "index.js")
+	_ = os.WriteFile(file, []byte("x"), 0o600)
+
+	if _, err := run(t, "function", "create", "hook", "--kind", "http", "--dir", projectDir(t), "--code-file", file); err == nil {
+		t.Fatal("--dir with --code-file must be refused")
+	}
+	out, err := run(t, "function", "create", "hook", "--kind", "http")
+	if err == nil || !strings.Contains(out+err.Error(), "--code-file") || !strings.Contains(out+err.Error(), "--dir") {
+		t.Fatalf("naming neither flag: err=%v out=%s", err, out)
+	}
+	if _, err := run(t, "function", "create", "hook", "--kind", "http", "--dir", filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("a missing directory is refused")
+	}
+	if got := len(f.find("POST", "/uploads")) + len(f.find("POST", "/functions")); got != 0 {
+		t.Fatalf("nothing is sent for a refused command, saw %d requests", got)
+	}
+}
+
+func TestFunctionUpdateWithDirSendsTheSourceAndTheOtherChanges(t *testing.T) {
+	f, archive := uploadRoutes(t, map[string]any{
+		"PATCH /functions/hook": `{"id":"f2","name":"hook","kind":"http","serving":true,"build":{"state":"building"}}`,
+	})
+	if _, err := run(t, "function", "update", "hook", "--dir", projectDir(t), "--timeout-sec", "20"); err != nil {
+		t.Fatal(err)
+	}
+	if len(archive()) == 0 {
+		t.Fatal("nothing was uploaded")
+	}
+	b := f.find("PATCH", "/functions/hook")[0].Body
+	src, _ := b["source"].(map[string]any)
+	if src["upload_id"] != "up1" || b["timeout_sec"] != float64(20) || len(b) != 2 {
+		t.Fatalf("body = %v", b)
+	}
+}
+
+func TestFunctionGetShowsTheBuild(t *testing.T) {
+	fakeRoutes(t, map[string]any{
+		"GET /functions/hook": `{"id":"f2","name":"hook","kind":"http","serving":false,"serving_reason":"build_failed","build":{"id":"b1","state":"failed","error":{"code":"install_failed","hint":"npm could not find left-pad."},"log_tail":["[build] npm ERR! 404"]}}`,
+	})
+	out, err := run(t, "function", "get", "hook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"build_failed", "failed", "install_failed", "npm could not find left-pad."} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("%q missing from:\n%s", want, out)
+		}
+	}
+}
+
+func TestFunctionBuildLogPrintsTheTail(t *testing.T) {
+	fakeRoutes(t, map[string]any{
+		"GET /functions/hook": `{"id":"f2","build":{"state":"failed","log_tail":["[build] added 12 packages","[build] npm ERR! 404 left-pad"]}}`,
+	})
+	out, err := run(t, "function", "build-log", "hook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "added 12 packages") || !strings.Contains(out, "npm ERR! 404 left-pad") {
+		t.Fatalf("lines missing:\n%s", out)
 	}
 }

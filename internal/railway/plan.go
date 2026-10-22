@@ -122,6 +122,10 @@ type Options struct {
 	Only []string
 	// Exclude leaves these services out; it is applied after Only.
 	Exclude []string
+	// Suffix is appended to every service name, and inserted before the first
+	// dot of every custom domain, so a shadow import cannot collide with the
+	// project it mirrors.
+	Suffix string
 }
 
 // Build turns a Railway read into a plan. It touches nothing: the same source
@@ -133,6 +137,7 @@ func Build(src Source, opts Options) (Plan, error) {
 	}
 	src, skipped := filterServices(src, opts.Only)
 	src, excluded := excludeServices(src, opts.Exclude)
+	src = applySuffix(src, opts.Suffix)
 	digest, err := digestOf(src)
 	if err != nil {
 		return Plan{}, err
@@ -467,6 +472,33 @@ func filterServices(src Source, only []string) (Source, []string) {
 	}
 	sort.Strings(skipped)
 	return src, skipped
+}
+
+// applySuffix renames services and custom domains so a shadow import never
+// collides with the project it mirrors: `backend` becomes `backend2` and
+// `app.example.com` becomes `app2.example.com`.
+func applySuffix(src Source, suffix string) Source {
+	suffix = strings.TrimSpace(suffix)
+	if suffix == "" {
+		return src
+	}
+	for i := range src.Services {
+		svc := &src.Services[i]
+		svc.Name += suffix
+		for j, fqdn := range svc.CustomDomains {
+			svc.CustomDomains[j] = suffixFirstLabel(fqdn, suffix)
+		}
+	}
+	return src
+}
+
+// suffixFirstLabel inserts the suffix before the first dot, leaving the rest of
+// the name alone: app.cliniciq.com with "2" is app2.cliniciq.com.
+func suffixFirstLabel(fqdn, suffix string) string {
+	if i := strings.IndexByte(fqdn, '.'); i > 0 {
+		return fqdn[:i] + suffix + fqdn[i:]
+	}
+	return fqdn + suffix
 }
 
 // excludeServices drops the named services and reports them, including a name
