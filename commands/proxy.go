@@ -15,6 +15,7 @@ import (
 
 func newProxyCmd() *cobra.Command {
 	var bind string
+	var reverse bool
 	cmd := &cobra.Command{
 		Use:     "proxy [name|id] <local>:<remote> [<local>:<remote> ...]",
 		Aliases: []string{"forward"},
@@ -30,13 +31,28 @@ interrupted with Ctrl-C. It listens on 127.0.0.1 unless --bind says otherwise.
 A key needs the sandboxes:exec scope, because a tunnel reaches every service in
 the sandbox. The sandbox must be running; a paused one is not woken.
 
+--reverse turns it around: a port inside the sandbox reaches a port on your
+machine (an ssh -R over the sandbox's SSH tunnel; needs the OpenSSH client).
+The mapping is still <local>:<remote>: the sandbox's localhost:<remote>
+connects to <local> on --bind (default 127.0.0.1) here.
+
+A connection that cannot reach the sandbox (it is moving between hosts, or the
+network blinked) is retried up to 5 times before it is dropped.
+
   miosa proxy my-box 8080:80
   miosa proxy my-box 5432:5432 6379:6379
-  miosa proxy 8080:80          # the current sandbox`,
+  miosa proxy 8080:80          # the current sandbox
+  miosa forward my-box --reverse 3000:8080   # the sandbox's :8080 reaches your :3000`,
 		Args: cobra.MinimumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error { return runProxy(cmd, args, bind) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if reverse {
+				return runReverseProxy(cmd, args, bind)
+			}
+			return runProxy(cmd, args, bind)
+		},
 	}
-	cmd.Flags().StringVar(&bind, "bind", "127.0.0.1", "Local address to listen on")
+	cmd.Flags().StringVar(&bind, "bind", "127.0.0.1", "Local address to listen on (with --reverse: to connect to)")
+	cmd.Flags().BoolVar(&reverse, "reverse", false, "Forward sandbox ports to ports on this machine instead")
 	return cmd
 }
 
@@ -112,4 +128,30 @@ func parseProxyArgs(args []string) (nameOrID string, pairs [][2]int, err error) 
 		return "", nil, fmt.Errorf("at least one <local>:<remote> port mapping required")
 	}
 	return nameOrID, pairs, nil
+}
+
+// runReverseProxy makes ports inside the sandbox reach ports on this machine:
+// one ssh session over the sandbox's SSH tunnel with an -R per mapping, held
+// open (-N) until Ctrl-C.
+func runReverseProxy(cmd *cobra.Command, args []string, bind string) error {
+	ref, pairs, err := parseProxyArgs(args)
+	if err != nil {
+		return usagef("%v", err)
+	}
+	sshBin, keygenBin, ok := lookSSH()
+	if !ok {
+		return usagef("--reverse needs the OpenSSH client (ssh and ssh-keygen) on this machine")
+	}
+	extra := []string{"-N", "-T", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15"}
+	for _, pair := range pairs {
+		local, remote := pair[0], pair[1]
+		extra = append(extra, "-R", fmt.Sprintf("%d:%s:%d", remote, bind, local))
+		if !isJSON() {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Forwarding the sandbox's port %d to %s:%d here\n", remote, bind, local)
+		}
+	}
+	if !isJSON() {
+		fmt.Fprintln(cmd.ErrOrStderr(), "Press Ctrl-C to stop.")
+	}
+	return runSSHClient(cmd, ref, "", false, sshBin, keygenBin, extra...)
 }

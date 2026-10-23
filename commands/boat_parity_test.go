@@ -212,3 +212,39 @@ func TestScpIsFilesCp(t *testing.T) {
 		t.Fatalf("scp: %v", err)
 	}
 }
+
+func TestAPIKeyUsageDaysListsRequestsPerDay(t *testing.T) {
+	f := newFakeAPI(t, func(c call) (int, string) {
+		switch {
+		case c.is("GET", "/api-keys/k1"):
+			return 200, `{"data":{"id":"k1","name":"ci","request_count":21,"status":"active"}}`
+		case c.is("GET", "/api-keys/k1/usage"):
+			return 200, `{"data":{"api_key_id":"k1","days":2,"total":21,"series":[{"date":"2026-10-22","requests":9},{"date":"2026-10-23","requests":12}]}}`
+		}
+		return 404, `{}`
+	})
+	out, err := run(t, "api-key", "usage", "k1", "--days", "2")
+	if err != nil || !strings.Contains(out, "2026-10-22") || !strings.Contains(out, "12") {
+		t.Fatalf("%v %s", err, out)
+	}
+	if q := f.find("GET", "/api-keys/k1/usage")[0].Query; !strings.Contains(q, "days=2") {
+		t.Fatalf("query = %q", q)
+	}
+	out, err = run(t, "api-key", "usage", "k1", "--days", "2", "--json")
+	if err != nil || !strings.Contains(out, `"daily"`) {
+		t.Fatalf("%v %s", err, out)
+	}
+}
+
+func TestAPIKeyUsageDaysOnAnOlderServerStillShowsTheKey(t *testing.T) {
+	newFakeAPI(t, func(c call) (int, string) {
+		if c.is("GET", "/api-keys/k1") {
+			return 200, `{"data":{"id":"k1","name":"ci","request_count":21,"status":"active"}}`
+		}
+		return 404, `{"error":{"code":"NOT_FOUND"}}`
+	})
+	stdout, stderr, err := runSplit(t, "api-key", "usage", "k1", "--days", "7")
+	if err != nil || !strings.Contains(stdout, "21") || !strings.Contains(stderr, "does not keep requests per day") {
+		t.Fatalf("%v %q %q", err, stdout, stderr)
+	}
+}

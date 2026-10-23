@@ -840,7 +840,7 @@ built from an image has no build log.
 	fs.BoolVar(&build, "build", false, "Show the build log instead of the service's output")
 	fs.StringVar(&buildID, "build-id", "", "Build id to read with --build (default: latest)")
 	fs.StringVar(&replica, "replica", "", "Read one replica's log (its id)")
-	fs.IntVar(&tail, "tail", 200, "Lines from the end of the log (runtime 1-1000, build 1-2000)")
+	fs.IntVarP(&tail, "tail", "n", 200, "Lines from the end of the log (runtime 1-1000, build 1-2000)")
 	fs.BoolVarP(&follow, "follow", "f", false, "Keep printing new lines (with --build: until the build finishes)")
 	return cmd
 }

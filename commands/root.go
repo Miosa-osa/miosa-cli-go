@@ -314,7 +314,7 @@ var helpGroups = []struct {
 	Commands  []string
 }{
 	{"account", "Account and setup:", []string{"login", "logout", "whoami", "profile", "config", "doctor", "update", "version", "open", "org", "limits", "feedback"}},
-	{"machines", "Sandboxes and computers:", []string{"create", "list", "info", "use", "destroy", "pause", "resume", "stop", "recover", "fork", "extend", "tag",
+	{"machines", "Sandboxes and computers:", []string{"create", "list", "info", "use", "destroy", "pause", "resume", "restart", "stop", "recover", "fork", "extend", "tag",
 		"exec", "ssh", "console", "files", "push", "logs", "events", "usage", "wait", "ports", "preview", "process", "desktop", "computer", "daemon", "services", "policy", "proxy", "url", "env", "snapshot", "checkpoint", "restore", "catalog", "runtimes", "device", "sandbox"}},
 	{"agents", "Agents:", []string{"prompt", "steer", "interrupt", "conversations", "run", "chat", "agent", "connections"}},
 	{"platform", "Platform:", []string{"api-key", "webhook", "deploy", "template", "workspace", "move", "billing", "audit", "forge", "api", "mcp"}},
@@ -323,7 +323,7 @@ var helpGroups = []struct {
 // sandboxArgCommands take a sandbox as their first argument.
 var sandboxArgCommands = map[string]bool{
 	"info": true, "use": true, "destroy": true, "exec": true, "ssh": true, "console": true, "url": true,
-	"pause": true, "resume": true, "stop": true, "recover": true, "fork": true, "extend": true, "tag": true,
+	"pause": true, "resume": true, "restart": true, "stop": true, "recover": true, "fork": true, "extend": true, "tag": true,
 	"logs": true, "events": true, "usage": true, "wait": true, "ports": true, "proxy": true, "restore": true,
 }
 

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 
 	"fmt"
 	"net/url"
@@ -15,9 +16,74 @@ import (
 func init() {
 	rootCmd.AddCommand(previewCmd(), processCmd(), desktopCmd(),
 		sandboxVerb(Op{
-			Use: "ps [sandbox]", Short: "List background processes (same as 'process list')",
+			Use: "ps [sandbox]", Short: "List background processes (same as 'process list'); 'top' lists every process",
 			Method: "GET", Path: "/sandboxes/{0}/processes", Cols: processCols,
+		}),
+		sandboxVerb(Op{
+			Use: "top [sandbox]", Short: "List every process in a sandbox, busiest first, even while it is stopped",
+			Long: `Lists the processes running in a sandbox, the busiest first (at most 200): pid,
+CPU and memory use, how long each has run and its command. A stopped or paused
+sandbox is not woken: it shows the list read last, taken at its stop or at the
+last 'top', and says when.
+
+  miosa top my-box
+  miosa top my-box --json`,
+			Method: "GET", Path: "/sandboxes/{0}/top", Human: renderTop,
 		}))
+}
+
+// renderTop prints a process sample, saying when it was taken unless it is live.
+func renderTop(cmd *cobra.Command, _ []string, resp any) error {
+	p := printerFor(cmd)
+	data, _ := lookupPath(resp, "data").(map[string]any)
+	if live, _ := data["live"].(bool); !live {
+		at, _ := data["sampled_at"].(string)
+		if at == "" {
+			p.Line("The sandbox is %s and no process list was kept for it.", orDash(fmt.Sprint(data["sandbox_state"])))
+			return nil
+		}
+		p.Line("The sandbox is %s. What was running %s (kept at its %s):", fmt.Sprint(data["sandbox_state"]), formatAge(at), fmt.Sprint(data["source"]))
+	}
+	procs, _ := data["processes"].([]any)
+	rows := make([][]string, 0, len(procs))
+	for _, raw := range procs {
+		pr, _ := raw.(map[string]any)
+		rows = append(rows, []string{
+			fmt.Sprint(pr["pid"]), fmt.Sprint(pr["user"]), fmt.Sprintf("%.1f", num(pr["cpu_percent"])),
+			fmt.Sprintf("%.1f", num(pr["memory_percent"])), fmt.Sprintf("%d", int64(num(pr["rss_kb"]))/1024),
+			uptime(int64(num(pr["elapsed_sec"]))), clipText(fmt.Sprint(pr["command"]), 80),
+		})
+	}
+	p.Table([]string{"PID", "USER", "CPU%", "MEM%", "RSS MB", "UP", "COMMAND"}, rows)
+	return nil
+}
+
+func num(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case json.Number:
+		f, _ := n.Float64()
+		return f
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	}
+	return 0
+}
+
+func uptime(sec int64) string {
+	switch {
+	case sec >= 86400:
+		return fmt.Sprintf("%dd%dh", sec/86400, sec%86400/3600)
+	case sec >= 3600:
+		return fmt.Sprintf("%dh%dm", sec/3600, sec%3600/60)
+	case sec >= 60:
+		return fmt.Sprintf("%dm%ds", sec/60, sec%60)
+	default:
+		return fmt.Sprintf("%ds", sec)
+	}
 }
 
 // sbx is the optional leading sandbox argument (default: the current one).
