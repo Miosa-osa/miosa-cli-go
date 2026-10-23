@@ -337,6 +337,7 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa project create` | POST | `/projects` |
 | `miosa project get` | GET | `/projects/{0}` |
 | `miosa project list` | GET | `/projects` |
+| `miosa project rm` | DELETE | `/projects/{0}` |
 | `miosa ps` | GET | `/sandboxes/{0}/processes` |
 | `miosa recover` | POST | `/sandboxes/{0}/recover` |
 | `miosa regions` | GET | `/regions` |

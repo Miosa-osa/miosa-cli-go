@@ -92,3 +92,45 @@ func TestProjectCreateWithNoDefaultAsksForOne(t *testing.T) {
 		t.Fatal("nothing may be created")
 	}
 }
+
+// QA 10-22: 'miosa project delete <name> --yes' failed because the verb did
+// not exist at all. It exists now, and it resolves a name or slug to the id the
+// API needs, exactly like 'project get'.
+func TestProjectDeleteResolvesANameAndIssuesTheDelete(t *testing.T) {
+	const id = "33333333-3333-4333-8333-333333333333"
+
+	f := fakeRoutes(t, map[string]any{
+		"GET /projects":          `{"data":[{"id":"` + id + `","name":"shop","slug":"shop"}]}`,
+		"DELETE /projects/" + id: resp{204, ``},
+	})
+
+	out, err := run(t, "project", "rm", "shop", "--yes")
+	if err != nil {
+		t.Fatalf("project rm: %v\n%s", err, out)
+	}
+
+	if len(f.find("DELETE", "/projects/"+id)) != 1 {
+		t.Fatalf("DELETE /projects/%s was not called; calls = %v", id, f.find("DELETE", "/projects/"+id))
+	}
+
+	if !strings.Contains(out, "Deleted") {
+		t.Fatalf("out = %s", out)
+	}
+}
+
+func TestProjectDeleteIsAlsoAvailableAsDelete(t *testing.T) {
+	const id = "44444444-4444-4444-8444-444444444444"
+
+	f := fakeRoutes(t, map[string]any{
+		"GET /projects":          `{"data":[{"id":"` + id + `","name":"shop","slug":"shop"}]}`,
+		"DELETE /projects/" + id: resp{204, ``},
+	})
+
+	if out, err := run(t, "project", "delete", "shop", "--yes"); err != nil {
+		t.Fatalf("project delete: %v\n%s", err, out)
+	}
+
+	if len(f.find("DELETE", "/projects/"+id)) != 1 {
+		t.Fatalf("DELETE /projects/%s was not called", id)
+	}
+}

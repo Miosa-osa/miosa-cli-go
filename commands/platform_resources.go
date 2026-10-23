@@ -333,12 +333,12 @@ func dbCmd() *cobra.Command {
 
 --extensions applies to PostgreSQL only; allowed: vector, pg_trgm, pgcrypto, uuid-ossp,
 pg_stat_statements, citext, hstore, btree_gin, btree_gist. --version is a version with an
-image (postgres 16, mysql 8, redis 7). --size is one of tiny, xs, small, medium, large.
+image (postgres 16, mysql 8, redis 7, mongodb 7). --size is one of tiny, xs, small, medium, large.
 
 --engine optimal creates an Optimal Engine; 'miosa engine create' is the same call with
 the Engine-specific flags and an idempotent name.`,
 			Flags: []Flag{
-				{Name: "engine", Usage: "Engine: postgres, mysql, redis, qdrant or optimal", Default: "postgres", Enum: []string{"postgres", "postgresql", "mysql", "redis", "qdrant", "optimal"}},
+				{Name: "engine", Usage: "Engine: postgres, mysql, redis, mongodb, qdrant or optimal", Default: "postgres", Enum: []string{"postgres", "postgresql", "mysql", "redis", "mongodb", "qdrant", "optimal"}},
 				{Name: "version", Usage: "Engine version (default: the engine's current one)", Field: "engine_version"},
 				{Name: "size", Usage: "Size: tiny, xs, small, medium or large", Enum: []string{"tiny", "xs", "small", "medium", "large"}},
 				{Name: "extensions", Type: "strings", Usage: "PostgreSQL extensions to enable at create, comma separated"},
@@ -369,6 +369,7 @@ the Engine-specific flags and an idempotent name.`,
 		Op{Use: "rm <database>", Aliases: []string{"delete"}, Short: "Permanently delete a database", Method: "DELETE", Path: "/databases/{0}", Args: []Arg{d}, Confirm: "Permanently delete database {0} and its data?", Done: "Deleted {0}"},
 	)
 	cmd.AddCommand(newDBRestoreCmd(), newDBRestoreAliasCmd())
+	cmd.AddCommand(newDBPublicCmd())
 	return cmd
 }
 
@@ -804,6 +805,17 @@ else the organization's default workspace, else its only workspace.`,
 			Body:   func(a []string, body map[string]any) (map[string]any, error) { body["name"] = a[0]; return body, nil },
 			Before: settleProjectWorkspace,
 		},
+		Op{
+			Use: "rm <project>", Aliases: []string{"delete"}, Short: "Delete a project and everything in it",
+			// The API answers /projects/<id> only; a name or slug is rewritten to the
+			// id before the request (internal/api.ResolvePath), so `miosa project rm
+			// shop` works the way `miosa project get shop` does.
+			Long: `Delete a project. A workspace's default project cannot be deleted, and a
+project that still owns services, databases or deployments answers 409: move or
+delete those first.`,
+			Method: "DELETE", Path: "/projects/{0}", Args: []Arg{idArg("project")},
+			Confirm: "Permanently delete project {0} and everything in it?", Done: "Deleted {0}",
+		},
 	)
 	cmd.AddCommand(projectVarsCmd())
 	cmd.AddCommand(projectEnvironmentCmd())
@@ -856,6 +868,8 @@ plans and payment methods happens in the console ('miosa open billing').`, nil,
 		},
 	)
 	cmd.AddCommand(billingCapCmd())
+	cmd.AddCommand(autoReloadCmd())
+	cmd.AddCommand(paymentMethodsCmd())
 	return cmd
 }
 

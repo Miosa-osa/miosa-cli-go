@@ -183,6 +183,7 @@ process inside a sandbox is 'miosa daemon', a different product.`, []string{"ser
 		serviceVarsCmd(),
 		serviceRunsCmd(),
 		serviceConnectionCmd(),
+		serviceMetricsCmd(),
 		serviceSettingsCmd(),
 		serviceTemplatesCmd(),
 		serviceSelectCmd(),
@@ -203,8 +204,11 @@ type serviceCreateFlags struct {
 	dockerfile   string
 	port         int
 	startCommand string
+	buildCommand string
+	outputDir    string
 	replicas     int
 	region       string
+	size         string
 	cron         string
 	envs         []string
 	noPublic     bool
@@ -222,7 +226,8 @@ service. A web or static service gets a public address unless --no-public is giv
   miosa service create cliniciq API --type web --repo https://github.com/acme/api
   miosa service create cliniciq Jobs --type worker --repo https://github.com/acme/api --start-command "node worker.js"
   miosa service create cliniciq Cache --type private --image redis:7
-  miosa service create cliniciq Nightly --type schedule --repo https://github.com/acme/api --schedule "0 3 * * *"`,
+  miosa service create cliniciq Nightly --type schedule --repo https://github.com/acme/api --schedule "0 3 * * *"
+  miosa service create cliniciq API --repo https://github.com/acme/api --size dedicated-4`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p := printerFor(cmd)
@@ -236,6 +241,9 @@ service. A web or static service gets a public address unless --no-public is giv
 			}
 			if f.replicas != 0 && (f.replicas < 1 || f.replicas > 50) {
 				return usagef("--replicas must be 1 to 50")
+			}
+			if err := checkServiceSize(f.size); err != nil {
+				return err
 			}
 			if typ.kind == "cron" && strings.TrimSpace(f.cron) == "" {
 				return usagef("a Schedule needs --schedule \"<5 field expression>\"")
@@ -295,11 +303,20 @@ service. A web or static service gets a public address unless --no-public is giv
 			if f.startCommand != "" {
 				settings["start_command"] = f.startCommand
 			}
+			if f.buildCommand != "" {
+				settings["build_command"] = f.buildCommand
+			}
+			if f.outputDir != "" {
+				settings["output_dir"] = f.outputDir
+			}
 			if f.replicas != 0 {
 				settings["replicas"] = f.replicas
 			}
 			if f.region != "" {
 				settings["region"] = f.region
+			}
+			if f.size != "" {
+				settings["shape"] = f.size
 			}
 			if f.cron != "" {
 				settings["cron_schedule"] = f.cron
@@ -353,8 +370,11 @@ service. A web or static service gets a public address unless --no-public is giv
 	fs.StringVar(&f.dockerfile, "dockerfile", "", "Dockerfile path (needs Services build cells)")
 	fs.IntVar(&f.port, "port", 0, "Port the container listens on (--image only)")
 	fs.StringVar(&f.startCommand, "start-command", "", "Command the service starts with")
+	fs.StringVar(&f.buildCommand, "build-command", "", "Static services: build command (Railpack builds only)")
+	fs.StringVar(&f.outputDir, "output-dir", "", "Static services: directory to serve (default: detected)")
 	fs.IntVar(&f.replicas, "replicas", 0, "Replicas to run (1-50)")
 	fs.StringVar(&f.region, "region", "", "Region: us-west, us-east or us-mia")
+	fs.StringVar(&f.size, "size", "", "Dedicated vCPU size: "+serviceSizeNames)
 	fs.StringVar(&f.cron, "schedule", "", "Five field schedule expression (with --type schedule)")
 	fs.StringArrayVar(&f.envs, "env", nil, "Variable KEY=VALUE (repeatable); a value may be a ${{...}} reference")
 	fs.BoolVar(&f.noPublic, "no-public", false, "Do not give a web or static service a public address")
@@ -433,16 +453,27 @@ func serviceGetCmd() *cobra.Command {
 }
 
 func serviceUpdateCmd() *cobra.Command {
-	var env, name, startCommand, region string
-	var replicas int
+	var env, name, startCommand, region, spread, strategy, size string
+	var replicas, rolloutStepS, terminateGrace int
+	var buildCommand, outputDir string
+	var rolloutSteps []int
 	cmd := &cobra.Command{
 		Use:   "update <project> <service>",
 		Short: "Change a service's name or settings",
-		Long: `Change a service's name, start command, replicas or region. Settings are merged:
-only the flags you pass change.
+		Long: `Change a service's name or settings. Settings are merged: only the flags you
+pass change.
 
   miosa service update cliniciq API --replicas 3
-  miosa service update cliniciq API --name backend --start-command "node dist/server.js"`,
+  miosa service update cliniciq API --name backend --start-command "node dist/server.js"
+  miosa service update cliniciq API --strategy rolling --rollout-step 10 --rollout-step 50 --rollout-step 100
+  miosa service update cliniciq API --spread single_host
+  miosa service update cliniciq API --size dedicated-4
+  miosa service update cliniciq site --build-command "npm run build" --output-dir dist
+
+--spread is auto (replicas land on different hosts where the network allows) or
+single_host. --strategy is replace or rolling; rolling starts the new version
+beside the old one, shifts traffic in steps and rolls back automatically if the
+new replica is unhealthy. --rollout-step must ascend and end at 100.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p := printerFor(cmd)
@@ -459,8 +490,46 @@ only the flags you pass change.
 			if cmd.Flags().Changed("region") {
 				settings["region"] = region
 			}
+			if cmd.Flags().Changed("build-command") {
+				settings["build_command"] = buildCommand
+			}
+			if cmd.Flags().Changed("output-dir") {
+				settings["output_dir"] = outputDir
+			}
+			if cmd.Flags().Changed("spread") {
+				settings["spread"] = spread
+			}
+			if cmd.Flags().Changed("strategy") {
+				settings["strategy"] = strategy
+			}
+			if cmd.Flags().Changed("rollout-step") {
+				for i := 1; i < len(rolloutSteps); i++ {
+					if rolloutSteps[i] <= rolloutSteps[i-1] {
+						return usagef("--rollout-step must ascend, got %v", rolloutSteps)
+					}
+				}
+				if last := rolloutSteps[len(rolloutSteps)-1]; last != 100 {
+					return usagef("--rollout-step must end at 100, got %d", last)
+				}
+				settings["rollout_steps"] = rolloutSteps
+			}
+			if cmd.Flags().Changed("rollout-step-s") {
+				settings["rollout_step_s"] = rolloutStepS
+			}
+			if cmd.Flags().Changed("terminate-grace") {
+				settings["terminate_grace_s"] = terminateGrace
+			}
+			if cmd.Flags().Changed("size") {
+				if size == "" {
+					return usagef("--size must be one of %s", serviceSizeNames)
+				}
+				if err := checkServiceSize(size); err != nil {
+					return err
+				}
+				settings["shape"] = size
+			}
 			if !cmd.Flags().Changed("name") && len(settings) == 0 {
-				return usagef("nothing to change: pass --name, --start-command, --replicas or --region")
+				return usagef("nothing to change: pass --name, --start-command, --replicas, --region, --spread, --strategy, --size or a rollout flag")
 			}
 			c, _, err := buildClient()
 			if err != nil {
@@ -497,8 +566,36 @@ only the flags you pass change.
 	fs.StringVar(&name, "name", "", "New name")
 	fs.StringVar(&startCommand, "start-command", "", "Command the service starts with")
 	fs.IntVar(&replicas, "replicas", 0, "Replicas to run (1-50)")
+	fs.StringVar(&buildCommand, "build-command", "", "Static services: build command (Railpack builds only)")
+	fs.StringVar(&outputDir, "output-dir", "", "Static services: directory to serve (default: detected)")
 	fs.StringVar(&region, "region", "", "Region: us-west, us-east or us-mia")
+	fs.StringVar(&spread, "spread", "", "Replica placement: auto or single_host")
+	fs.StringVar(&strategy, "strategy", "", "Release strategy: replace or rolling")
+	fs.IntSliceVar(&rolloutSteps, "rollout-step", nil, "Traffic step in percent (repeatable, ascending, ends at 100)")
+	fs.IntVar(&rolloutStepS, "rollout-step-s", 0, "Seconds to wait between steps (10-3600)")
+	fs.IntVar(&terminateGrace, "terminate-grace", 0, "Seconds the old version drains during a rolling deploy (>=10)")
+	fs.StringVar(&size, "size", "", "Dedicated vCPU size: "+serviceSizeNames)
 	return cmd
+}
+
+// serviceSizes are the dedicated vCPU sizes (one hardware thread per vCPU, never shared, 4 GiB per vCPU),
+// the values of the service setting "shape". They are available only where the platform has switched the
+// class on; the API refuses the setting otherwise.
+var serviceSizes = []string{"dedicated-2", "dedicated-4", "dedicated-8", "dedicated-16"}
+
+var serviceSizeNames = strings.Join(serviceSizes, ", ")
+
+// checkServiceSize accepts an empty size (not given) or one of serviceSizes.
+func checkServiceSize(size string) error {
+	if size == "" {
+		return nil
+	}
+	for _, s := range serviceSizes {
+		if s == size {
+			return nil
+		}
+	}
+	return usagef("--size must be one of %s (got %q)", serviceSizeNames, size)
 }
 
 // ── deploy ───────────────────────────────────────────────────────────────────
@@ -1901,6 +1998,118 @@ func serviceConnectionCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&env, "deploy-target", "", "Deploy target name or id (default: the project's default)")
 	return cmd
+}
+
+func serviceMetricsCmd() *cobra.Command {
+	var (
+		env    string
+		range_ string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "metrics <project> <service>",
+		Short: "Requests, errors and latency for a service",
+		Long: `The service's own metric series: requests, errors, error rate and response
+latency (p50 and p95). CPU, memory and network are not collected for services,
+so those fields are null and the footer says which columns are real.
+
+  miosa service metrics cliniciq API
+  miosa service metrics cliniciq API --range 24h --json`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p := printerFor(cmd)
+			c, _, err := buildClient()
+			if err != nil {
+				return die(err)
+			}
+			ctx := cmd.Context()
+			projectID, svc, err := openService(ctx, c.API, args[0], args[1], env)
+			if err != nil {
+				return err
+			}
+
+			q := url.Values{}
+			q.Set("range", range_)
+
+			var out struct {
+				Data struct {
+					Series    []map[string]any `json:"series"`
+					Available []string         `json:"available"`
+					Source    string           `json:"source"`
+				} `json:"data"`
+			}
+
+			path := servicePath(projectID, svc.ID) + "/metrics/series"
+			if err := c.API.Get(ctx, path, q, &out); err != nil {
+				return die(err)
+			}
+
+			if isJSON() {
+				return p.JSON(out.Data)
+			}
+
+			if len(out.Data.Series) == 0 {
+				p.Line("%s: no traffic in the last %s", svc.Name, range_)
+			} else {
+				rows := make([][]string, 0, len(out.Data.Series))
+				for _, point := range out.Data.Series {
+					rows = append(rows, []string{
+						metricTime(point["t"]),
+						metricValue(point["requests"], "%.0f"),
+						metricValue(point["errors"], "%.0f"),
+						metricPercent(point["error_rate"]),
+						metricValue(point["response_ms_p50"], "%.0f"),
+						metricValue(point["response_ms_p95"], "%.0f"),
+					})
+				}
+				p.Table([]string{"TIME", "REQUESTS", "ERRORS", "ERROR%", "P50", "P95"}, rows)
+			}
+
+			p.Line("")
+			p.Line("%s, last %s. Measured: %s. Not collected for services: cpu, memory, network.",
+				svc.Name, range_, strings.Join(out.Data.Available, ", "))
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&env, "deploy-target", "", "Deploy target name or id (default: the project's default)")
+	cmd.Flags().StringVar(&range_, "range", "1h", "Window: 15m, 1h, 6h, 24h or 7d")
+	return cmd
+}
+
+func metricTime(value any) string {
+	if seconds, ok := number(value); ok {
+		return time.Unix(int64(seconds), 0).UTC().Format("15:04")
+	}
+	return "-"
+}
+
+func metricValue(value any, format string) string {
+	if seconds, ok := number(value); ok {
+		return fmt.Sprintf(format, seconds)
+	}
+	return "-"
+}
+
+func metricPercent(value any) string {
+	if seconds, ok := number(value); ok {
+		return fmt.Sprintf("%.1f%%", seconds*100)
+	}
+	return "-"
+}
+
+func number(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case int:
+		return float64(v), true
+	case nil:
+		return 0, false
+	default:
+		return 0, false
+	}
 }
 
 func serviceSettingsCmd() *cobra.Command {
