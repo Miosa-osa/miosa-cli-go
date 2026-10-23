@@ -2,9 +2,12 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -152,14 +155,21 @@ The key goes to standard output on create, so you can capture it:
 	cmd.AddCommand(newKeyCreateCmd(), newKeyScopedCmd(), newKeyPresetCmd(), Op{
 		Use: "usage <id>", Short: "How much a key is used: requests, last use and from where",
 		Long: `Shows how many requests the key has made, when it was last used and from which
-address, how old it is and when it expires. 'miosa api-key events <id>' lists
-what it did.`,
+address, how old it is and when it expires. --days N also lists its requests per
+day (UTC) for the last N days, up to 90; today trails by up to a minute.
+'miosa api-key events <id>' lists what it did.
+
+  miosa api-key usage k1
+  miosa api-key usage k1 --days 30`,
 		Method: "GET", Path: "/api-keys/{0}", Args: []Arg{{Name: "id"}},
-		Detail: []Col{
-			{Head: "Key", Path: "name"}, {Head: "Prefix", Path: "key_prefix"}, {Head: "Status", Path: "status"},
-			{Head: "Requests", Path: "request_count"}, {Head: "Last used", Path: "last_used_at", Fmt: "age"},
-			{Head: "Last used from", Path: "last_used_ip"}, {Head: "Age (days)", Path: "age_days"},
-			{Head: "Rate limit (req/min)", Path: "rate_limit_rpm"}, {Head: "Expires", Path: "expires_at"},
+		Flags: []Flag{{Name: "days", Type: "int", In: "local", Usage: "Also list requests per day for the last N days (1-90)"}},
+		After: keyUsageDaily,
+		Human: func(cmd *cobra.Command, args []string, resp any) error {
+			if err := (Op{Detail: keyUsageDetail}).render(cmd, args, resp); err != nil {
+				return err
+			}
+			printKeyDaily(cmd, resp)
+			return nil
 		},
 	}.command("api-key"))
 	return cmd
@@ -459,4 +469,59 @@ The secret is returned only when the webhook is created.
 			Method: "POST", Path: "/webhooks/{0}/deliveries/{1}/replay", Args: []Arg{hook, {Name: "delivery"}}, Done: "Replaying {1}",
 		},
 	)
+}
+
+var keyUsageDetail = []Col{
+	{Head: "Key", Path: "name"}, {Head: "Prefix", Path: "key_prefix"}, {Head: "Status", Path: "status"},
+	{Head: "Requests", Path: "request_count"}, {Head: "Last used", Path: "last_used_at", Fmt: "age"},
+	{Head: "Last used from", Path: "last_used_ip"}, {Head: "Age (days)", Path: "age_days"},
+	{Head: "Rate limit (req/min)", Path: "rate_limit_rpm"}, {Head: "Expires", Path: "expires_at"},
+}
+
+// keyUsageDaily adds the key's requests per day (GET /api-keys/:id/usage) to
+// the response as data.daily when --days is given. A server without the route
+// says so on stderr and the rest still prints.
+func keyUsageDaily(cmd *cobra.Command, resp any) error {
+	days, _ := cmd.Flags().GetInt("days")
+	if days <= 0 {
+		return nil
+	}
+	data, _ := lookupPath(resp, "data").(map[string]any)
+	id, _ := data["id"].(string)
+	if id == "" {
+		return nil
+	}
+	c, _, err := buildClient()
+	if err != nil {
+		return die(err)
+	}
+	var out struct {
+		Data map[string]any `json:"data"`
+	}
+	q := url.Values{"days": {strconv.Itoa(days)}}
+	if err := c.API.Get(cmd.Context(), "/api-keys/"+url.PathEscape(id)+"/usage", q, &out); err != nil {
+		var apiErr *api.Error
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+			fmt.Fprintln(cmd.ErrOrStderr(), "miosa: this server does not keep requests per day yet")
+			return nil
+		}
+		return die(err)
+	}
+	data["daily"] = out.Data
+	return nil
+}
+
+func printKeyDaily(cmd *cobra.Command, resp any) {
+	series, _ := lookupPath(resp, "data.daily.series").([]any)
+	if len(series) == 0 {
+		return
+	}
+	rows := make([][]string, 0, len(series))
+	for _, s := range series {
+		day, _ := s.(map[string]any)
+		rows = append(rows, []string{fmt.Sprint(day["date"]), fmt.Sprint(day["requests"])})
+	}
+	p := printerFor(cmd)
+	p.Line("")
+	p.Table([]string{"DAY (UTC)", "REQUESTS"}, rows)
 }

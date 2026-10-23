@@ -63,7 +63,7 @@ type sshCertificate struct {
 // server has no certificate authority, installs the public key), and runs the
 // system ssh through the authenticated tunnel. Nothing it creates outlives the
 // command: the key, certificate and known_hosts live in a private temp dir.
-func runSSHClient(cmd *cobra.Command, ref, command string, tty bool, sshBin, keygenBin string) error {
+func runSSHClient(cmd *cobra.Command, ref, command string, tty bool, sshBin, keygenBin string, extra ...string) error {
 	c, cfg, err := buildClient()
 	if err != nil {
 		return die(err)
@@ -155,6 +155,7 @@ func runSSHClient(cmd *cobra.Command, ref, command string, tty bool, sshBin, key
 	case !stdinIsTerminal(cmd):
 		args = append(args, "-T") // piped input: no terminal on the far side
 	}
+	args = append(args, extra...)
 	args = append(args, user+"@sandbox-"+id)
 	if command != "" {
 		args = append(args, command)

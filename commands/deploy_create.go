@@ -216,6 +216,13 @@ func runDeployCreate(cmd *cobra.Command, args []string, flags *deployFlags) erro
 	if localDir && f.deployType == "dynamic" && f.runCommand == "" {
 		return usagef("--type dynamic with --dir needs --run-command, the command the app starts with")
 	}
+	// A folder with no index.html but a server manifest is an app, not a site: published as the
+	// default static site it failed on the server as a bare PUBLISH_VALIDATION_FAILED (QA 10-23).
+	if localDir && f.deployType == "" && f.runCommand == "" {
+		if manifest := serverManifest(f.dir); manifest != "" {
+			return usagef("%s has %s and no index.html, so it is an app to run, not a site: add --run-command (the command it starts with, e.g. \"npm start\") and --port, or --type static to publish the files as they are", f.dir, manifest)
+		}
+	}
 	if localDir && f.deployType == "docker_deploy" {
 		return usagef("--type docker_deploy publishes from a sandbox: use --from-sandbox <sandbox>")
 	}
@@ -1658,4 +1665,19 @@ func runDeployRedeploy(cmd *cobra.Command, ref, commit string, wait bool) error 
 	}
 	p.Line("If it fails, 'miosa deploy get %s' reports the reason and 'miosa deploy builds %s' lists the run.", ref, ref)
 	return nil
+}
+
+// serverManifest names the server-app manifest at the top of dir (package.json,
+// requirements.txt, go.mod, ...) when the folder has no index.html to serve as
+// a site, else "".
+func serverManifest(dir string) string {
+	if _, err := os.Stat(filepath.Join(dir, "index.html")); err == nil {
+		return ""
+	}
+	for _, name := range []string{"package.json", "requirements.txt", "pyproject.toml", "go.mod", "Gemfile", "Cargo.toml", "Dockerfile"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return name
+		}
+	}
+	return ""
 }

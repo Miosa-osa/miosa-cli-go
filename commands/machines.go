@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Miosa-osa/miosa-cli-go/internal/api"
+	"github.com/Miosa-osa/miosa-cli-go/internal/client"
 )
 
 func init() {
@@ -47,16 +49,26 @@ disk and returns its id. The original keeps existing until you destroy it.`,
 			Long: `Fork a running sandbox: the copy starts from its disk as it is now. --wait blocks
 until the fork accepts commands.
 
-  miosa fork my-box --name my-box-try --ttl 2h --wait`,
+-e KEY=VALUE sets variables in the fork only (the source keeps its own), and
+--cpu / --memory resize the fork; both wait for it to be ready and apply before
+the command returns. A size the fork cannot take live is reported (exit 5) and
+the fork stays at its source's size.
+
+  miosa fork my-box --name my-box-try --ttl 2h --wait
+  miosa fork my-box -e STAGE=try -e DEBUG=1 --cpu 4 --memory 8192`,
 			Method: "POST", Path: "/sandboxes/{0}/fork",
 			Flags: []Flag{
 				{Name: "ttl", Usage: "Lifetime of the fork: seconds, 90m, 2h or 2d", Field: "timeout_sec"},
 				{Name: "template", Usage: "Template for the fork", Field: "template_id"},
 				{Name: "name", Usage: "Name of the fork (default: derived from the source's)"},
 				{Name: "wait", Type: "bool", Usage: "Wait until the fork is ready for commands", In: "local"},
+				{Name: "var", Short: "e", Type: "strings", Usage: "Variable KEY=VALUE for the fork only (repeatable)", In: "local"},
+				{Name: "cpu", Type: "int", Usage: "Number of vCPUs of the fork", In: "local"},
+				{Name: "memory", Type: "int", Usage: "Memory of the fork in MB", In: "local"},
 			},
 			Body:   durationBody("timeout_sec"),
-			After:  waitAfterCreate,
+			Before: checkForkVars,
+			After:  forkAfter,
 			Detail: []Col{{Head: "Fork", Path: "id"}, {Head: "State", Path: "state"}, {Head: "Name", Path: "name"}},
 		}),
 		sandboxVerb(Op{
@@ -557,4 +569,114 @@ Without flags the current tags are printed. Changes are merged into the existing
 	cmd.Flags().StringArrayVar(&remove, "remove", nil, "Remove a tag by key (repeatable)")
 	cmd.Flags().BoolVar(&clear, "clear", false, "Remove every tag first")
 	return cmd
+}
+
+// checkForkVars refuses a malformed -e before anything is forked.
+func checkForkVars(cmd *cobra.Command, _ *api.Client) error {
+	vars, _ := cmd.Flags().GetStringArray("var")
+	if _, err := deployEnvMap(vars); err != nil {
+		return usagef("%v", strings.Replace(err.Error(), "--env", "-e", 1))
+	}
+	return nil
+}
+
+// forkAfter waits for the fork when asked to, or when -e, --cpu or --memory
+// have to be applied to it, then sets its variables (PUT /sandboxes/:id/env,
+// synced into the running fork) and resizes it (PATCH .../resources).
+func forkAfter(cmd *cobra.Command, resp any) error {
+	vars, _ := cmd.Flags().GetStringArray("var")
+	cpu, _ := cmd.Flags().GetInt("cpu")
+	memory, _ := cmd.Flags().GetInt("memory")
+	if len(vars) == 0 && cpu <= 0 && memory <= 0 {
+		return waitAfterCreate(cmd, resp)
+	}
+	if err := cmd.Flags().Set("wait", "true"); err != nil {
+		return die(err)
+	}
+	if err := waitAfterCreate(cmd, resp); err != nil {
+		return err
+	}
+	id, _ := lookupPath(unwrapObject(resp), "id").(string)
+	c, _, err := buildClient()
+	if err != nil {
+		return die(err)
+	}
+	// Size first: a size that cannot change live recreates the fork, and the
+	// variables belong on the sandbox that stays.
+	if cpu > 0 || memory > 0 {
+		if id, err = resizeFork(cmd, c, id, cpu, memory); err != nil {
+			return err
+		}
+		if obj, ok := unwrapObject(resp).(map[string]any); ok {
+			obj["id"] = id
+		}
+	}
+	if len(vars) > 0 {
+		env, _ := deployEnvMap(vars)
+		keys := make([]string, 0, len(env))
+		for k := range env {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		list := make([]map[string]string, 0, len(env))
+		for _, k := range keys {
+			list = append(list, map[string]string{"key": k, "value": fmt.Sprint(env[k])})
+		}
+		if err := c.API.Put(cmd.Context(), "/sandboxes/"+id+"/env", map[string]any{"vars": list}, nil); err != nil {
+			return die(fmt.Errorf("the fork %s is up, but its variables were not set: %w", id, err))
+		}
+		if err := c.API.Post(cmd.Context(), "/sandboxes/"+id+"/env/sync", nil, nil); err != nil {
+			return die(fmt.Errorf("the fork %s is up and its variables are saved, but they did not reach it yet: %w", id, err))
+		}
+	}
+	return nil
+}
+
+// resizeFork sizes a new fork. Live where the runtime can; otherwise the fork
+// is recreated from its disk at the new size (it is seconds old, so nothing
+// running is lost), the first copy is destroyed, and the new id is returned.
+func resizeFork(cmd *cobra.Command, c *client.Client, id string, cpu, memory int) (string, error) {
+	in := client.SandboxResizeInput{}
+	if cpu > 0 {
+		in.CPUCount = &cpu
+	}
+	if memory > 0 {
+		in.MemoryMB = &memory
+	}
+	out, err := c.ResizeSandbox(cmd.Context(), id, in)
+	if ae, ok := asAPIError(err); ok && ae.Code == "RESIZE_REQUIRES_RESTART" {
+		err, out = nil, &client.SandboxResizeOutcome{RequiresRestart: true}
+	}
+	if err != nil {
+		return "", resizeError(cmd, err)
+	}
+	if len(resizeNotApplied(out)) == 0 {
+		return id, nil
+	}
+	// Recreating at a new size starts from the paused disk.
+	if err := c.API.Post(cmd.Context(), "/sandboxes/"+id+"/pause", nil, nil); err != nil {
+		return "", die(fmt.Errorf("the fork %s could not be paused to resize it: %w", id, err))
+	}
+	if _, err := waitSandbox(cmd.Context(), c.API, id, "paused", 3*time.Minute, func(string) {}); err != nil {
+		return "", die(err)
+	}
+	in.Restart = true
+	out, err = c.ResizeSandbox(cmd.Context(), id, in)
+	if err != nil {
+		return "", resizeError(cmd, err)
+	}
+	if out.NewSandbox == nil || out.NewSandbox.ID == "" {
+		return "", die(fmt.Errorf("the fork %s could not be resized: the server recreated nothing", id))
+	}
+	newID := out.NewSandbox.ID
+	progress := startWaitProgress(cmd, shortID(newID)+" (the fork at its new size) to be ready")
+	_, err = waitSandbox(cmd.Context(), c.API, newID, "ready", 5*time.Minute, progress.Set)
+	progress.Stop()
+	if err != nil {
+		return "", die(err)
+	}
+	if err := c.API.Delete(cmd.Context(), "/sandboxes/"+id, nil, nil); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "miosa: the fork is %s; the first copy %s was not destroyed: %v\n", newID, id, err)
+	}
+	return newID, nil
 }

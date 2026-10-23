@@ -2,7 +2,6 @@ package commands
 
 import (
 	"io"
-	"strings"
 	"testing"
 )
 
@@ -25,15 +24,14 @@ func outputFor(t *testing.T, args ...string) string {
 	if err != nil {
 		t.Fatalf("find %v: %v", args, err)
 	}
-	// Parse only flags: parsing "--" would leave ArgsLenAtDash set on the
+	// Parse up to "--": parsing it would leave ArgsLenAtDash set on the
 	// shared command tree for later tests.
 	var flagArgs []string
 	for _, a := range rest {
-		if strings.HasPrefix(a, "-") && a != "--" {
-			flagArgs = append(flagArgs, a)
-		} else if len(flagArgs) > 0 && !strings.HasPrefix(flagArgs[len(flagArgs)-1], "--") {
-			flagArgs = append(flagArgs, a) // the value of a short flag (-o text)
+		if a == "--" {
+			break
 		}
+		flagArgs = append(flagArgs, a)
 	}
 	if err := cmd.ParseFlags(flagArgs); err != nil {
 		t.Fatalf("parse %v: %v", args, err)
@@ -51,6 +49,7 @@ func TestAutoJSONWhenStdoutIsPiped(t *testing.T) {
 		{"db", "get", "x"},
 		{"whoami"},
 		{"run", "list"},
+		{"history", "box"},
 	} {
 		if got := outputFor(t, args...); got != "json" {
 			t.Errorf("%v piped: output %q, want json", args, got)
@@ -72,6 +71,7 @@ func TestAutoJSONKeepsTextForRawOutput(t *testing.T) {
 		{"run"},
 		{"__docs"},
 		{"version"},
+		{"history", "box", "c1"},
 	} {
 		if got := outputFor(t, args...); got != "text" {
 			t.Errorf("%v piped: output %q, want text", args, got)

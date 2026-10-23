@@ -63,6 +63,7 @@ Regenerate with `make docs`.
 - [`miosa fork`](#miosa-fork) - Fork a running sandbox into a copy
 - [`miosa function`](#miosa-function) - Edge functions
 - [`miosa gateway`](#miosa-gateway) - The AI gateway: model routing policies, budget, limits and request traces
+- [`miosa history`](#miosa-history) - List the commands run in a sandbox, or print one's stored output
 - [`miosa host`](#miosa-host) - Your own machines enrolled in your organization (bring your own host)
 - [`miosa import`](#miosa-import) - Load a CSV into a managed database, or a Notion export into an Engine
 - [`miosa info`](#miosa-info) - Show a machine's state, environment and setup status
@@ -92,12 +93,13 @@ Regenerate with `make docs`.
 - [`miosa prompt`](#miosa-prompt) - Run an agent on a sandbox or computer and follow it
 - [`miosa protection`](#miosa-protection) - Put a password in front of a service
 - [`miosa proxy`](#miosa-proxy) - Forward local ports to sandbox ports
-- [`miosa ps`](#miosa-ps) - List background processes (same as 'process list')
+- [`miosa ps`](#miosa-ps) - List background processes (same as 'process list'); 'top' lists every process
 - [`miosa push`](#miosa-push) - Copy a directory into a sandbox, leaving out what .gitignore names
 - [`miosa recover`](#miosa-recover) - Recover a sandbox from its disk into a NEW sandbox
 - [`miosa redeploy`](#miosa-redeploy) - Build and release the linked service again
 - [`miosa regions`](#miosa-regions) - List regions and whether they have capacity
 - [`miosa rename`](#miosa-rename) - Rename a sandbox
+- [`miosa restart`](#miosa-restart) - Restart a sandbox in place, keeping its disk
 - [`miosa restore`](#miosa-restore) - Restore a sandbox from a checkpoint
 - [`miosa resume`](#miosa-resume) - Resume a paused or stopped sandbox
 - [`miosa rollback`](#miosa-rollback) - Serve the linked service's previous release
@@ -117,6 +119,7 @@ Regenerate with `make docs`.
 - [`miosa tag`](#miosa-tag) - Show, add or remove sandbox tags
 - [`miosa template`](#miosa-template) - Sandbox templates
 - [`miosa token`](#miosa-token) - Mint short-lived tokens for your end users
+- [`miosa top`](#miosa-top) - List every process in a sandbox, busiest first, even while it is stopped
 - [`miosa unlink`](#miosa-unlink) - Detach this directory from its project
 - [`miosa up`](#miosa-up) - Deploy this directory to the linked service
 - [`miosa update`](#miosa-update) - Update the miosa CLI to the latest release
@@ -1011,12 +1014,22 @@ Flags:
 How much a key is used: requests, last use and from where.
 
 ```
-miosa api-key usage <id>
+miosa api-key usage <id> [flags]
 ```
 
 Shows how many requests the key has made, when it was last used and from which
-address, how old it is and when it expires. 'miosa api-key events <id>' lists
-what it did.
+address, how old it is and when it expires. --days N also lists its requests per
+day (UTC) for the last N days, up to 90; today trails by up to a minute.
+'miosa api-key events <id>' lists what it did.
+
+```
+  miosa api-key usage k1
+  miosa api-key usage k1 --days 30
+```
+
+Flags:
+
+- `--days int` - Also list requests per day for the last N days (1-90).
 
 ### `miosa audit`
 
@@ -1183,10 +1196,37 @@ Credits, spend, invoices and plan.
 miosa billing
 ```
 
-Read-only views of what you have and what you spent.
-Credits are cents.
-Changing
-plans and payment methods happens in the console ('miosa open billing').
+What you have and what you spent.
+Credits are cents. 'billing add-credits' adds credits
+(a Stripe checkout in your browser) and waits for the payment; 'billing portal'
+opens the Stripe portal for cards and invoices; plans change in the console
+('miosa open billing').
+
+#### `miosa billing add-credits`
+
+Add credits: opens a Stripe checkout and waits for the payment.
+
+```
+miosa billing add-credits <dollars> [flags]
+```
+
+Add credits to the organization.
+A Stripe checkout opens in your browser (or
+its link is printed with --no-open); the command then waits, up to 15 minutes,
+until the payment lands and says the new balance.
+Ctrl-C stops waiting, not the
+payment.
+Free organizations add from $5.
+
+```
+  miosa billing add-credits 20
+  miosa billing add-credits 50 --no-open      # print the link, e.g. on a server
+```
+
+Flags:
+
+- `--no-open` - Print the checkout link instead of opening a browser.
+- `--no-wait` - Return once the checkout exists, without waiting for the payment.
 
 #### `miosa billing auto-reload`
 
@@ -1354,6 +1394,18 @@ Show your plan and current usage against its limits.
 ```
 miosa billing plan
 ```
+
+#### `miosa billing portal`
+
+Open the Stripe billing portal (cards, invoices, receipts).
+
+```
+miosa billing portal [flags]
+```
+
+Flags:
+
+- `--no-open` - Print the portal link instead of opening a browser.
 
 #### `miosa billing spend`
 
@@ -7835,15 +7887,25 @@ miosa fork [sandbox] [flags]
 Fork a running sandbox: the copy starts from its disk as it is now. --wait blocks
 until the fork accepts commands.
 
+-e KEY=VALUE sets variables in the fork only (the source keeps its own), and
+--cpu / --memory resize the fork; both wait for it to be ready and apply before
+the command returns.
+A size the fork cannot take live is reported (exit 5) and
+the fork stays at its source's size.
+
 ```
   miosa fork my-box --name my-box-try --ttl 2h --wait
+  miosa fork my-box -e STAGE=try -e DEBUG=1 --cpu 4 --memory 8192
 ```
 
 Flags:
 
+- `--cpu int` - Number of vCPUs of the fork.
+- `--memory int` - Memory of the fork in MB.
 - `--name string` - Name of the fork (default: derived from the source's).
 - `--template string` - Template for the fork.
 - `--ttl string` - Lifetime of the fork: seconds, 90m, 2h or 2d.
+- `-e, --var stringArray` - Variable KEY=VALUE for the fork only (repeatable).
 - `--wait` - Wait until the fork is ready for commands.
 
 ### `miosa function`
@@ -8283,6 +8345,37 @@ Show gateway settings.
 ```
 miosa gateway settings show
 ```
+
+### `miosa history`
+
+List the commands run in a sandbox, or print one's stored output.
+
+```
+miosa history [sandbox] [command-id] [flags]
+```
+
+Lists the commands run in a sandbox through exec (and run), newest first: when,
+how (exec or stream), the exit code and how long it took.
+Give a
+command id to print its stored output: standard output, or with --stderr standard
+error.
+The last 64 KiB of each is kept for 30 days, so this works while the
+sandbox is paused or stopped. -f keeps listing new commands as they finish.
+
+```
+  miosa history my-box
+  miosa history my-box --mode stream --limit 5
+  miosa history my-box 3f0c...           # its output
+  miosa history my-box 3f0c... --stderr
+  miosa history my-box -f
+```
+
+Flags:
+
+- `-f, --follow` - Keep listing new commands until Ctrl-C.
+- `-n, --limit int` - How many commands to list (1-200). (default `20`)
+- `--mode string` - Only commands that ran this way: exec or stream.
+- `--stderr` - With a command id: print its standard error instead.
 
 ### `miosa host`
 
@@ -11346,8 +11439,11 @@ miosa project rm <project> [flags]
 
 Delete a project.
 A workspace's default project cannot be deleted, and a
-project that still owns services, databases or deployments answers 409: move or
+project that still owns databases, deployments or sandboxes answers 409: move or
 delete those first.
+Its services are stopped and deleted with it; while one is
+still stopping (just after 'service delete') the delete is accepted and
+finishes on its own as soon as it has stopped.
 
 Aliases: `delete`.
 
@@ -11614,21 +11710,31 @@ A key needs the sandboxes:exec scope, because a tunnel reaches every service in
 the sandbox.
 The sandbox must be running; a paused one is not woken.
 
+--reverse turns it around: a port inside the sandbox reaches a port on your
+machine (an ssh -R over the sandbox's SSH tunnel; needs the OpenSSH client).
+The mapping is still <local>:<remote>: the sandbox's localhost:<remote>
+connects to <local> on --bind (default 127.0.0.1) here.
+
+A connection that cannot reach the sandbox (it is moving between hosts, or the
+network blinked) is retried up to 5 times before it is dropped.
+
 ```
   miosa proxy my-box 8080:80
   miosa proxy my-box 5432:5432 6379:6379
   miosa proxy 8080:80          # the current sandbox
+  miosa forward my-box --reverse 3000:8080   # the sandbox's :8080 reaches your :3000
 ```
 
 Aliases: `forward`.
 
 Flags:
 
-- `--bind string` - Local address to listen on. (default `127.0.0.1`)
+- `--bind string` - Local address to listen on (with --reverse: to connect to). (default `127.0.0.1`)
+- `--reverse` - Forward sandbox ports to ports on this machine instead.
 
 ### `miosa ps`
 
-List background processes (same as 'process list').
+List background processes (same as 'process list'); 'top' lists every process.
 
 ```
 miosa ps [sandbox]
@@ -11719,6 +11825,29 @@ Its id does not change.
 ```
   miosa rename my-box api-box
 ```
+
+### `miosa restart`
+
+Restart a sandbox in place, keeping its disk.
+
+```
+miosa restart [sandbox] [flags]
+```
+
+Power-cycle a running sandbox under the same id: it stops keeping its disk, then
+boots that disk again.
+Files, packages and enabled services survive; running
+processes do not.
+Use it when a sandbox stops answering. --wait blocks, with
+progress, until it accepts commands.
+
+```
+  miosa restart my-box --wait
+```
+
+Flags:
+
+- `--wait` - Wait until it is ready for commands.
 
 ### `miosa restore`
 
@@ -12710,7 +12839,7 @@ Flags:
 - `-f, --follow` - Keep printing new lines (with --build: until the build finishes).
 - `--release string` - With --events: release number or id (default: the newest).
 - `--replica string` - Read one replica's log (its id).
-- `--tail int` - Lines from the end of the log (runtime 1-1000, build 1-2000). (default `200`)
+- `-n, --tail int` - Lines from the end of the log (runtime 1-1000, build 1-2000). (default `200`)
 
 Examples:
 
@@ -13956,6 +14085,25 @@ Aliases: `rm`, `delete`.
 Flags:
 
 - `-y, --yes` - Do not ask for confirmation.
+
+### `miosa top`
+
+List every process in a sandbox, busiest first, even while it is stopped.
+
+```
+miosa top [sandbox]
+```
+
+Lists the processes running in a sandbox, the busiest first (at most 200): pid,
+CPU and memory use, how long each has run and its command.
+A stopped or paused
+sandbox is not woken: it shows the list read last, taken at its stop or at the
+last 'top', and says when.
+
+```
+  miosa top my-box
+  miosa top my-box --json
+```
 
 ### `miosa unlink`
 

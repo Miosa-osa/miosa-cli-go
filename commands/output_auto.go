@@ -52,7 +52,8 @@ func autoJSON(cmd *cobra.Command) bool {
 
 // rawOutputCommand reports whether cmd prints raw content rather than a
 // result: by its own name, by its top-level command, or `miosa run -- cmd`
-// (the one-shot, whose output is the command's).
+// (the one-shot, whose output is the command's), or `miosa history <box> <id>`
+// (a stored output).
 func rawOutputCommand(cmd *cobra.Command) bool {
 	if rawOutputNames[cmd.Name()] {
 		return true
@@ -63,6 +64,9 @@ func rawOutputCommand(cmd *cobra.Command) bool {
 	}
 	if rawOutputTrees[path[1]] {
 		return true
+	}
+	if len(path) == 2 && path[1] == "history" {
+		return cmd.Flags().NArg() == 2
 	}
 	return len(path) == 2 && path[1] == "run"
 }

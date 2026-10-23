@@ -343,6 +343,7 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa recover` | POST | `/sandboxes/{0}/recover` |
 | `miosa regions` | GET | `/regions` |
 | `miosa rename` | PATCH | `/sandboxes/{0}` |
+| `miosa restart` | POST | `/sandboxes/{0}/restart` |
 | `miosa resume` | POST | `/sandboxes/{0}/resume` |
 | `miosa run diagnostics` | GET | `/runs/{0}/diagnostics` |
 | `miosa run events` | GET | `/runs/{0}/events` |
@@ -396,6 +397,7 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa template warm-pool` | GET | `/sandbox-templates/{0}/warm-pool` |
 | `miosa token list` | GET | `/tokens/scoped` |
 | `miosa token revoke` | DELETE | `/tokens/scoped/{0}` |
+| `miosa top` | GET | `/sandboxes/{0}/top` |
 | `miosa usage` | GET | `/sandboxes/{0}/usage` |
 | `miosa volume attach` | POST | `/computers/{1}/volumes` |
 | `miosa volume attachments` | GET | `/volumes/{0}/attachments` |

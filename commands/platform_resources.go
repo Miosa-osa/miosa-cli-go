@@ -824,10 +824,13 @@ the one whose slug is "default", else its only workspace.`,
 			// id before the request (internal/api.ResolvePath), so `miosa project rm
 			// shop` works the way `miosa project get shop` does.
 			Long: `Delete a project. A workspace's default project cannot be deleted, and a
-project that still owns services, databases or deployments answers 409: move or
-delete those first.`,
+project that still owns databases, deployments or sandboxes answers 409: move or
+delete those first. Its services are stopped and deleted with it; while one is
+still stopping (just after 'service delete') the delete is accepted and
+finishes on its own as soon as it has stopped.`,
 			Method: "DELETE", Path: "/projects/{0}", Args: []Arg{idArg("project")},
-			Confirm: "Permanently delete project {0} and everything in it?", Done: "Deleted {0}",
+			Confirm: "Permanently delete project {0} and everything in it?",
+			Human:   renderProjectDelete, OnError: retryProjectDeleteWhileStopping,
 		},
 	)
 	cmd.AddCommand(projectVarsCmd())
@@ -840,8 +843,10 @@ delete those first.`,
 
 func billingCmd() *cobra.Command {
 	cmd := group("billing", "Credits, spend, invoices and plan",
-		`Read-only views of what you have and what you spent. Credits are cents. Changing
-plans and payment methods happens in the console ('miosa open billing').`, nil,
+		`What you have and what you spent. Credits are cents. 'billing add-credits' adds credits
+(a Stripe checkout in your browser) and waits for the payment; 'billing portal'
+opens the Stripe portal for cards and invoices; plans change in the console
+('miosa open billing').`, nil,
 		Op{
 			Use: "balance", Short: "Show the credit balance", Method: "GET", Path: "/credits/balance",
 			Detail: []Col{{Head: "Balance (credits)", Path: "balance_credits"}, {Head: "Lifetime earned", Path: "lifetime_earned"}, {Head: "Lifetime spent", Path: "lifetime_spent"}, {Head: "Expires", Path: "credit_expiry_at"}},
@@ -884,6 +889,7 @@ plans and payment methods happens in the console ('miosa open billing').`, nil,
 	cmd.AddCommand(billingCapCmd())
 	cmd.AddCommand(autoReloadCmd())
 	cmd.AddCommand(paymentMethodsCmd())
+	cmd.AddCommand(billingTopupCmd(), billingPortalCmd())
 	return cmd
 }
 
@@ -1347,4 +1353,56 @@ func purgeNodesReached(row map[string]any) string {
 		return ""
 	}
 	return fmt.Sprintf("%d of %d", int(reached), int(total))
+}
+
+// projectDeleteRetry bounds how long 'project rm' waits on a server that still
+// refuses a delete while a service stops; tests shorten it.
+var projectDeleteRetry = struct {
+	every, within time.Duration
+}{3 * time.Second, 60 * time.Second}
+
+// renderProjectDelete says whether the project is gone (204) or the server
+// accepted the delete and finishes it once its services stop (202).
+func renderProjectDelete(cmd *cobra.Command, args []string, resp any) error {
+	p := printerFor(cmd)
+	if status, _ := lookupPath(resp, "data.status").(string); status == "deleting" {
+		p.Success("Deleting %s: it finishes as soon as its services have stopped", args[0])
+		return nil
+	}
+	p.Success("Deleted %s", args[0])
+	return nil
+}
+
+// retryProjectDeleteWhileStopping retries a delete the server refused with
+// SERVICES_NOT_STOPPED (a server older than the accepted, finish-later delete:
+// a service still stopping, typically right after 'service delete', QA 10-23)
+// until it goes through or the wait ends.
+func retryProjectDeleteWhileStopping(cmd *cobra.Command, c *api.Client, args []string, err error) error {
+	ae, ok := asAPIError(err)
+	if !ok || ae.Code != "SERVICES_NOT_STOPPED" || len(args) == 0 {
+		return err
+	}
+	if !isJSON() {
+		fmt.Fprintln(cmd.ErrOrStderr(), "miosa: a service is still stopping; waiting to delete the project")
+	}
+	deadline := time.Now().Add(projectDeleteRetry.within)
+	for time.Now().Before(deadline) {
+		select {
+		case <-cmd.Context().Done():
+			return err
+		case <-time.After(projectDeleteRetry.every):
+		}
+		resp, retryErr := c.JSONAny(cmd.Context(), api.Request{Method: "DELETE", Path: "/projects/" + url.PathEscape(args[0])})
+		if retryErr == nil {
+			if isJSON() {
+				return printerFor(cmd).JSON(map[string]any{"ok": true, "data": resp})
+			}
+			return renderProjectDelete(cmd, args, resp)
+		}
+		if ae, ok := asAPIError(retryErr); !ok || ae.Code != "SERVICES_NOT_STOPPED" {
+			return retryErr
+		}
+		err = retryErr
+	}
+	return err
 }

@@ -558,13 +558,14 @@ func (p *realProxy) handleTunnelConn(ctx context.Context, tcpConn net.Conn, sand
 		HandshakeTimeout: 10 * time.Second,
 		Subprotocols:     []string{"miosa-tunnel-v1"},
 	}
-	wsConn, resp, err := dialer.DialContext(ctx, wsURL, hdr)
-	if err != nil {
+	wsConn, err := dialTunnel(ctx, &dialer, wsURL, hdr, func(attempt int, resp *http.Response, err error) {
 		if resp != nil {
-			logf("port %d -> %d: the tunnel was refused (%s)", localPort, remotePort, resp.Status)
+			logf("port %d -> %d: the tunnel was refused (%s), try %d of %d", localPort, remotePort, resp.Status, attempt, tunnelDialAttempts)
 		} else {
-			logf("port %d -> %d: %v", localPort, remotePort, err)
+			logf("port %d -> %d: %v, try %d of %d", localPort, remotePort, err, attempt, tunnelDialAttempts)
 		}
+	})
+	if err != nil {
 		return
 	}
 	defer wsConn.Close()
@@ -940,4 +941,33 @@ func isAs[T any](err error, target *T) bool {
 		}
 	}
 	return false
+}
+
+// tunnelDialAttempts bounds the dials of one forwarded connection. A sandbox
+// moving to another host, or a network blink, refuses a dial for a moment;
+// a refusal that will not change (401, 403, 404) is not retried.
+const tunnelDialAttempts = 5
+
+// tunnelRetryPause is the pause before retry n is n times this; tests shorten it.
+var tunnelRetryPause = 500 * time.Millisecond
+
+func dialTunnel(ctx context.Context, dialer *websocket.Dialer, url string, hdr http.Header, failed func(int, *http.Response, error)) (*websocket.Conn, error) {
+	var lastErr error
+	for attempt := 1; attempt <= tunnelDialAttempts; attempt++ {
+		conn, resp, err := dialer.DialContext(ctx, url, hdr)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		failed(attempt, resp, err)
+		if resp != nil && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(attempt) * tunnelRetryPause):
+		}
+	}
+	return nil, lastErr
 }

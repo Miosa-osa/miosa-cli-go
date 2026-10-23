@@ -161,3 +161,24 @@ func AutoUpdateForTest(w io.Writer) {
 	defer func() { globalFlags.NoUpdate = true }()
 	maybeAutoUpdate(w)
 }
+
+// SetHistoryPollEveryForTest shortens how often history -f looks for new commands.
+func SetHistoryPollEveryForTest(d time.Duration) func() {
+	old := historyPollEvery
+	historyPollEvery = d
+	return func() { historyPollEvery = old }
+}
+
+// SetProjectDeleteRetryForTest shortens how long project rm waits on a stopping service.
+func SetProjectDeleteRetryForTest(every, within time.Duration) func() {
+	old := projectDeleteRetry
+	projectDeleteRetry.every, projectDeleteRetry.within = every, within
+	return func() { projectDeleteRetry = old }
+}
+
+// SetTopupWaitForTest shortens how long billing topup waits for the payment.
+func SetTopupWaitForTest(every, within time.Duration) func() {
+	old := topupWait
+	topupWait.every, topupWait.within = every, within
+	return func() { topupWait = old }
+}
