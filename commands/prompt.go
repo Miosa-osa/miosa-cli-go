@@ -30,6 +30,7 @@ func init() {
 type promptOptions struct {
 	harness      string
 	model        string
+	effort       string
 	agent        string
 	chat         string
 	cont         bool
@@ -92,10 +93,13 @@ starts a chat and prints its id.
 	f := cmd.Flags()
 	f.StringVar(&o.harness, "harness", "", "Harness: claude-code, codex, osa, opencode, pi, prime, kimi, mistral, hermes (default: the agent's, or claude-code)")
 	f.StringVar(&o.model, "model", "", "Model for the harness (default: the harness default; see 'miosa connections harnesses HARNESS')")
+	f.StringVar(&o.effort, "reasoning-effort", "", "Reasoning effort for this run, as the model takes it (for example low, medium, high); the API names what a model accepts")
 	f.StringVar(&o.agent, "agent", "", "Run a saved agent (name or id) instead of an ad hoc one")
 	f.StringVar(&o.chat, "chat", "", "Chat id; continues the chat if it has runs")
+	f.StringVar(&o.chat, "resume", "", "Same as --chat: continue this chat")
 	f.BoolVar(&o.cont, "continue", false, "Continue the most recent run on the target")
 	f.BoolVar(&o.newChat, "new-chat", false, "Start a chat (a new chat id is generated and printed)")
+	f.BoolVar(&o.newChat, "new", false, "Same as --new-chat")
 	f.StringVarP(&o.sandbox, "sandbox", "s", "", "Sandbox to run in (default: the current sandbox)")
 	f.StringVar(&o.computer, "computer", "", "Computer to run in")
 	f.BoolVar(&o.newMachine, "new-machine", false, "Provision a machine for this run")
@@ -200,6 +204,9 @@ func runPrompt(cmd *cobra.Command, args []string, o promptOptions) error {
 		body["runner"] = o.harness
 	} else if o.agent == "" {
 		body["runner"] = "claude-code"
+	}
+	if o.effort != "" {
+		body["reasoning_effort"] = o.effort
 	}
 	if o.model != "" {
 		body["model"] = o.model

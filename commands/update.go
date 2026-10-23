@@ -405,51 +405,11 @@ func runUpdate(cmd *cobra.Command, checkOnly bool, target string, force bool) er
 		return nil
 	}
 
-	path, err := selfPath()
-	if err != nil {
-		return die(fmt.Errorf("locating the running binary: %w", err))
-	}
-	if manager, hint, ok := packageManaged(path); ok {
-		return die(fmt.Errorf("this copy is managed by %s; run: %s", manager, hint))
-	}
-
-	name := archiveName(latest)
-	asset, ok := rel.asset(name)
-	if !ok {
-		return die(fmt.Errorf("release %s has no build for %s/%s (%s)", rel.Tag, runtime.GOOS, runtime.GOARCH, name))
-	}
-	sumsAsset, ok := rel.asset("checksums.txt")
-	if !ok {
-		return die(errors.New("release has no checksums.txt; refusing to install an unverified binary"))
-	}
 	if !isJSON() {
 		p.Line("Downloading miosa %s (%s/%s)...", latest, runtime.GOOS, runtime.GOARCH)
 	}
-	want := rel.sha(name)
-	if want == "" {
-		sums, err := download(ctx, sumsAsset.URL, 1<<20)
-		if err != nil {
-			return die(err)
-		}
-		var ok bool
-		want, ok = checksumFor(sums, name)
-		if !ok {
-			return die(fmt.Errorf("checksums.txt has no entry for %s", name))
-		}
-	}
-	archive, err := download(ctx, asset.URL, maxBinaryBytes)
+	path, err := installRelease(ctx, rel)
 	if err != nil {
-		return die(err)
-	}
-	got := sha256.Sum256(archive)
-	if hex.EncodeToString(got[:]) != want {
-		return die(fmt.Errorf("checksum mismatch for %s; not installing", name))
-	}
-	bin, err := extractBinary(archive)
-	if err != nil {
-		return die(err)
-	}
-	if err := replaceBinary(path, bin); err != nil {
 		return die(err)
 	}
 	status["updated"] = true
@@ -520,5 +480,122 @@ func maybeNotifyUpdate(w io.Writer) {
 			}
 		}
 		fmt.Fprintf(w, "\nA new miosa release is available: %s -> %s (run '%s')\n", cliVersion, c.Latest, upgrade)
+	}
+}
+
+// installRelease downloads rel's build for this machine, checks it against the
+// release's checksums and replaces the running binary. A copy a package
+// manager owns (npm, Homebrew) is refused.
+func installRelease(ctx context.Context, rel release) (string, error) {
+	path, err := selfPath()
+	if err != nil {
+		return "", fmt.Errorf("locating the running binary: %w", err)
+	}
+	if manager, hint, ok := packageManaged(path); ok {
+		return "", fmt.Errorf("this copy is managed by %s; run: %s", manager, hint)
+	}
+
+	latest := rel.Version()
+	name := archiveName(latest)
+	asset, ok := rel.asset(name)
+	if !ok {
+		return "", fmt.Errorf("release %s has no build for %s/%s (%s)", rel.Tag, runtime.GOOS, runtime.GOARCH, name)
+	}
+	sumsAsset, ok := rel.asset("checksums.txt")
+	if !ok {
+		return "", errors.New("release has no checksums.txt; refusing to install an unverified binary")
+	}
+	want := rel.sha(name)
+	if want == "" {
+		sums, err := download(ctx, sumsAsset.URL, 1<<20)
+		if err != nil {
+			return "", err
+		}
+		var ok bool
+		want, ok = checksumFor(sums, name)
+		if !ok {
+			return "", fmt.Errorf("checksums.txt has no entry for %s", name)
+		}
+	}
+	archive, err := download(ctx, asset.URL, maxBinaryBytes)
+	if err != nil {
+		return "", err
+	}
+	got := sha256.Sum256(archive)
+	if hex.EncodeToString(got[:]) != want {
+		return "", fmt.Errorf("checksum mismatch for %s; not installing", name)
+	}
+	bin, err := extractBinary(archive)
+	if err != nil {
+		return "", err
+	}
+	if err := replaceBinary(path, bin); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// ─── opt-in automatic update ─────────────────────────────────────────────────
+
+// autoUpdateEvery is how often an opted-in CLI looks for a release to install.
+const autoUpdateEvery = 6 * time.Hour
+
+type autoUpdateStamp struct {
+	TriedAt time.Time `json:"tried_at"`
+}
+
+// autoUpdateEnabled reports whether the user opted in (config auto_update on
+// or MIOSA_AUTO_UPDATE=1) and nothing turns it off for this run (--no-update,
+// MIOSA_NO_UPDATE, CI, a dev build).
+func autoUpdateEnabled() bool {
+	if cliVersion == "dev" || globalFlags.NoUpdate || os.Getenv("MIOSA_NO_UPDATE") != "" || os.Getenv("CI") != "" {
+		return false
+	}
+	if v := os.Getenv("MIOSA_AUTO_UPDATE"); v != "" {
+		return v == "1" || v == "true" || v == "on"
+	}
+	c, err := config.Load()
+	return err == nil && c.AutoUpdate == "on"
+}
+
+// maybeAutoUpdate installs a newer release after a command has finished, at
+// most every 6 hours. It never prompts, prints one line to w when it updated,
+// and is silent when it could not (the next run tries again later).
+func maybeAutoUpdate(w io.Writer) {
+	if !autoUpdateEnabled() {
+		return
+	}
+	dir, err := config.Dir()
+	if err != nil {
+		return
+	}
+	stampPath := filepath.Join(dir, "cli-auto-update.json")
+	var st autoUpdateStamp
+	if data, err := os.ReadFile(stampPath); err == nil {
+		_ = json.Unmarshal(data, &st)
+	}
+	if time.Since(st.TriedAt) < autoUpdateEvery {
+		return
+	}
+	if data, err := json.Marshal(autoUpdateStamp{TriedAt: time.Now()}); err == nil {
+		_ = os.MkdirAll(dir, 0o700)
+		_ = os.WriteFile(stampPath, data, 0o600)
+	}
+	if p, err := selfPath(); err != nil {
+		return
+	} else if _, _, managed := packageManaged(p); managed {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	rel, err := fetchRelease(ctx, releasesURL())
+	if err != nil || compareVersions(rel.Version(), cliVersion) <= 0 {
+		return
+	}
+	if _, err := installRelease(ctx, rel); err != nil {
+		return
+	}
+	if !isJSON() && !globalFlags.Quiet {
+		fmt.Fprintf(w, "miosa updated itself: %s -> %s\n", cliVersion, rel.Version())
 	}
 }

@@ -318,3 +318,72 @@ func TestReleaseDefaultStaysOnGitHubUntilTheOriginIsAccepted(t *testing.T) {
 		t.Fatalf("default release URL = %q; do not flip it before acceptance", commands.DefaultReleaseURL)
 	}
 }
+
+func TestAutoUpdateInstallsOnceEverySixHoursWhenOptedIn(t *testing.T) {
+	releaseServer(t, "v1.3.0", []byte("NEW-BINARY"), false)
+	defer commands.SetVersionForTest("1.2.4")()
+	target := filepath.Join(t.TempDir(), "miosa")
+	os.WriteFile(target, []byte("OLD"), 0o755)
+	defer commands.SetSelfPathForTest(target)()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CI", "")
+
+	var out bytes.Buffer
+	commands.AutoUpdateForTest(&out)
+	if got, _ := os.ReadFile(target); string(got) != "OLD" {
+		t.Fatal("updated without opting in")
+	}
+
+	t.Setenv("MIOSA_AUTO_UPDATE", "1")
+	commands.AutoUpdateForTest(&out)
+	if got, _ := os.ReadFile(target); string(got) != "NEW-BINARY" {
+		t.Fatalf("binary = %q", got)
+	}
+	if !strings.Contains(out.String(), "updated itself: 1.2.4 -> 1.3.0") {
+		t.Fatalf("out = %q", out.String())
+	}
+
+	os.WriteFile(target, []byte("OLD"), 0o755)
+	commands.AutoUpdateForTest(&out)
+	if got, _ := os.ReadFile(target); string(got) != "OLD" {
+		t.Fatal("tried again within six hours")
+	}
+}
+
+func TestAutoUpdateOffForNoUpdateAndPackageManagers(t *testing.T) {
+	releaseServer(t, "v1.3.0", []byte("NEW-BINARY"), false)
+	defer commands.SetVersionForTest("1.2.4")()
+	t.Setenv("MIOSA_AUTO_UPDATE", "1")
+	t.Setenv("CI", "")
+
+	target := filepath.Join(t.TempDir(), "miosa")
+	os.WriteFile(target, []byte("OLD"), 0o755)
+	defer commands.SetSelfPathForTest(target)()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MIOSA_NO_UPDATE", "1")
+	commands.AutoUpdateForTest(&bytes.Buffer{})
+	if got, _ := os.ReadFile(target); string(got) != "OLD" {
+		t.Fatal("MIOSA_NO_UPDATE did not stop the update")
+	}
+	t.Setenv("MIOSA_NO_UPDATE", "")
+
+	t.Setenv("HOME", t.TempDir())
+	brew := "/opt/homebrew/Cellar/miosa/1.2.4/bin/miosa"
+	defer commands.SetSelfPathForTest(brew)()
+	var out bytes.Buffer
+	commands.AutoUpdateForTest(&out)
+	if out.Len() != 0 {
+		t.Fatalf("a Homebrew copy must be left to brew: %q", out.String())
+	}
+}
+
+func TestConfigAutoUpdateKey(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, err := run(t, "config", "set", "auto_update", "on"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, "config", "get", "auto_update")
+	if err != nil || strings.TrimSpace(out) != "on" {
+		t.Fatalf("%q %v", out, err)
+	}
+}

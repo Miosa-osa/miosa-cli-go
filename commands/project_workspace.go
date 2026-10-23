@@ -141,3 +141,54 @@ func decodeWorkspaces(raw json.RawMessage) ([]workspaceRow, error) {
 	}
 	return wrapped.Workspaces, nil
 }
+
+// settleDBProject is the Before hook of `db create`: --project (a name, slug or
+// id) becomes the project's id, and with no --workspace the database goes to
+// the project's workspace rather than the default one. The workspace is then
+// settled as for any create.
+func settleDBProject(cmd *cobra.Command, c *api.Client) error {
+	fl := cmd.Flags().Lookup("project")
+	if fl != nil && strings.TrimSpace(fl.Value.String()) != "" {
+		ref := strings.TrimSpace(fl.Value.String())
+		var out struct {
+			Data []struct {
+				ID          string `json:"id"`
+				Name        string `json:"name"`
+				Slug        string `json:"slug"`
+				WorkspaceID string `json:"workspace_id"`
+			} `json:"data"`
+		}
+		if err := c.Get(cmd.Context(), "/projects", nil, &out); err != nil {
+			return die(err)
+		}
+		found := false
+		for _, p := range out.Data {
+			if strings.EqualFold(p.ID, ref) || strings.EqualFold(p.Slug, ref) || strings.EqualFold(p.Name, ref) {
+				if err := cmd.Flags().Set("project", p.ID); err != nil {
+					return err
+				}
+				if p.WorkspaceID != "" && cmd.Flags().Lookup("workspace") != nil && !workspaceFlagChanged(cmd) {
+					if err := cmd.Flags().Set("workspace", p.WorkspaceID); err != nil {
+						return err
+					}
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			return die(&api.Error{Status: 404, Code: "NOT_FOUND", Message: fmt.Sprintf("no project named %q; 'miosa project list' shows them", ref)})
+		}
+	}
+	return settleCreateWorkspace(cmd, c)
+}
+
+// workspaceFlagChanged reports whether either workspace flag was given.
+func workspaceFlagChanged(cmd *cobra.Command) bool {
+	for _, name := range []string{"workspace", "workspace-id"} {
+		if fl := cmd.Flags().Lookup(name); fl != nil && fl.Changed {
+			return true
+		}
+	}
+	return false
+}

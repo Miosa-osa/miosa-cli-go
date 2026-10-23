@@ -242,6 +242,10 @@ var configKeys = map[string]func(c *config.Config) *string{
 	"current_sandbox":   func(c *config.Config) *string { return &c.CurrentSandbox },
 }
 
+func init() {
+	configKeys["auto_update"] = func(c *config.Config) *string { return &c.AutoUpdate }
+}
+
 func configKeyNames() []string {
 	names := make([]string, 0, len(configKeys))
 	for k := range configKeys {

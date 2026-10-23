@@ -29,6 +29,9 @@ func newLoginCmd() *cobra.Command {
 		noBrowser bool
 		orgs      []string
 		allOrgs   bool
+		noWait    bool
+		wait      bool
+		fresh     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "login",
@@ -53,10 +56,25 @@ or skip login and export MIOSA_API_KEY.
   miosa login --org osa --org acme  # these organizations pre-selected
   miosa login --no-browser          # print the URL instead of opening it
   miosa login --with-key            # paste a key (input hidden)
-  miosa login --profile work        # store as a separate profile`,
+  miosa login --profile work        # store as a separate profile
+
+For an agent that cannot keep a command waiting, sign-in is two steps: the
+first prints the link and code for a person to approve and returns at once,
+the second waits for the approval and stores the key. Running the first again
+shows the same pending link until it expires; --new starts over.
+
+  miosa login --no-wait --json      # {"url": ..., "user_code": ..., "expires_at": ...}
+  miosa login --wait --json         # after the person approved`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runLogin(cmd, loginOptions{keyStdin: keyStdin, withKey: withKey, device: device, noBrowser: noBrowser, orgs: orgs, allOrgs: allOrgs})
+			if noWait && wait {
+				return usagef("--no-wait starts a sign-in and --wait finishes it; give one")
+			}
+			o := loginOptions{keyStdin: keyStdin, withKey: withKey, device: device, noBrowser: noBrowser, orgs: orgs, allOrgs: allOrgs, noWait: noWait, wait: wait, fresh: fresh}
+			if noWait {
+				return startPendingLogin(cmd, o)
+			}
+			return runLogin(cmd, o)
 		},
 	}
 	cmd.Flags().BoolVar(&keyStdin, "key-stdin", false, "Read the API key from standard input")
@@ -65,6 +83,9 @@ or skip login and export MIOSA_API_KEY.
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "Print the sign-in URL instead of opening a browser")
 	cmd.Flags().StringArrayVar(&orgs, "org", nil, "Pre-select this organization on the approval page (repeatable)")
 	cmd.Flags().BoolVar(&allOrgs, "all-orgs", false, "Pre-select every organization on the approval page")
+	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Start a browser sign-in, print its link and code, and return (finish with --wait)")
+	cmd.Flags().BoolVar(&wait, "wait", false, "Finish the sign-in that --no-wait started: wait for approval, then store the key")
+	cmd.Flags().BoolVar(&fresh, "new", false, "With --no-wait: start a new sign-in instead of showing the pending one")
 	return cmd
 }
 
@@ -75,6 +96,8 @@ type loginOptions struct {
 	orgs      []string
 	allOrgs   bool
 	lockedOrg string
+	// noWait starts a sign-in and returns; wait finishes the pending one.
+	noWait, wait, fresh bool
 }
 
 // sleepFn lets tests skip the poll interval.
@@ -117,7 +140,7 @@ func runLogin(cmd *cobra.Command, o loginOptions) error {
 
 	var key string
 	switch {
-	case o.keyStdin || (!o.withKey && !o.device && !stdinIsTerminal(cmd)):
+	case o.keyStdin || (!o.withKey && !o.device && !o.wait && !stdinIsTerminal(cmd)):
 		k, err := readKeyFromReader(cmd.InOrStdin())
 		if err != nil {
 			return die(err)
@@ -150,7 +173,13 @@ func runLogin(cmd *cobra.Command, o loginOptions) error {
 	var tenantSlug string
 	var grant deviceToken
 	if key == "" {
-		tok, err := deviceLogin(cmd, ac, o)
+		var tok deviceToken
+		var err error
+		if o.wait {
+			tok, err = finishPendingLogin(cmd, ac)
+		} else {
+			tok, err = deviceLogin(cmd, ac, o)
+		}
 		if err != nil {
 			return die(err)
 		}
@@ -303,27 +332,9 @@ type deviceToken struct {
 // deviceLogin runs the browser flow: start a session, send the user to the
 // approval page, and poll until the key is issued exactly once.
 func deviceLogin(cmd *cobra.Command, ac *api.Client, o loginOptions) (deviceToken, error) {
-	host, _ := os.Hostname()
-	body := map[string]any{
-		"client_name": "MIOSA CLI on " + host,
-		"os":          runtime.GOOS,
-		"arch":        runtime.GOARCH,
-		"cli_version": cliVersion,
-	}
-	switch {
-	case o.lockedOrg != "":
-		body["tenant"] = o.lockedOrg
-	case o.allOrgs:
-		body["all_orgs"] = true
-	case len(o.orgs) > 0:
-		body["orgs"] = o.orgs
-	}
-	var st deviceStart
-	if err := ac.Post(cmd.Context(), "/auth/cli/start", body, &st); err != nil {
-		return deviceToken{}, fmt.Errorf("starting browser sign-in: %w", err)
-	}
-	if st.DeviceCode == "" || st.UserCode == "" {
-		return deviceToken{}, errors.New("the server did not return a sign-in code")
+	st, err := startDevice(cmd, ac, o)
+	if err != nil {
+		return deviceToken{}, err
 	}
 	target := st.VerificationURIComplete
 	if target == "" {
@@ -341,23 +352,54 @@ func deviceLogin(cmd *cobra.Command, ac *api.Client, o loginOptions) (deviceToke
 		fmt.Fprintf(errOut, "Open this URL and confirm the code:\n  %s\n", target)
 	}
 	fmt.Fprintln(errOut, "Waiting for approval...")
-
-	interval := time.Duration(st.Interval) * time.Second
-	if interval <= 0 {
-		interval = 3 * time.Second
-	}
 	expires := time.Duration(st.ExpiresIn) * time.Second
 	if expires <= 0 {
 		expires = 10 * time.Minute
 	}
-	ctx, cancel := context.WithTimeout(cmd.Context(), expires)
+	return pollDevice(cmd, ac, st.DeviceCode, st.Interval, time.Now().Add(expires))
+}
+
+// startDevice opens a browser sign-in session (POST /auth/cli/start).
+func startDevice(cmd *cobra.Command, ac *api.Client, o loginOptions) (deviceStart, error) {
+	host, _ := os.Hostname()
+	body := map[string]any{
+		"client_name": "MIOSA CLI on " + host,
+		"os":          runtime.GOOS,
+		"arch":        runtime.GOARCH,
+		"cli_version": cliVersion,
+	}
+	switch {
+	case o.lockedOrg != "":
+		body["tenant"] = o.lockedOrg
+	case o.allOrgs:
+		body["all_orgs"] = true
+	case len(o.orgs) > 0:
+		body["orgs"] = o.orgs
+	}
+	var st deviceStart
+	if err := ac.Post(cmd.Context(), "/auth/cli/start", body, &st); err != nil {
+		return deviceStart{}, fmt.Errorf("starting browser sign-in: %w", err)
+	}
+	if st.DeviceCode == "" || st.UserCode == "" {
+		return deviceStart{}, errors.New("the server did not return a sign-in code")
+	}
+	return st, nil
+}
+
+// pollDevice waits for the person to approve a sign-in, until deadline.
+func pollDevice(cmd *cobra.Command, ac *api.Client, deviceCode string, intervalSec int, deadline time.Time) (deviceToken, error) {
+	interval := time.Duration(intervalSec) * time.Second
+	if interval <= 0 {
+		interval = 3 * time.Second
+	}
+	ctx, cancel := context.WithDeadline(cmd.Context(), deadline)
 	defer cancel()
 	for {
 		if err := sleepFn(ctx, interval); err != nil {
 			return deviceToken{}, errors.New("sign-in timed out; run 'miosa login' again")
 		}
 		var tok deviceToken
-		err := ac.JSON(ctx, api.Request{Method: http.MethodPost, Path: "/auth/cli/token", Body: map[string]string{"device_code": st.DeviceCode}, NoRetry: true}, &tok)
+		err := ac.JSON(ctx, api.Request{Method: http.MethodPost, Path: "/auth/cli/token", Body: map[string]string{"device_code": deviceCode}, NoRetry: true}, &tok)
 		if err == nil {
 			if tok.APIKey == "" {
 				return deviceToken{}, errors.New("the server approved the sign-in but returned no key")
@@ -472,7 +514,8 @@ locally and the command exits non-zero, naming the key that is still active.`,
 }
 
 func newWhoamiCmd() *cobra.Command {
-	return &cobra.Command{
+	var check bool
+	cmd := &cobra.Command{
 		Use:   "whoami",
 		Short: "Show who this CLI is signed in as: user, organization, plan and access",
 		Long: `Asks the API who the key or session is (GET /whoami), which works for an API key as
@@ -487,6 +530,9 @@ organization record, which has no user, workspace or scopes.`,
 			}
 			var who map[string]any
 			werr := c.API.Get(cmd.Context(), "/whoami", nil, &who)
+			if check {
+				return whoamiCheck(cmd, who, werr)
+			}
 			if werr != nil && !api.IsStatus(werr, http.StatusNotFound) {
 				return die(werr)
 			}
@@ -515,6 +561,7 @@ organization record, which has no user, workspace or scopes.`,
 				"plan": plan, "credits": cur["credit_balance"],
 				"profile": profileLabel(), "api_url": c.BaseURL, "key": maskKey(c.Key),
 				"default_workspace": cfg.DefaultWorkspace, "current_sandbox": cfg.CurrentSandbox,
+				"config_path": configPathLabel(), "binary": binaryLabel(), "version": cliVersion,
 			}
 			activeOrg, activeFrom := effectiveOrg()
 			if activeOrg == "" {
@@ -558,6 +605,8 @@ organization record, which has no user, workspace or scopes.`,
 				[2]string{"Profile", profileLabel()},
 				[2]string{"API", c.BaseURL},
 				[2]string{"Key", maskKey(c.Key)},
+				[2]string{"Config", configPathLabel()},
+				[2]string{"CLI", binaryLabel()},
 			)
 			wsLabel := cfg.DefaultWorkspace
 			if ws != nil {
@@ -575,6 +624,41 @@ organization record, which has no user, workspace or scopes.`,
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&check, "check", false, "Only check the sign-in: exit 0 when it works, 3 when it does not")
+	return cmd
+}
+
+// whoamiCheck is whoami --check: one line (or {"signed_in": ...}) and the
+// exit code a script can test; a refused or missing key exits 3.
+func whoamiCheck(cmd *cobra.Command, who map[string]any, werr error) error {
+	if werr != nil && !api.IsStatus(werr, http.StatusNotFound) {
+		if isJSON() {
+			_ = printerFor(cmd).JSON(map[string]any{"signed_in": false})
+		}
+		return die(werr)
+	}
+	org, _ := who["organization"].(map[string]any)
+	if isJSON() {
+		return printerFor(cmd).JSON(map[string]any{"signed_in": true, "organization": orNil(org["slug"])})
+	}
+	printerFor(cmd).Line("signed in (%s)", fmt.Sprint(orNil(org["slug"])))
+	return nil
+}
+
+func configPathLabel() string {
+	p, err := config.Path()
+	if err != nil {
+		return "-"
+	}
+	return p
+}
+
+func binaryLabel() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return cliVersion
+	}
+	return exe + " (" + cliVersion + ")"
 }
 
 func firstNonNil(vs ...any) any {

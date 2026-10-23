@@ -8,6 +8,10 @@ set -eu
 #   curl -fsSL https://raw.githubusercontent.com/Miosa-osa/miosa-cli-go/main/install.sh | INSTALL_DIR=/usr/local/bin sh
 #   curl -fsSL https://raw.githubusercontent.com/Miosa-osa/miosa-cli-go/main/install.sh | MIOSA_CLI_VERSION=1.2.0 sh
 #
+# On a terminal the installer then signs you in ('miosa login' in the browser)
+# unless a key is already set up; MIOSA_INSTALL_LOGIN=0 skips that. Without a
+# terminal (an agent, CI) it prints the two-step sign-in instead.
+#
 # Set MIOSA_CLI_DOWNLOAD_BASE (for example https://dl.miosa.ai/cli) to install
 # from the MIOSA release origin instead. That path falls back to GitHub if the
 # origin is unavailable. GitHub remains the default until the origin is
@@ -17,6 +21,7 @@ REPO="${MIOSA_CLI_REPO:-Miosa-osa/miosa-cli-go}"
 MIOSA_BASE="${MIOSA_CLI_DOWNLOAD_BASE:-}"
 INSTALL_DIR="${INSTALL_DIR:-}"
 VERSION="${MIOSA_CLI_VERSION:-latest}"
+INSTALL_LOGIN="${MIOSA_INSTALL_LOGIN:-1}"
 
 err() {
   printf 'miosa install: %s\n' "$*" >&2
@@ -190,6 +195,27 @@ main() {
     printf 'Add %s to PATH, then run: miosa version\n' "$install_dir"
   else
     "$install_dir/miosa" version || true
+  fi
+  sign_in "$install_dir/miosa"
+}
+
+# sign_in finishes the install the way a person expects: signed in. It never
+# blocks a script: without a terminal it only says how an agent signs in.
+sign_in() {
+  bin="$1"
+  if [ "$INSTALL_LOGIN" = "0" ] || [ -n "${MIOSA_API_KEY:-}" ] || [ -n "${CI:-}" ]; then
+    return 0
+  fi
+  if "$bin" whoami --check >/dev/null 2>&1; then
+    printf 'Already signed in.\n'
+    return 0
+  fi
+  if [ -t 1 ] && { : </dev/tty; } 2>/dev/null; then
+    printf 'Signing you in...\n'
+    "$bin" login </dev/tty || printf 'Sign in later with: miosa login\n'
+  else
+    printf 'Sign in with: miosa login\n'
+    printf 'An agent without a terminal: miosa login --no-wait --json (a person approves the link), then miosa login --wait\n'
   fi
 }
 

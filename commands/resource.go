@@ -162,6 +162,10 @@ type Op struct {
 	// Idempotent adds --idempotency-key and sends an Idempotency-Key header (a
 	// generated one when the flag is not given), for routes that require it.
 	Idempotent bool
+	// Follow adds -f/--follow to a log command: once the recent lines are
+	// printed, Follow streams new ones (from the response, which carries the
+	// resolved id) until the server ends the stream or Ctrl-C.
+	Follow func(cmd *cobra.Command, c *api.Client, resp any) error
 }
 
 // errRequestHandled, returned by Op.Before, means the hook already did the
@@ -227,6 +231,9 @@ func (o Op) command(groupName string) *cobra.Command {
 	}
 	if o.AllOrgs {
 		flags.Bool("all-orgs", false, "List every organization your sign-in covers, with an ORG column")
+	}
+	if o.Follow != nil {
+		flags.BoolP("follow", "f", false, "Keep streaming new lines until Ctrl-C")
 	}
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		return o.run(cmd, args, yes)
@@ -563,7 +570,33 @@ func (o Op) run(cmd *cobra.Command, args []string, yes bool) error {
 			return err
 		}
 	}
+	if follow, _ := cmd.Flags().GetBool("follow"); o.Follow != nil && follow {
+		return o.renderAndFollow(cmd, c, display, resp)
+	}
 	return o.render(cmd, display, resp)
+}
+
+// renderAndFollow prints the recent lines, then streams new ones. With --json
+// the recent lines are JSON lines too, so the whole output is one JSON object
+// per line.
+func (o Op) renderAndFollow(cmd *cobra.Command, c *api.Client, args []string, resp any) error {
+	if !isJSON() {
+		if err := o.render(cmd, args, resp); err != nil {
+			return err
+		}
+	} else {
+		p := printerFor(cmd)
+		items, _ := lookupPath(resp, o.Lines).([]any)
+		for _, it := range items {
+			if s, ok := it.(string); ok {
+				it = map[string]any{"line": s}
+			}
+			if err := p.JSONLine(it); err != nil {
+				return err
+			}
+		}
+	}
+	return o.Follow(cmd, c, resp)
 }
 
 var unfilledArg = regexp.MustCompile(`\{\d+\}`)

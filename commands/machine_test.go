@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Miosa-osa/miosa-cli-go/commands"
 )
@@ -378,7 +379,7 @@ func TestEnvUpgradeComputerFallback(t *testing.T) {
 func shellExecAPI(t *testing.T, onExec func(c call)) *fakeAPI {
 	t.Helper()
 	return newFakeAPI(t, func(c call) (int, string) {
-		if c.is("POST", "/sandboxes/sb1/exec") {
+		if c.is("POST", "/sandboxes/sb1/exec") || c.is("POST", "/sandboxes/sb1/exec/stream") {
 			if onExec != nil {
 				onExec(c)
 			}
@@ -394,10 +395,26 @@ func shellExecAPI(t *testing.T, onExec func(c call)) *fakeAPI {
 					code = 127
 				}
 			}
+			if strings.HasSuffix(c.Path, "/stream") {
+				return 200, sseExecFrames(so.String(), se.String(), code)
+			}
 			return 200, mustJSON(map[string]interface{}{"data": map[string]interface{}{"stdout": so.String(), "stderr": se.String(), "exit_code": code}})
 		}
 		return 404, `{}`
 	})
+}
+
+// sseExecFrames is what /exec/stream sends: output chunks, then the exit.
+func sseExecFrames(stdout, stderr string, code int) string {
+	var b strings.Builder
+	if stdout != "" {
+		b.WriteString("event: stdout\ndata: " + mustJSON(map[string]string{"line": stdout}) + "\n\n")
+	}
+	if stderr != "" {
+		b.WriteString("event: stderr\ndata: " + mustJSON(map[string]string{"line": stderr}) + "\n\n")
+	}
+	b.WriteString("event: exit\ndata: " + mustJSON(map[string]int{"exit_code": code}) + "\n\n")
+	return b.String()
 }
 
 func TestExecCwdAndTimeout(t *testing.T) {
@@ -438,7 +455,7 @@ func TestExecWithoutFlagsSendsNoTimeout(t *testing.T) {
 
 func TestExecTimeoutBounds(t *testing.T) {
 	api := shellExecAPI(t, nil)
-	for _, v := range []string{"-1", "301", "1000"} {
+	for _, v := range []string{"-1", "86401"} {
 		if _, err := run(t, "exec", "sb1", "--timeout", v, "--", "true"); err == nil {
 			t.Errorf("--timeout %s should fail", v)
 		}
@@ -451,13 +468,85 @@ func TestExecTimeoutBounds(t *testing.T) {
 			t.Errorf("--timeout %s: %v", v, err)
 		}
 	}
-	var sent call
-	shellExecAPI(t, func(c call) { sent = c })
-	if _, err := run(t, "exec", "sb1", "--timeout", "0", "--", "true"); err != nil {
-		t.Fatal(err)
+	if len(api.find("POST", "/sandboxes/sb1/exec")) != 2 {
+		t.Errorf("up to 300 s a command is one request: %+v", api.calls)
 	}
-	if sent.Body["timeout"] != float64(300) {
-		t.Errorf("--timeout 0 means no timeout, the 300s maximum: %v", sent.Body)
+	// Longer, or no limit, streams; the API runs a command for up to a day.
+	var sent []call
+	shellExecAPI(t, func(c call) { sent = append(sent, c) })
+	for _, v := range []string{"301", "0"} {
+		if _, err := run(t, "exec", "sb1", "--timeout", v, "--", "true"); err != nil {
+			t.Fatalf("--timeout %s: %v", v, err)
+		}
+	}
+	if len(sent) != 2 || sent[0].Path != "/sandboxes/sb1/exec/stream" || sent[0].Body["timeout"] != float64(301) || sent[1].Body["timeout"] != float64(86400) {
+		t.Errorf("streamed requests: %+v", sent)
+	}
+}
+
+func TestExecStreamPrintsOutputAndKeepsTheExitCode(t *testing.T) {
+	shellExecAPI(t, nil)
+	out, errOut, err := runSplit(t, "exec", "sb1", "--stream", "--", "sh", "-c", "echo out; echo err >&2; exit 5")
+	if out != "out\n" || errOut != "err\n" {
+		t.Fatalf("out=%q err=%q", out, errOut)
+	}
+	if commands.ExitCode(err) != 5 {
+		t.Fatalf("exit = %d (%v)", commands.ExitCode(err), err)
+	}
+}
+
+func TestExecStreamTimedOutExits124(t *testing.T) {
+	newFakeAPI(t, func(c call) (int, string) {
+		if c.is("POST", "/sandboxes/sb1/exec/stream") {
+			return 200, "event: exit\ndata: {\"exit_code\":-1,\"timed_out\":true}\n\n"
+		}
+		return 404, `{}`
+	})
+	_, err := run(t, "exec", "sb1", "--timeout", "400", "--", "sleep", "999")
+	if commands.ExitCode(err) != 124 {
+		t.Fatalf("exit = %d (%v)", commands.ExitCode(err), err)
+	}
+}
+
+func TestExecDetachAttachStatusKill(t *testing.T) {
+	defer commands.SetExecAttachPollEveryForTest(time.Millisecond)()
+	var polls int
+	f := newFakeAPI(t, func(c call) (int, string) {
+		switch {
+		case c.is("POST", "/sandboxes/sb1/processes"):
+			return 201, `{"data":{"id":"p1","status":"running","command":"` + c.Body["command"].(string) + `"}}`
+		case c.is("GET", "/sandboxes/sb1/processes/p1"):
+			polls++
+			if polls < 3 {
+				return 200, `{"data":{"id":"p1","status":"running"}}`
+			}
+			return 200, `{"data":{"id":"p1","status":"exited","exit_code":4}}`
+		case c.is("GET", "/sandboxes/sb1/processes/p1/logs"):
+			if polls < 2 {
+				return 200, `{"data":{"lines":["tick1"]}}`
+			}
+			return 200, `{"data":{"lines":["tick1","tick2","tick3"]}}`
+		case c.is("DELETE", "/sandboxes/sb1/processes/p1"):
+			return 200, `{"data":{"id":"p1","status":"stopped"}}`
+		}
+		return 404, `{}`
+	})
+	out, errOut, err := runSplit(t, "exec", "sb1", "--detach", "--", "./train.sh")
+	if err != nil || out != "p1\n" || !strings.Contains(errOut, "--attach p1") {
+		t.Fatalf("detach: out=%q err=%q %v", out, errOut, err)
+	}
+	out, err = run(t, "exec", "sb1", "--attach", "p1")
+	if out != "tick1\ntick2\ntick3\n" || commands.ExitCode(err) != 4 {
+		t.Fatalf("attach: out=%q exit=%d", out, commands.ExitCode(err))
+	}
+	if out, err := run(t, "exec", "sb1", "--status", "p1"); err != nil || !strings.Contains(out, "exited") {
+		t.Fatalf("status: %q %v", out, err)
+	}
+	if _, err := run(t, "exec", "sb1", "--kill", "p1"); err != nil || len(f.find("DELETE", "/sandboxes/sb1/processes/p1")) != 1 {
+		t.Fatalf("kill: %v", err)
+	}
+	if _, err := run(t, "exec", "sb1", "--attach", "p1", "--", "ls"); err == nil {
+		t.Fatal("--attach with a command must be refused")
 	}
 }
 

@@ -21,8 +21,14 @@ Resume it with 'miosa resume'. Memory is checkpointed, so processes continue whe
 			Method: "POST", Path: "/sandboxes/{0}/pause", Detail: stateRows, Done: "Paused {0}",
 		}),
 		sandboxVerb(Op{
-			Use: "resume [sandbox]", Short: "Resume a paused sandbox",
+			Use: "resume [sandbox]", Short: "Resume a paused or stopped sandbox",
+			Long: `Resume a sandbox from where it paused or stopped. --wait blocks, with progress,
+until it accepts commands.
+
+  miosa resume my-box --wait`,
 			Method: "POST", Path: "/sandboxes/{0}/resume", Detail: stateRows, Done: "Resumed {0}",
+			Flags: []Flag{{Name: "wait", Type: "bool", Usage: "Wait until it is ready for commands", In: "local"}},
+			After: waitAfterCreate,
 		}),
 		sandboxVerb(Op{
 			Use: "stop [sandbox]", Short: "Stop a sandbox, keeping its disk",
@@ -38,13 +44,30 @@ disk and returns its id. The original keeps existing until you destroy it.`,
 		}),
 		sandboxVerb(Op{
 			Use: "fork [sandbox]", Short: "Fork a running sandbox into a copy",
+			Long: `Fork a running sandbox: the copy starts from its disk as it is now. --wait blocks
+until the fork accepts commands.
+
+  miosa fork my-box --name my-box-try --ttl 2h --wait`,
 			Method: "POST", Path: "/sandboxes/{0}/fork",
 			Flags: []Flag{
 				{Name: "ttl", Usage: "Lifetime of the fork: seconds, 90m, 2h or 2d", Field: "timeout_sec"},
 				{Name: "template", Usage: "Template for the fork", Field: "template_id"},
+				{Name: "name", Usage: "Name of the fork (default: derived from the source's)"},
+				{Name: "wait", Type: "bool", Usage: "Wait until the fork is ready for commands", In: "local"},
 			},
 			Body:   durationBody("timeout_sec"),
+			After:  waitAfterCreate,
 			Detail: []Col{{Head: "Fork", Path: "id"}, {Head: "State", Path: "state"}, {Head: "Name", Path: "name"}},
+		}),
+		sandboxVerb(Op{
+			Use: "rename [sandbox] <name>", Short: "Rename a sandbox",
+			Long:   "Give a sandbox a new name. Its id does not change.\n\n  miosa rename my-box api-box",
+			Method: "PATCH", Path: "/sandboxes/{0}", Args: []Arg{{Name: "name"}},
+			Body: func(a []string, body map[string]any) (map[string]any, error) {
+				body["name"] = a[len(a)-1]
+				return body, nil
+			},
+			Detail: []Col{{Head: "Sandbox", Path: "id"}, {Head: "Name", Path: "name"}, {Head: "State", Path: "state"}},
 		}),
 		sandboxVerb(Op{
 			Use: "extend [sandbox]", Short: "Replace a sandbox's time to live",
@@ -52,10 +75,16 @@ disk and returns its id. The original keeps existing until you destroy it.`,
 one, it does not add to it. See the time left with 'miosa usage'.
 
   miosa extend my-box --for 2h
-  miosa extend --for 1d`,
+  miosa extend --hours 6
+  miosa extend my-box --no-auto-stop`,
 			Method: "POST", Path: "/sandboxes/{0}/extend",
-			Flags:  []Flag{{Name: "for", Usage: "New time to live: seconds, 90m, 2h or 2d", Field: "timeout_sec", Required: true}},
-			Body:   durationBody("timeout_sec"),
+			Flags: []Flag{
+				{Name: "for", Usage: "New time to live: seconds, 90m, 2h or 2d", Field: "timeout_sec"},
+				{Name: "hours", Type: "int", Usage: "New time to live in hours (same as --for <n>h)", Field: "hours"},
+				{Name: "no-auto-stop", Type: "bool", Usage: "Keep it running: no time limit or idle pause (always on)", Field: "always_on"},
+			},
+			Body:   extendBody,
+			After:  extendAfter,
 			Detail: []Col{{Head: "State", Path: "state"}, {Head: "Time to live (s)", Path: "timeout_sec"}, {Head: "Remaining (ms)", Path: "timeout_remaining_ms"}},
 		}),
 		sandboxVerb(Op{
@@ -87,6 +116,80 @@ var stateRows = []Col{{Head: "Sandbox", Path: "id"}, {Head: "State", Path: "stat
 func sandboxVerb(o Op) *cobra.Command {
 	o.Args = append([]Arg{{Name: "sandbox", Optional: true, Current: true, Complete: "sandbox"}}, o.Args...)
 	return o.command("")
+}
+
+// extendBody turns --for or --hours into timeout_sec. --no-auto-stop is not a
+// field of the extend route: it travels to extendAfter, which sets always_on.
+func extendBody(_ []string, body map[string]any) (map[string]any, error) {
+	body, err := durationBody("timeout_sec")(nil, body)
+	if err != nil {
+		return nil, err
+	}
+	if h, ok := body["hours"].(int); ok {
+		delete(body, "hours")
+		if _, both := body["timeout_sec"]; both {
+			return nil, fmt.Errorf("give --for or --hours, not both")
+		}
+		if h < 1 {
+			return nil, fmt.Errorf("--hours must be at least 1")
+		}
+		body["timeout_sec"] = h * 3600
+	}
+	alwaysOn, _ := body["always_on"].(bool)
+	delete(body, "always_on")
+	if _, ok := body["timeout_sec"]; !ok && !alwaysOn {
+		return nil, fmt.Errorf("give --for, --hours or --no-auto-stop")
+	}
+	return body, nil
+}
+
+// extendAfter applies --no-auto-stop once the extend succeeded: the sandbox
+// becomes always on (PATCH /sandboxes/:id always_on).
+func extendAfter(cmd *cobra.Command, resp any) error {
+	if on, _ := cmd.Flags().GetBool("no-auto-stop"); !on {
+		return nil
+	}
+	id, _ := lookupPath(unwrapObject(resp), "id").(string)
+	if id == "" {
+		return die(fmt.Errorf("the server did not return the sandbox id"))
+	}
+	c, _, err := buildClient()
+	if err != nil {
+		return die(err)
+	}
+	if _, err := c.API.JSONAny(cmd.Context(), api.Request{Method: "PATCH", Path: "/sandboxes/" + url.PathEscape(id), Body: map[string]any{"always_on": true}}); err != nil {
+		return die(err)
+	}
+	if !isJSON() {
+		printerFor(cmd).Line("Always on: no time limit or idle pause until you stop it.")
+	}
+	return nil
+}
+
+// waitAfterCreate is the After hook of a verb that makes a sandbox (fork):
+// with --wait it blocks, with progress, until the new sandbox is ready.
+func waitAfterCreate(cmd *cobra.Command, resp any) error {
+	if w, _ := cmd.Flags().GetBool("wait"); !w {
+		return nil
+	}
+	id, _ := lookupPath(unwrapObject(resp), "id").(string)
+	if id == "" {
+		return die(fmt.Errorf("the server did not return the new sandbox's id"))
+	}
+	c, _, err := buildClient()
+	if err != nil {
+		return die(err)
+	}
+	progress := startWaitProgress(cmd, shortID(id)+" to be ready")
+	_, err = waitSandbox(cmd.Context(), c.API, id, "ready", 5*time.Minute, progress.Set)
+	progress.Stop()
+	if err != nil {
+		return die(err)
+	}
+	if obj, ok := unwrapObject(resp).(map[string]any); ok {
+		obj["state"] = "running"
+	}
+	return nil
 }
 
 // durationBody turns the duration flag stored under field into seconds.
@@ -290,32 +393,50 @@ For a background process use 'miosa process logs'. With --json each line is an o
 }
 
 // logLineOf extracts the text of a log stream event: a JSON object with a
-// "line" field, or the raw data.
+// "line" field, or with "message" (the platform's log collector), or the raw
+// data.
 func logLineOf(data string) string {
 	var v struct {
-		Line string `json:"line"`
+		Line    string `json:"line"`
+		Message string `json:"message"`
 	}
-	if strings.HasPrefix(strings.TrimSpace(data), "{") && jsonUnmarshal(data, &v) == nil && v.Line != "" {
-		return v.Line
+	if strings.HasPrefix(strings.TrimSpace(data), "{") && jsonUnmarshal(data, &v) == nil {
+		switch {
+		case v.Line != "":
+			return v.Line
+		case v.Message != "":
+			return v.Message
+		}
 	}
 	return data
 }
 
 func newEventsCmd() *cobra.Command {
+	var agent, follow bool
+	var convo string
 	cmd := &cobra.Command{
 		Use:   "events [sandbox]",
-		Short: "Stream a sandbox's lifecycle events",
+		Short: "Stream a sandbox's lifecycle events, or its agent's chat events",
 		Long: `Stream events (state changes, readiness, previews) as they happen. Ctrl-C stops.
 With --json each event is one JSON object per line.
 
+--agent shows the agent's events instead (prompts, tool calls, answers) of the
+newest run in the sandbox; --convo <chat-id> those of one chat. -f keeps
+following until the run ends.
+
   miosa events my-box
-  miosa events my-box --json | jq -c 'select(.event == "state")'`,
+  miosa events my-box --json | jq -c 'select(.event == "state")'
+  miosa events my-box --agent -f
+  miosa events --convo 3f0c...`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p := printerFor(cmd)
 			c, cfg, err := buildClient()
 			if err != nil {
 				return die(err)
+			}
+			if convo != "" {
+				return agentEvents(cmd, c.API, "", convo, follow)
 			}
 			ref := ""
 			if len(args) > 0 {
@@ -328,6 +449,9 @@ With --json each event is one JSON object per line.
 			id, err := c.API.ResolveSandbox(cmd.Context(), ref)
 			if err != nil {
 				return die(err)
+			}
+			if agent {
+				return agentEvents(cmd, c.API, id, "", follow)
 			}
 			return followStream(cmd, c.API, "/sandboxes/"+id+"/events", nil, func(ev api.Event) error {
 				if isJSON() {
@@ -342,6 +466,11 @@ With --json each event is one JSON object per line.
 			})
 		},
 	}
+	cmd.Flags().BoolVar(&agent, "agent", false, "Show the agent's chat events instead of the sandbox's lifecycle")
+	cmd.Flags().StringVar(&convo, "convo", "", "Show one chat's agent events (a chat id)")
+	cmd.Flags().StringVar(&convo, "conversation", "", "Same as --convo")
+	_ = cmd.Flags().MarkHidden("conversation")
+	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "With --agent or --convo: keep following until the run ends")
 	return cmd
 }
 

@@ -323,6 +323,16 @@ type copied struct {
 	Bytes int64  `json:"bytes"`
 }
 
+func init() {
+	// `miosa scp` is boat's name for the same copy: to, from or between
+	// sandboxes, a directory with -r. It goes through the API, so it needs no
+	// SSH key.
+	scp := newFilesCpCmd()
+	scp.Use = "scp <src> <dst>"
+	scp.Short = "Copy files to or from a sandbox (same as 'files cp'; no SSH key needed)"
+	rootCmd.AddCommand(scp)
+}
+
 func newFilesCpCmd() *cobra.Command {
 	var recursive bool
 	cmd := &cobra.Command{
@@ -469,6 +479,14 @@ func uploadTree(ctx context.Context, c *api.Client, local string, dst target, ds
 	} else if st, err := fsStatPath(ctx, c, dst); err == nil && st.IsDir {
 		root = path.Join(dst.path, filepath.Base(filepath.Clean(local)))
 	}
+	return uploadDirTo(ctx, c, local, target{ref: dst.ref, path: root}, nil)
+}
+
+// uploadDirTo copies the local directory's contents to exactly dst.path. skip,
+// when set, leaves out paths relative to the directory (slash-separated); a
+// skipped directory is not descended into.
+func uploadDirTo(ctx context.Context, c *api.Client, local string, dst target, skip func(rel string, isDir bool) bool) ([]copied, error) {
+	root := dst.path
 	var res []copied
 	// Symlinks are followed (node_modules links a local package, FounderOS #10: the linked
 	// @miosa/sdk arrived empty); a link back into a folder already being copied is skipped.
@@ -491,6 +509,20 @@ func uploadTree(ctx context.Context, c *api.Client, local string, dst target, ds
 			}
 			rel, _ := filepath.Rel(dir, p)
 			remote := target{ref: dst.ref, path: path.Join(remoteRoot, filepath.ToSlash(rel))}
+			if skip != nil && remote.path != root {
+				isDir := d.IsDir()
+				if !isDir && d.Type()&os.ModeSymlink != 0 {
+					if st, err := os.Stat(p); err == nil {
+						isDir = st.IsDir()
+					}
+				}
+				if skip(strings.TrimPrefix(remote.path, root+"/"), isDir) {
+					if d.IsDir() {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+			}
 			if d.IsDir() {
 				return fsMkdir(ctx, c, remote)
 			}
@@ -516,7 +548,7 @@ func uploadTree(ctx context.Context, c *api.Client, local string, dst target, ds
 			return nil
 		})
 	}
-	err = walk(local, root)
+	err := walk(local, root)
 	return res, err
 }
 

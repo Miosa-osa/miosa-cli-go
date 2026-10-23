@@ -38,6 +38,9 @@ type Config struct {
 	// profile that never chose per organization.
 	DefaultWorkspaces map[string]string `toml:"default_workspaces,omitempty"`
 	CurrentSandbox    string            `toml:"current_sandbox"`
+	// AutoUpdate, "on", lets the CLI install a newer release by itself after
+	// a command finishes (at most every 6 hours); anything else leaves it off.
+	AutoUpdate string `toml:"auto_update,omitempty"`
 	// Tenant is the organization slug the key belongs to. Informational: the
 	// key itself decides the tenant.
 	Tenant string `toml:"tenant,omitempty"`

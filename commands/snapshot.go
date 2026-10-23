@@ -108,9 +108,51 @@ still depends on is never deleted.`,
 		newSnapshotPullCmd(),
 		newSnapshotForkCmd(),
 		newSnapshotDeleteCmd(),
+		snapshotShareOp(Op{
+			Use: "share <snapshot-id>", Short: "Make a read-only link to a snapshot's files (the link is shown once)",
+			Long: `Create a link anyone holding it can use to browse and download the snapshot's files,
+read-only, until it expires. --path limits it to one directory.
+
+  miosa snapshot share <snapshot-id> --hours 24 --path /workspace/app --label review`,
+			Method: "POST", Path: "/snapshots/{0}/shares", Args: []Arg{{Name: "snapshot"}},
+			Flags: []Flag{
+				{Name: "hours", Type: "int", Usage: "Hours until the link expires", Field: "expires_in_hours"},
+				{Name: "path", Usage: "Share only this directory (default /)"},
+				{Name: "label", Usage: "A note for 'snapshot shares'"},
+			},
+			Human: renderSnapshotShare,
+		}),
+		snapshotShareOp(Op{
+			Use: "shares <snapshot-id>", Short: "List a snapshot's share links (tokens are never shown again)",
+			Method: "GET", Path: "/snapshots/{0}/shares", Args: []Arg{{Name: "snapshot"}},
+			Cols: []Col{{Head: "ID", Path: "id"}, {Head: "PATH", Path: "path"}, {Head: "LABEL", Path: "label"}, {Head: "EXPIRES", Path: "expires_at"}, {Head: "REVOKED", Path: "revoked_at"}, {Head: "USES", Path: "access_count"}},
+		}),
+		snapshotShareOp(Op{
+			Use: "unshare <snapshot-id> <share-id>", Short: "Revoke a share link",
+			Method: "DELETE", Path: "/snapshots/{0}/shares/{1}", Args: []Arg{{Name: "snapshot"}, {Name: "share"}},
+			Done: "Revoked {1}",
+		}),
 	)
 	return cmd
 }
+
+// renderSnapshotShare prints a new share: the link first, since its token is
+// never shown again.
+func renderSnapshotShare(cmd *cobra.Command, _ []string, resp any) error {
+	m, _ := resp.(map[string]any)
+	data, _ := m["data"].(map[string]any)
+	printerFor(cmd).Fields([][2]string{
+		{"Link", fmt.Sprint(orNil(m["share_url"]))},
+		{"Share id", fmt.Sprint(orNil(data["id"]))},
+		{"Path", fmt.Sprint(orNil(data["path"]))},
+		{"Expires", fmt.Sprint(orNil(data["expires_at"]))},
+	})
+	printerFor(cmd).Line("The link is shown only now. 'miosa snapshot unshare' revokes it.")
+	return nil
+}
+
+// snapshotShareOp builds a snapshot share subcommand from a declarative Op.
+func snapshotShareOp(o Op) *cobra.Command { return o.command("snapshot") }
 
 // ─── list / latest / info ─────────────────────────────────────────────────────
 

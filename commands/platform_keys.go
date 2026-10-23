@@ -149,7 +149,19 @@ The key goes to standard output on create, so you can capture it:
 			Flags: []Flag{{Name: "name", Usage: "New name"}, {Name: "rate-limit", Type: "int", Usage: "Requests per minute", Field: "rate_limit_rpm"}},
 		},
 	)
-	cmd.AddCommand(newKeyCreateCmd(), newKeyScopedCmd(), newKeyPresetCmd())
+	cmd.AddCommand(newKeyCreateCmd(), newKeyScopedCmd(), newKeyPresetCmd(), Op{
+		Use: "usage <id>", Short: "How much a key is used: requests, last use and from where",
+		Long: `Shows how many requests the key has made, when it was last used and from which
+address, how old it is and when it expires. 'miosa api-key events <id>' lists
+what it did.`,
+		Method: "GET", Path: "/api-keys/{0}", Args: []Arg{{Name: "id"}},
+		Detail: []Col{
+			{Head: "Key", Path: "name"}, {Head: "Prefix", Path: "key_prefix"}, {Head: "Status", Path: "status"},
+			{Head: "Requests", Path: "request_count"}, {Head: "Last used", Path: "last_used_at", Fmt: "age"},
+			{Head: "Last used from", Path: "last_used_ip"}, {Head: "Age (days)", Path: "age_days"},
+			{Head: "Rate limit (req/min)", Path: "rate_limit_rpm"}, {Head: "Expires", Path: "expires_at"},
+		},
+	}.command("api-key"))
 	return cmd
 }
 

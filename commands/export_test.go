@@ -132,3 +132,32 @@ func SetDeliveryDefaultURLForTest(url string) func() {
 	deliveryDefaultURL = url
 	return func() { deliveryDefaultURL = previous }
 }
+
+// SetDeployWatchEveryForTest shortens how often a followed build checks its
+// deployment's state.
+func SetDeployWatchEveryForTest(d time.Duration) func() {
+	old := deployWatchEvery
+	deployWatchEvery = d
+	return func() { deployWatchEvery = old }
+}
+
+// SetServiceLogPollEveryForTest shortens how often a followed service log is read.
+func SetServiceLogPollEveryForTest(d time.Duration) func() {
+	old := serviceLogPollEvery
+	serviceLogPollEvery = d
+	return func() { serviceLogPollEvery = old }
+}
+
+// SetExecAttachPollEveryForTest shortens how often exec --attach reads a log.
+func SetExecAttachPollEveryForTest(d time.Duration) func() {
+	old := execAttachPollEvery
+	execAttachPollEvery = d
+	return func() { execAttachPollEvery = old }
+}
+
+// AutoUpdateForTest runs the after-command automatic update with --no-update off.
+func AutoUpdateForTest(w io.Writer) {
+	globalFlags.NoUpdate = false
+	defer func() { globalFlags.NoUpdate = true }()
+	maybeAutoUpdate(w)
+}

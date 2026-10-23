@@ -35,6 +35,8 @@ var globalFlags struct {
 	Retries int
 	// NoUpdateCheck disables the new-version notice.
 	NoUpdateCheck bool
+	// NoUpdate skips the opt-in automatic update for this run.
+	NoUpdate bool
 }
 
 var rootCmd = &cobra.Command{
@@ -53,8 +55,10 @@ Anywhere a sandbox is expected you may give its name, its id, "current" (the one
 set with 'miosa use') or "self" (inside a sandbox, from MIOSA_SANDBOX_ID).
 
 Output: --json (or -o json) prints machine-readable JSON; streams print one
-JSON object per line. Errors go to stderr with the API error code, and with
---json as {"error":{...}}.
+JSON object per line. When standard output is a pipe or a file, JSON is the
+default; -o text or MIOSA_OUTPUT=text keeps text. Commands that print raw
+content (exec, ssh, logs, files cat, api, ...) always keep text. Errors go to
+stderr with the API error code, and in JSON mode as {"error":{...}}.
 
 Exit codes: 0 ok, 1 error, 2 usage, 3 not signed in or forbidden, 4 not found,
 5 conflict or invalid input, 6 rate limited, 7 server or network error. A command
@@ -73,13 +77,18 @@ Docs: https://miosa.ai/docs/cli`,
 }
 
 // applyGlobals resolves the flags that depend on other flags or the
-// environment: the profile, --json, MIOSA_OUTPUT and MIOSA_RETRIES.
+// environment: the profile, --json, MIOSA_OUTPUT, a piped standard output and
+// MIOSA_RETRIES.
 func applyGlobals(cmd *cobra.Command) {
 	config.UseProfile(globalFlags.Profile)
 	if globalFlags.JSON {
 		globalFlags.Output = "json"
-	} else if f := cmd.Flags().Lookup("output"); (f == nil || !f.Changed) && os.Getenv("MIOSA_OUTPUT") != "" {
-		globalFlags.Output = os.Getenv("MIOSA_OUTPUT")
+	} else if f := cmd.Flags().Lookup("output"); f == nil || !f.Changed {
+		if env := os.Getenv("MIOSA_OUTPUT"); env != "" {
+			globalFlags.Output = env
+		} else if autoJSON(cmd) {
+			globalFlags.Output = "json"
+		}
 	}
 	if globalFlags.Retries < 0 {
 		if v := os.Getenv("MIOSA_RETRIES"); v != "" {
@@ -100,6 +109,7 @@ func Execute() error {
 		return err
 	}
 	maybeNotifyUpdate(os.Stderr)
+	maybeAutoUpdate(os.Stderr)
 	return nil
 }
 
@@ -118,6 +128,8 @@ func ResetForTest() {
 	globalFlags.JSON = false
 	globalFlags.Retries = 0 // tests never wait on a retry
 	globalFlags.NoUpdateCheck = true
+	globalFlags.NoUpdate = true
+	autoJSONEnabled = false // go test's stdout is a pipe; tests opt in
 	config.UseProfile("")
 	// Reset persistent flags on the root command.
 	pf := rootCmd.PersistentFlags()
@@ -133,6 +145,7 @@ func ResetForTest() {
 	actingOrgChecked = false
 	whereItLandsShown = false
 	_ = pf.Set("retries", "0")
+	_ = pf.Set("no-update", "true")
 	// Reset local flags on all subcommands so flag values don't leak between tests.
 	resetCommandFlags(rootCmd)
 	pf.VisitAll(func(f *pflag.Flag) { f.Changed = false })
@@ -141,6 +154,10 @@ func ResetForTest() {
 
 // resetCommandFlags walks the command tree and resets every flag to its default.
 func resetCommandFlags(cmd *cobra.Command) {
+	// A parsed "--" leaves ArgsLenAtDash set on the flag set, so a later
+	// `exec` with no args would slice by the earlier count. Init clears it
+	// (cobra names the set after the command and continues on error).
+	cmd.Flags().Init(cmd.Name(), pflag.ContinueOnError)
 	cmd.Flags().VisitAll(func(f *pflag.Flag) {
 		if f.Changed {
 			if sv, ok := f.Value.(pflag.SliceValue); ok {
@@ -163,11 +180,12 @@ func init() {
 	pf.StringVar(&globalFlags.APIURL, "api-url", "", "API base URL (overrides MIOSA_BASE_URL and config)")
 	pf.StringVarP(&globalFlags.Output, "output", "o", "text", "Output format: text or json")
 	pf.BoolVarP(&globalFlags.Quiet, "quiet", "q", false, "Suppress informational output")
-	pf.IntVar(&globalFlags.Timeout, "timeout", 60, "Request timeout in seconds (0 = no timeout); for exec and ssh also the command timeout, 1-300")
+	pf.IntVar(&globalFlags.Timeout, "timeout", 60, "Request timeout in seconds (0 = no timeout); for exec also the command timeout (over 300 or 0 streams the output), for ssh 1-300")
 	pf.StringVar(&globalFlags.Profile, "profile", "", "Config profile to use (env: MIOSA_PROFILE)")
 	pf.BoolVar(&globalFlags.JSON, "json", false, "Print machine-readable JSON (same as --output json)")
 	pf.IntVar(&globalFlags.Retries, "retries", -1, "Retries on 429 and transient 5xx errors (default 3, env: MIOSA_RETRIES)")
 	pf.BoolVar(&globalFlags.NoUpdateCheck, "no-update-notice", false, "Silence the new-version notice (env: MIOSA_NO_UPDATE_NOTICE=1)")
+	pf.BoolVar(&globalFlags.NoUpdate, "no-update", false, "Skip the automatic update for this run, when it is on (env: MIOSA_NO_UPDATE=1)")
 
 	// Register all subcommands.
 	rootCmd.AddCommand(
@@ -295,10 +313,10 @@ var helpGroups = []struct {
 	ID, Title string
 	Commands  []string
 }{
-	{"account", "Account and setup:", []string{"login", "logout", "whoami", "profile", "config", "doctor", "update", "version", "open", "org", "limits"}},
+	{"account", "Account and setup:", []string{"login", "logout", "whoami", "profile", "config", "doctor", "update", "version", "open", "org", "limits", "feedback"}},
 	{"machines", "Sandboxes and computers:", []string{"create", "list", "info", "use", "destroy", "pause", "resume", "stop", "recover", "fork", "extend", "tag",
-		"exec", "ssh", "console", "files", "logs", "events", "usage", "wait", "ports", "preview", "process", "desktop", "computer", "daemon", "services", "policy", "proxy", "url", "env", "snapshot", "checkpoint", "restore", "catalog", "runtimes", "device", "sandbox"}},
-	{"agents", "Agents:", []string{"prompt", "run", "chat", "agent", "connections"}},
+		"exec", "ssh", "console", "files", "push", "logs", "events", "usage", "wait", "ports", "preview", "process", "desktop", "computer", "daemon", "services", "policy", "proxy", "url", "env", "snapshot", "checkpoint", "restore", "catalog", "runtimes", "device", "sandbox"}},
+	{"agents", "Agents:", []string{"prompt", "steer", "interrupt", "conversations", "run", "chat", "agent", "connections"}},
 	{"platform", "Platform:", []string{"api-key", "webhook", "deploy", "template", "workspace", "move", "billing", "audit", "forge", "api", "mcp"}},
 }
 
