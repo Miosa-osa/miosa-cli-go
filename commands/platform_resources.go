@@ -94,14 +94,15 @@ func deployOps() []Op {
 		},
 		Op{
 			Use: "logs <deployment>", Short: "Show the running app's log",
-			Long:    "Prints the most recent lines the deployment's process wrote. Static sites (uploaded files) run no process, so they have no runtime log.",
-			Example: "  miosa deploy logs my-app\n  miosa deploy logs my-app -n 200",
+			Long:    "Prints the most recent lines the deployment's process wrote. Static sites (uploaded files) run no process, so they have no runtime log.\n\n--follow then streams new lines until Ctrl-C: a build in progress is followed until it finishes, a running app's stdout and stderr until you stop.",
+			Example: "  miosa deploy logs my-app\n  miosa deploy logs my-app -n 200\n  miosa deploy logs my-app --follow",
 			After: func(cmd *cobra.Command, resp any) error {
 				_ = showBuildFailure(cmd, resp)
 				return staticEmptyNotice("static deployments have no runtime logs: they serve uploaded files and run no process")(cmd, resp)
 			},
 			Method: "GET", Path: "/deployments/{0}/logs", Args: []Arg{d}, Lines: "data.lines",
-			Flags: []Flag{{Name: "lines", Short: "n", Type: "int", Usage: "Number of lines"}},
+			Flags:  []Flag{{Name: "lines", Short: "n", Type: "int", Usage: "Number of lines"}},
+			Follow: followDeployment,
 		},
 		Op{
 			Use: "prove <deployment>", Aliases: []string{"proof"}, Short: "Check end to end that a deployment is live and serving",
@@ -330,10 +331,14 @@ func dbCmd() *cobra.Command {
 
   miosa db create app-db --engine postgres --version 16 --size small
   miosa db create app-db --extensions vector,pg_trgm,pgcrypto --workspace tz
+  miosa db create app-db --project shop
 
 --extensions applies to PostgreSQL only; allowed: vector, pg_trgm, pgcrypto, uuid-ossp,
 pg_stat_statements, citext, hstore, btree_gin, btree_gist. --version is a version with an
 image (postgres 16, mysql 8, redis 7, mongodb 7). --size is one of tiny, xs, small, medium, large.
+
+--project adds the database to a project, where its services can reference it; it is
+created in the project's workspace unless --workspace says otherwise.
 
 --engine optimal creates an Optimal Engine; 'miosa engine create' is the same call with
 the Engine-specific flags and an idempotent name.`,
@@ -346,8 +351,9 @@ the Engine-specific flags and an idempotent name.`,
 				{Name: "workspace-id", Usage: "Workspace id", Field: "workspace_id", Hidden: true},
 				{Name: "region", Usage: "Pin to a region"},
 				{Name: "class", Usage: "Data classification: public, internal, confidential or restricted", Field: "classification", Enum: []string{"public", "internal", "confidential", "restricted"}},
+				{Name: "project", Usage: "Add it to this project (name, slug or id), in the project's workspace", Field: "project_id"},
 			},
-			Before: settleCreateWorkspace,
+			Before: settleDBProject,
 			After:  reportWorkspaceLanding,
 			Body:   func(a []string, body map[string]any) (map[string]any, error) { body["name"] = a[0]; return body, nil },
 			Detail: []Col{{Head: "Name", Path: "name"}, {Head: "Id", Path: "id"}, {Head: "Engine", Path: "engine"}, {Head: "Version", Path: "engine_version"}, {Head: "State", Path: "state"}, {Head: "Memory (MB)", Path: "memory_mb"}, {Head: "Workspace", Path: "workspace_id"}},
@@ -359,7 +365,9 @@ the Engine-specific flags and an idempotent name.`,
 		Op{Use: "connection <database>", Aliases: []string{"url"}, Short: "Show how to connect (a secret)", Method: "GET", Path: "/databases/{0}/credentials", Args: []Arg{d}},
 		Op{
 			Use: "logs <database>", Short: "Show the database log (the last run of one that failed)", Method: "GET", Path: "/databases/{0}/logs", Args: []Arg{d}, Lines: "logs",
-			Flags: []Flag{{Name: "tail", Short: "n", Type: "int", Usage: "How many lines", Field: "lines"}},
+			Example: "  miosa db logs my-db -n 200\n  miosa db logs my-db --follow",
+			Flags:   []Flag{{Name: "tail", Short: "n", Type: "int", Usage: "How many lines", Field: "lines"}},
+			Follow:  followRoute("database_id", "/databases/%s/logs/stream"),
 		},
 		Op{
 			Use: "backups <database>", Short: "List backups", Method: "GET", Path: "/databases/{0}/backups", Args: []Arg{d},
@@ -824,6 +832,7 @@ delete those first.`,
 	)
 	cmd.AddCommand(projectVarsCmd())
 	cmd.AddCommand(projectEnvironmentCmd())
+	cmd.AddCommand(projectChangesCmd())
 	return cmd
 }
 

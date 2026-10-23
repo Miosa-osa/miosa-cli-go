@@ -57,34 +57,72 @@ type uploadFilter struct {
 
 // newUploadFilter is the default rules plus the root's .miosaignore, if any.
 func newUploadFilter(root string) (*uploadFilter, error) {
-	rules := append([]uploadRule(nil), defaultUploadRules...)
-	f, err := os.Open(filepath.Join(root, miosaIgnoreFile))
+	extra, err := readIgnoreRules(filepath.Join(root, miosaIgnoreFile), miosaIgnoreFile)
+	if err != nil {
+		return nil, err
+	}
+	return &uploadFilter{rules: append(append([]uploadRule(nil), defaultUploadRules...), extra...)}, nil
+}
+
+// readIgnoreRules reads gitignore-style patterns from file (none when it does
+// not exist): `#` comments, `!` to put a path back, a trailing `/` for
+// directories, `/` anchoring to the root, and `**/` for any depth.
+func readIgnoreRules(file, why string) ([]uploadRule, error) {
+	f, err := os.Open(file)
 	if os.IsNotExist(err) {
-		return &uploadFilter{rules: rules}, nil
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	var rules []uploadRule
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		rule := uploadRule{why: miosaIgnoreFile}
+		rule := uploadRule{why: why}
 		if strings.HasPrefix(line, "!") {
 			rule.negate = true
 			line = strings.TrimPrefix(line, "!")
+		}
+		if strings.HasSuffix(line, "/**") {
+			rule.dirOnly = true
+			line = strings.TrimSuffix(line, "/**")
 		}
 		if strings.HasSuffix(line, "/") {
 			rule.dirOnly = true
 			line = strings.TrimSuffix(line, "/")
 		}
+		// "**/x" matches x at any depth, which is what a pattern with no
+		// inner slash already does.
+		for strings.HasPrefix(line, "**/") {
+			line = strings.TrimPrefix(line, "**/")
+		}
+		if line == "" {
+			continue
+		}
 		rule.pattern = line
 		rules = append(rules, rule)
 	}
-	return &uploadFilter{rules: rules}, sc.Err()
+	return rules, sc.Err()
+}
+
+// newPushFilter is what `miosa push` leaves out: the .git directory and what
+// the root's .gitignore and .miosaignore name. Secrets are not skipped by
+// default as they are for a public upload: the sandbox is the user's own.
+func newPushFilter(root string) (*uploadFilter, error) {
+	rules := []uploadRule{{pattern: ".git", dirOnly: true, why: "git metadata"}}
+	for _, name := range []string{".gitignore", miosaIgnoreFile} {
+		extra, err := readIgnoreRules(filepath.Join(root, name), name)
+		if err != nil {
+			return nil, err
+		}
+		rules = append(rules, extra...)
+	}
+	return &uploadFilter{rules: rules}, nil
 }
 
 // skip reports whether rel (slash-separated, relative to the upload root) is

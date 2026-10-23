@@ -2,43 +2,103 @@ package commands_test
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Miosa-osa/miosa-cli-go/commands"
 )
 
-func TestRunOneShotRemovesTheSandboxAndKeepsTheExitCode(t *testing.T) {
-	f := fakeRoutes(t, map[string]any{
-		"POST /sandboxes/run":        resp{201, `{"data":{"id":"` + boxID + `","name":"oneshot-1"},"exec":{"stdout":"42\n","stderr":"warn\n","exit_code":3}}`},
-		"DELETE /sandboxes/" + boxID: resp{204, ``},
+// oneShotAPI serves a one-shot: create (ready at once), the streamed command,
+// usage, and delete.
+func oneShotAPI(t *testing.T, frames string) *fakeAPI {
+	t.Helper()
+	return newFakeAPI(t, func(c call) (int, string) {
+		switch {
+		case c.is("POST", "/sandboxes"):
+			return 201, `{"id":"` + boxID + `","name":"oneshot-1","state":"running","ready":true}`
+		case c.is("POST", boxPath+"/exec/stream"):
+			return 200, frames
+		case c.is("GET", boxPath+"/usage"):
+			return 200, `{"data":{"runtime_sec":42,"estimated_cost_cents":1.5}}`
+		case c.is("DELETE", boxPath):
+			return 204, ``
+		case c.is("POST", boxPath+"/fs/mkdir"), c.is("POST", boxPath+"/files/write"):
+			return 201, `{}`
+		}
+		return 404, `{"error":{"code":"NOT_FOUND"}}`
 	})
-	out, errOut, err := runSplit(t, "run", "--rm", "--size", "small", "--set", "A=1", "--", "python", "-c", "print(6*7)")
+}
+
+func TestRunOneShotDeletesReportsCostAndKeepsTheExitCode(t *testing.T) {
+	f := oneShotAPI(t, "event: stdout\ndata: {\"line\":\"42\\n\"}\n\nevent: stderr\ndata: {\"line\":\"warn\\n\"}\n\nevent: exit\ndata: {\"exit_code\":3}\n\n")
+	out, errOut, err := runSplit(t, "run", "--size", "small", "-e", "A=1", "--", "python", "-c", "print(6*7)")
 	if out != "42\n" || !strings.Contains(errOut, "warn") {
 		t.Fatalf("out=%q err=%q", out, errOut)
 	}
-	if err == nil || commands.ExitCode(err) != 3 {
+	if commands.ExitCode(err) != 3 {
 		t.Fatalf("the command's exit code must be miosa's: %v (%d)", err, commands.ExitCode(err))
 	}
-	b := f.find("POST", "/sandboxes/run")[0].Body
-	if b["persistent"] != false || b["size"] != "small" || b["env"].(map[string]any)["A"] != "1" || !strings.Contains(b["command"].(string), "python") {
-		t.Fatalf("body = %v", b)
+	if !strings.Contains(errOut, "exited 3") || !strings.Contains(errOut, "cost $0.0150") || !strings.Contains(errOut, "sandbox deleted") {
+		t.Fatalf("summary: %q", errOut)
 	}
-	if len(f.find("DELETE", "/sandboxes/"+boxID)) != 1 {
-		t.Fatalf("--rm must destroy the sandbox: %+v", f.calls)
+	b := f.find("POST", "/sandboxes")[0].Body
+	if b["size"] != "small" || b["env"].(map[string]any)["A"] != "1" {
+		t.Fatalf("create body = %v", b)
+	}
+	if !strings.Contains(f.find("POST", boxPath+"/exec/stream")[0].Body["command"].(string), "python") {
+		t.Fatal("the command was not run")
+	}
+	if len(f.find("DELETE", boxPath)) != 1 {
+		t.Fatalf("the sandbox must be deleted: %+v", f.calls)
 	}
 }
 
-func TestRunOneShotWithoutRmKeepsTheSandbox(t *testing.T) {
-	f := fakeRoutes(t, map[string]any{
-		"POST /sandboxes/run": resp{201, `{"data":{"id":"` + boxID + `","name":"oneshot-1"},"exec":{"stdout":"ok\n","exit_code":0}}`},
-	})
-	_, errOut, err := runSplit(t, "run", "--", "true")
-	if err != nil || !strings.Contains(errOut, "kept sandbox oneshot-1") {
+func TestRunOneShotKeepKeepsTheSandbox(t *testing.T) {
+	f := oneShotAPI(t, "event: exit\ndata: {\"exit_code\":0}\n\n")
+	_, errOut, err := runSplit(t, "run", "--keep", "--", "true")
+	if err != nil || !strings.Contains(errOut, "sandbox kept") {
 		t.Fatalf("err=%v %q", err, errOut)
 	}
-	if f.find("POST", "/sandboxes/run")[0].Body["persistent"] != true || len(f.find("DELETE", "/sandboxes/"+boxID)) != 0 {
-		t.Fatalf("calls: %+v", f.calls)
+	if len(f.find("DELETE", boxPath)) != 0 {
+		t.Fatal("--keep deleted the sandbox")
+	}
+}
+
+func TestRunOneShotJSONEndsWithASummary(t *testing.T) {
+	oneShotAPI(t, "event: stdout\ndata: {\"line\":\"hi\\n\"}\n\nevent: exit\ndata: {\"exit_code\":0}\n\n")
+	out, _, err := runSplit(t, "run", "--json", "--", "echo", "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	var last map[string]any
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &last); err != nil {
+		t.Fatalf("last line %q: %v", lines[len(lines)-1], err)
+	}
+	if last["event"] != "summary" || last["deleted"] != true || last["cost_usd"] != 0.015 || last["exit_code"] != float64(0) {
+		t.Fatalf("summary = %v", last)
+	}
+}
+
+func TestRunOneShotPushRunsInThePushedDirectory(t *testing.T) {
+	f := oneShotAPI(t, "event: exit\ndata: {\"exit_code\":0}\n\n")
+	dir := filepath.Join(t.TempDir(), "proj")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.py"), []byte("print(1)"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runSplit(t, "run", "--push", dir, "--", "python", "main.py"); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.find("POST", boxPath+"/files/write"); len(w) != 1 || w[0].Body["path"] != "/workspace/proj/main.py" {
+		t.Fatalf("writes = %+v", w)
+	}
+	if cwd := f.find("POST", boxPath+"/exec/stream")[0].Body["cwd"]; cwd != "/workspace/proj" {
+		t.Fatalf("cwd = %v", cwd)
 	}
 }
 

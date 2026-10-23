@@ -311,7 +311,7 @@ func TestServicePromoteIsRollback(t *testing.T) {
 
 func TestServiceLogsPrintsReleaseEvents(t *testing.T) {
 	servicesAPI(t)
-	out, err := run(t, "service", "logs", "cliniciq", "API")
+	out, err := run(t, "service", "logs", "cliniciq", "API", "--events")
 	if err != nil {
 		t.Fatalf("service logs: %v", err)
 	}
@@ -320,11 +320,11 @@ func TestServiceLogsPrintsReleaseEvents(t *testing.T) {
 	}
 }
 
-func TestServiceLogsFollowIsRefused(t *testing.T) {
+func TestServiceLogsFollowOfEventsIsRefused(t *testing.T) {
 	servicesAPI(t)
-	_, err := run(t, "service", "logs", "cliniciq", "API", "--follow")
-	if err == nil || !strings.Contains(err.Error(), "--build") {
-		t.Fatalf("want a refusal that --follow needs --build, got: %v", err)
+	_, err := run(t, "service", "logs", "cliniciq", "API", "--events", "--follow")
+	if err == nil || !strings.Contains(err.Error(), "finished history") {
+		t.Fatalf("want a refusal that events cannot be followed, got: %v", err)
 	}
 }
 

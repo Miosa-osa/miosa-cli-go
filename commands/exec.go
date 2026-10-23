@@ -19,17 +19,26 @@ import (
 
 func newExecCmd() *cobra.Command {
 	var cwd string
+	var ef execFlags
 	cmd := &cobra.Command{
 		Use:   "exec [name|id] -- <cmd> [args...]",
-		Short: "Execute a command in a sandbox",
+		Short: "Execute a command in a sandbox, in the foreground or the background",
 		Long: `Run a command inside a sandbox and print its output. miosa exits with the
 remote command's exit code, so it drops straight into scripts and CI.
 
 The -- separator is required before the command and its arguments.
 
 --cwd sets the working directory, relative to the sandbox home directory (or
-absolute). The global --timeout also bounds the command: seconds, 1-300, default
-30 when not given, 0 means the 300 second maximum.
+absolute). The global --timeout bounds the command in seconds: up to 300 the
+command runs as one request (default 30); 0 (no limit, up to a day) or more than
+300 streams the output live as the command writes it, and so does --stream.
+A command that runs out of time exits 124. Ctrl-C stops following.
+
+--detach starts the command in the background and prints its id; it keeps
+running after the CLI exits and its output is kept. Then:
+  --attach <id>   print its output as it grows, exit with its code when it ends
+  --status <id>   show whether it is running and its exit code
+  --kill <id>     stop it
 
 A sandbox that is still starting refuses commands; exec retries with backoff
 until it is ready (up to 90 seconds).
@@ -38,14 +47,98 @@ Examples:
   miosa exec my-box -- echo hello
   miosa exec -- ls -la /home      # uses current sandbox
   miosa exec my-box --cwd my-repo --timeout 120 -- npm run build
+  miosa exec my-box --timeout 0 -- ./long-test-suite.sh
+  miosa exec my-box --detach -- npm run train
+  miosa exec my-box --attach <id>
   miosa exec my-box -- bash -c 'for i in 1 2 3; do echo $i; done'`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if ef.attach != "" || ef.status != "" || ef.kill != "" {
+				return runExecProcessOp(cmd, args, ef)
+			}
+			if ef.detach || ef.wantsStream(globalFlags.Timeout, timeoutGiven(cmd)) {
+				return runExecLong(cmd, args, cwd, ef)
+			}
 			return runExec(cmd, args, cwd, commandTimeout(cmd))
 		},
 	}
 	cmd.Flags().StringVar(&cwd, "cwd", "", "Working directory, relative to the sandbox home directory")
+	cmd.Flags().BoolVar(&ef.stream, "stream", false, "Print the output live as the command writes it")
+	cmd.Flags().BoolVar(&ef.detach, "detach", false, "Run in the background and print the command's id")
+	cmd.Flags().StringVar(&ef.attach, "attach", "", "Follow a background command's output and exit with its code")
+	cmd.Flags().StringVar(&ef.status, "status", "", "Show a background command's state")
+	cmd.Flags().StringVar(&ef.kill, "kill", "", "Stop a background command")
+	cmd.MarkFlagsMutuallyExclusive("detach", "stream", "attach", "status", "kill")
 	return cmd
+}
+
+func timeoutGiven(cmd *cobra.Command) bool {
+	f := cmd.Flags().Lookup("timeout")
+	return f != nil && f.Changed
+}
+
+// runExecLong runs a command on the streaming route or in the background.
+func runExecLong(cmd *cobra.Command, args []string, cwd string, ef execFlags) error {
+	nameOrID, command, err := parseExecArgs(args, cmd.ArgsLenAtDash())
+	if err != nil {
+		return die(err)
+	}
+	if command == "" {
+		return usagef("no command specified - use: miosa exec [name|id] -- <cmd> [args...]")
+	}
+	if timeoutGiven(cmd) && (globalFlags.Timeout < 0 || globalFlags.Timeout > execStreamMaxSeconds) {
+		return usagef("--timeout must be 0 (no limit) to %d seconds", execStreamMaxSeconds)
+	}
+	c, cfg, err := buildClientTimeout(0)
+	if err != nil {
+		return die(err)
+	}
+	ref, err := requireSandbox(nameOrID, cfg.CurrentSandbox)
+	if err != nil {
+		return usagef("%v", err)
+	}
+	id, err := c.API.ResolveSandbox(cmd.Context(), ref)
+	if err != nil {
+		return die(err)
+	}
+	if ef.detach {
+		return detachExec(cmd, c.API, ref, id, command, cwd)
+	}
+	timeout := 0
+	if timeoutGiven(cmd) {
+		timeout = globalFlags.Timeout
+	}
+	return streamExec(cmd, c.API, id, command, cwd, timeout)
+}
+
+// runExecProcessOp is --attach, --status or --kill on a background command.
+func runExecProcessOp(cmd *cobra.Command, args []string, ef execFlags) error {
+	if len(args) > 1 || (cmd.ArgsLenAtDash() >= 0 && len(args) > cmd.ArgsLenAtDash()) {
+		return usagef("--attach, --status and --kill take a command id, not a command")
+	}
+	ref := ""
+	if len(args) == 1 {
+		ref = args[0]
+	}
+	c, cfg, err := buildClientTimeout(0)
+	if err != nil {
+		return die(err)
+	}
+	ref, err = requireSandbox(ref, cfg.CurrentSandbox)
+	if err != nil {
+		return usagef("%v", err)
+	}
+	id, err := c.API.ResolveSandbox(cmd.Context(), ref)
+	if err != nil {
+		return die(err)
+	}
+	switch {
+	case ef.attach != "":
+		return attachExec(cmd, c.API, id, ef.attach)
+	case ef.status != "":
+		return statusExec(cmd, c.API, id, ef.status)
+	}
+	return killExec(cmd, c.API, id, ef.kill)
 }
 
 // commandTimeout reads the global --timeout as the command's synchronous

@@ -21,6 +21,10 @@ type createOptions struct {
 	meta        []string
 	tag         []string
 	expires     string
+	vars        []string
+	count       int
+	concurrency int
+	from        string
 }
 
 // sandboxSizes are the sizes the platform offers (see 'miosa catalog').
@@ -56,6 +60,9 @@ Examples:
   miosa create my-box --no-env
   miosa create my-box --setup-file ./setup.sh
   miosa create my-box --wait --ttl 2h --meta team=infra
+  miosa create my-box -e API_URL=https://api.example.com -e DEBUG=1
+  miosa create ci --count 20 --wait
+  miosa create --from web-stack --wait     # from a named snapshot
 
 Creation returns while the sandbox boots. --wait blocks until it accepts
 commands, so 'miosa create x --wait && miosa exec x -- ...' never races.
@@ -63,7 +70,14 @@ commands, so 'miosa create x --wait && miosa exec x -- ...' never races.
 --env picks the environment (repositories, secrets, connections) the sandbox
 starts from; without it your default environment is used. --no-env passes
 nothing of yours. --setup-file runs a script (UTF-8, up to 64KB) in the
-background once the sandbox is ready; watch it with 'miosa info'.`,
+background once the sandbox is ready; watch it with 'miosa info'.
+
+-e KEY=VALUE sets a variable in this sandbox only, on top of the environment's.
+
+--count N creates N identical sandboxes in one batch, their names starting with
+<name> (--concurrency caps how many start at once); with --wait it blocks until all
+have settled and exits non-zero if any failed. 'miosa batch' manages the batch.
+--env, --no-env, --runtime, --meta and --expires apply to one sandbox only.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCreate(cmd, args, size, template, workspace, runtime, envFlags, opts)
@@ -82,6 +96,10 @@ background once the sandbox is ready; watch it with 'miosa info'.`,
 	cmd.Flags().StringVar(&template, "template", "miosa-sandbox", "Sandbox template, for example miosa-sandbox, nextjs, static-html, or fastapi-auth")
 	cmd.Flags().StringVar(&workspace, "workspace", "", "Workspace slug to assign the sandbox to (default: the profile's default workspace)")
 	cmd.Flags().StringVar(&runtime, "runtime", "", "Sandbox runtime: firecracker, soma or auto")
+	cmd.Flags().StringArrayVarP(&opts.vars, "var", "e", nil, "Variable for this sandbox only, KEY=VALUE (repeatable)")
+	cmd.Flags().IntVar(&opts.count, "count", 0, "Create this many identical sandboxes in one batch")
+	cmd.Flags().StringVar(&opts.from, "from", "", "Start from a snapshot: its id, or the name of a named snapshot")
+	cmd.Flags().IntVar(&opts.concurrency, "concurrency", 0, "With --count: how many to create at once (default: the server's)")
 	envFlags.bind(cmd, "sandbox")
 
 	return cmd
@@ -89,6 +107,9 @@ background once the sandbox is ready; watch it with 'miosa info'.`,
 
 func runCreate(cmd *cobra.Command, args []string, size, template, workspace, runtime string, envFlags machineEnvFlags, opts createOptions) error {
 	p := printerFor(cmd)
+	if opts.from != "" {
+		return createFromSnapshot(cmd, opts)
+	}
 
 	envName, noEnv, setup, err := envFlags.resolve()
 	if err != nil {
@@ -183,6 +204,13 @@ func runCreate(cmd *cobra.Command, args []string, size, template, workspace, run
 		input.IdleTimeoutSec = n
 	}
 	input.AlwaysOn = opts.alwaysOn
+	if len(opts.vars) > 0 {
+		vars, err := parseSandboxVars(opts.vars)
+		if err != nil {
+			return usagef("%v", err)
+		}
+		input.Env = vars
+	}
 	if len(opts.meta) > 0 {
 		input.Metadata = map[string]string{}
 		for _, kv := range opts.meta {
@@ -197,26 +225,38 @@ func runCreate(cmd *cobra.Command, args []string, size, template, workspace, run
 	if opts.wait {
 		input.WaitSec = createWaitSeconds(opts.waitTimeout)
 	}
+	if opts.count > 0 || cmd.Flags().Changed("concurrency") {
+		return runCreateBatch(cmd, c.API, input, opts, envName, noEnv)
+	}
+
 	if !isJSON() {
 		p.Line("Creating sandbox…")
 	}
 
+	// With --wait the create request itself waits on the server, then the
+	// CLI polls; the progress line covers both.
+	var progress *waitProgress
+	if opts.wait {
+		progress = startWaitProgress(cmd, "the sandbox to be ready")
+		progress.Set("creating")
+	}
 	sandbox, err := c.SDK.Sandboxes.Create(cmd.Context(), input)
 	if err != nil {
+		progress.Stop()
 		return die(err)
 	}
 
 	if opts.wait && !(sandbox.Ready && sandbox.State == "running") {
-		if !isJSON() {
-			p.Line("Waiting for %s to be ready...", orDefault(sandbox.Name, sandbox.ID))
-		}
-		st, err := waitSandbox(cmd.Context(), c.API, sandbox.ID, "ready", opts.waitTimeout, nil)
+		progress.Set(string(sandbox.State))
+		st, err := waitSandbox(cmd.Context(), c.API, sandbox.ID, "ready", opts.waitTimeout, progress.Set)
+		progress.Stop()
 		if err != nil {
 			return die(err)
 		}
 		sandbox.State = miosa.ComputerStatus(st.State)
 		sandbox.Ready = st.Ready
 	}
+	progress.Stop()
 
 	if isJSON() {
 		return p.JSON(sandbox.SandboxData)

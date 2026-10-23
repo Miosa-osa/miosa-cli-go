@@ -2,6 +2,11 @@ package commands
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
 
 	"net/url"
 	"sort"
@@ -11,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Miosa-osa/miosa-cli-go/internal/api"
+	"github.com/Miosa-osa/miosa-cli-go/internal/config"
 )
 
 // consolePages maps a resource kind to its console path. {id} is replaced; a
@@ -110,6 +116,9 @@ A sandbox may be given by name.
 
 // cachedSandboxNames returns sandbox names (and ids) for shell completion.
 func cachedSandboxNames(ctx context.Context) []string {
+	if names, ok := readCompletionCache(); ok {
+		return names
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -131,13 +140,69 @@ func cachedSandboxNames(ctx context.Context) []string {
 	if err := c.API.Get(ctx, "/sandboxes", q, &out); err != nil {
 		return nil
 	}
-	names := []string{"current"}
+	// Both a sandbox's name and its id complete; "current" is the one set with
+	// 'miosa use' and "self" the sandbox the CLI runs inside.
+	names := []string{"current", "self"}
 	for _, s := range out.Data {
 		if s.Name != "" {
 			names = append(names, s.Name)
-		} else {
+		}
+		if s.ID != "" {
 			names = append(names, s.ID)
 		}
 	}
+	writeCompletionCache(names)
 	return names
+}
+
+// completionCacheTTL keeps a shell's repeated TAB presses from each calling
+// the API, while a new sandbox shows up within seconds.
+const completionCacheTTL = 15 * time.Second
+
+func completionCachePath() string {
+	dir, err := config.Dir()
+	if err != nil {
+		return ""
+	}
+	// One cache per sign-in: the profile, the API and the key's prefix.
+	key := strings.Join([]string{config.SelectedProfile(), os.Getenv("MIOSA_PROFILE"), globalFlags.APIURL, os.Getenv("MIOSA_BASE_URL"), keyPrefix(os.Getenv("MIOSA_API_KEY"))}, "|")
+	return filepath.Join(dir, "completion-cache-"+shortHash(key)+".json")
+}
+
+func readCompletionCache() ([]string, bool) {
+	p := completionCachePath()
+	if p == "" {
+		return nil, false
+	}
+	st, err := os.Stat(p)
+	if err != nil || time.Since(st.ModTime()) > completionCacheTTL {
+		return nil, false
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return nil, false
+	}
+	var names []string
+	if json.Unmarshal(data, &names) != nil {
+		return nil, false
+	}
+	return names, true
+}
+
+func writeCompletionCache(names []string) {
+	p := completionCachePath()
+	if p == "" {
+		return
+	}
+	if data, err := json.Marshal(names); err == nil {
+		_ = os.MkdirAll(filepath.Dir(p), 0o700)
+		_ = os.WriteFile(p, data, 0o600)
+	}
+}
+
+func keyPrefix(k string) string { return k[:min(len(k), 12)] }
+
+func shortHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:6])
 }

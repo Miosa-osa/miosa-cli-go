@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -275,19 +274,11 @@ func linkedServiceLogs(cmd *cobra.Command, c *api.Client, link linkFile, build, 
 	}
 
 	p := printerFor(cmd)
-	var out struct {
-		Data struct {
-			Lines []string `json:"lines"`
-		} `json:"data"`
-	}
-	q := url.Values{"tail": {fmt.Sprint(lines)}}
-	err := c.Get(cmd.Context(), servicePath(link.ProjectID, link.ServiceID)+"/logs", q, &out)
+	err := printServiceRuntimeLogs(cmd, c, link.ProjectID, link.ServiceID, "", lines, follow)
 	if err == nil {
-		for _, line := range out.Data.Lines {
-			p.Line("%s", line)
-		}
 		return nil
 	}
+	// An older server has no runtime log route: show the release's events.
 	var ae *api.Error
 	if !errors.As(err, &ae) || ae.Status != 404 {
 		return die(err)

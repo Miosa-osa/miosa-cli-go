@@ -9,13 +9,14 @@ Regenerate with `make docs`.
 - `--api-url string` - API base URL (overrides MIOSA_BASE_URL and config).
 - `--bill-to string` - Organization a new machine bills: id, slug or name (env MIOSA_BILL_TO).
 - `--json` - Print machine-readable JSON (same as --output json).
+- `--no-update` - Skip the automatic update for this run, when it is on (env: MIOSA_NO_UPDATE=1).
 - `--no-update-notice` - Silence the new-version notice (env: MIOSA_NO_UPDATE_NOTICE=1).
 - `--org string` - Organization to work in: id, slug or name; refused if this key does not act in it (env MIOSA_ORG).
 - `-o, --output string` - Output format: text or json. (default `text`)
 - `--profile string` - Config profile to use (env: MIOSA_PROFILE).
 - `-q, --quiet` - Suppress informational output.
 - `--retries int` - Retries on 429 and transient 5xx errors (default 3, env: MIOSA_RETRIES). (default `-1`)
-- `--timeout int` - Request timeout in seconds (0 = no timeout); for exec and ssh also the command timeout, 1-300. (default `60`)
+- `--timeout int` - Request timeout in seconds (0 = no timeout); for exec also the command timeout (over 300 or 0 streams the output), for ssh 1-300. (default `60`)
 
 ## Commands
 
@@ -36,6 +37,7 @@ Regenerate with `make docs`.
 - [`miosa config`](#miosa-config) - Read and change CLI settings
 - [`miosa connections`](#miosa-connections) - Model providers, apps and tool servers your agents use
 - [`miosa console`](#miosa-console) - Open an interactive shell in a sandbox
+- [`miosa conversations`](#miosa-conversations) - List agent chats: last activity, prompts, running, harness/model, last prompt
 - [`miosa create`](#miosa-create) - Create a new sandbox
 - [`miosa daemon`](#miosa-daemon) - Run named long-lived processes (daemons) in a sandbox
 - [`miosa db`](#miosa-db) - Managed databases
@@ -51,10 +53,11 @@ Regenerate with `make docs`.
 - [`miosa engine`](#miosa-engine) - Operate an Optimal Engine: managed Engines on MIOSA, and two-Engine sync
 - [`miosa env`](#miosa-env) - Manage environments (what new machines start with)
 - [`miosa environment`](#miosa-environment) - List, create, fork and remove a project's Deploy targets
-- [`miosa events`](#miosa-events) - Stream a sandbox's lifecycle events
-- [`miosa exec`](#miosa-exec) - Execute a command in a sandbox
+- [`miosa events`](#miosa-events) - Stream a sandbox's lifecycle events, or its agent's chat events
+- [`miosa exec`](#miosa-exec) - Execute a command in a sandbox, in the foreground or the background
 - [`miosa export`](#miosa-export) - Export everything an organization (or one workspace) owns
 - [`miosa extend`](#miosa-extend) - Replace a sandbox's time to live
+- [`miosa feedback`](#miosa-feedback) - Send feedback to the MIOSA team
 - [`miosa files`](#miosa-files) - Copy, list, read, move and delete files in a sandbox
 - [`miosa forge`](#miosa-forge) - Work with MIOSA Forge repositories (beta)
 - [`miosa fork`](#miosa-fork) - Fork a running sandbox into a copy
@@ -63,6 +66,7 @@ Regenerate with `make docs`.
 - [`miosa host`](#miosa-host) - Your own machines enrolled in your organization (bring your own host)
 - [`miosa import`](#miosa-import) - Load a CSV into a managed database, or a Notion export into an Engine
 - [`miosa info`](#miosa-info) - Show a machine's state, environment and setup status
+- [`miosa interrupt`](#miosa-interrupt) - Stop the agent running in a sandbox, or one chat's running turn
 - [`miosa limits`](#miosa-limits) - Limits of the organization a new machine would bill
 - [`miosa link`](#miosa-link) - Attach this directory to a project, Deploy target and service
 - [`miosa list`](#miosa-list) - List sandboxes
@@ -89,21 +93,25 @@ Regenerate with `make docs`.
 - [`miosa protection`](#miosa-protection) - Put a password in front of a service
 - [`miosa proxy`](#miosa-proxy) - Forward local ports to sandbox ports
 - [`miosa ps`](#miosa-ps) - List background processes (same as 'process list')
+- [`miosa push`](#miosa-push) - Copy a directory into a sandbox, leaving out what .gitignore names
 - [`miosa recover`](#miosa-recover) - Recover a sandbox from its disk into a NEW sandbox
 - [`miosa redeploy`](#miosa-redeploy) - Build and release the linked service again
 - [`miosa regions`](#miosa-regions) - List regions and whether they have capacity
+- [`miosa rename`](#miosa-rename) - Rename a sandbox
 - [`miosa restore`](#miosa-restore) - Restore a sandbox from a checkpoint
-- [`miosa resume`](#miosa-resume) - Resume a paused sandbox
+- [`miosa resume`](#miosa-resume) - Resume a paused or stopped sandbox
 - [`miosa rollback`](#miosa-rollback) - Serve the linked service's previous release
 - [`miosa run`](#miosa-run) - List, follow and stop agent runs
 - [`miosa runtimes`](#miosa-runtimes) - Show the sandbox runtimes the platform offers
 - [`miosa sandbox`](#miosa-sandbox) - Inspect and resize a sandbox's vCPU and memory
 - [`miosa schedule`](#miosa-schedule) - Scheduled jobs
+- [`miosa scp`](#miosa-scp) - Copy files to or from a sandbox (same as 'files cp'; no SSH key needed)
 - [`miosa secret`](#miosa-secret) - Organization and workspace secrets
 - [`miosa service`](#miosa-service) - Create and operate web services, workers, private services and static sites
 - [`miosa service-account`](#miosa-service-account) - Non-human accounts that own API keys for pipelines and programs
 - [`miosa snapshot`](#miosa-snapshot) - Browse, name, fork and delete snapshots of sandboxes and computers
 - [`miosa ssh`](#miosa-ssh) - Open an SSH session in a sandbox, or run a command over it
+- [`miosa steer`](#miosa-steer) - Send the agent running in a sandbox a new message without stopping it
 - [`miosa stop`](#miosa-stop) - Stop a sandbox, keeping its disk
 - [`miosa storage`](#miosa-storage) - Object storage buckets
 - [`miosa tag`](#miosa-tag) - Show, add or remove sandbox tags
@@ -997,6 +1005,18 @@ Flags:
 
 - `--name string` - New name.
 - `--rate-limit int` - Requests per minute.
+
+#### `miosa api-key usage`
+
+How much a key is used: requests, last use and from where.
+
+```
+miosa api-key usage <id>
+```
+
+Shows how many requests the key has made, when it was last used and from which
+address, how old it is and when it expires. 'miosa api-key events <id>' lists
+what it did.
 
 ### `miosa audit`
 
@@ -2207,7 +2227,7 @@ miosa config
 ```
 
 Settings live in ~/.miosa/config.toml.
-Keys: api_url, current_sandbox, default_workspace.
+Keys: api_url, auto_update, current_sandbox, default_workspace.
 The API key is never printed here; sign in with 'miosa login'.
 
 #### `miosa config get`
@@ -2764,6 +2784,26 @@ Flags:
 - `--cwd string` - Absolute directory to start in.
 - `--shell string` - Shell to start (a single executable, default: the sandbox's login shell).
 
+### `miosa conversations`
+
+List agent chats: last activity, prompts, running, harness/model, last prompt.
+
+```
+miosa conversations [sandbox] [flags]
+```
+
+Lists agent chats, newest first: when each was last active, how many prompts
+it has, whether a turn is running, its harness and model, and its last prompt.
+Without a sandbox every recent chat is listed.
+Continue one with
+'miosa prompt --chat <id> "..."' and stop its turn with 'miosa interrupt --convo <id>'.
+
+Aliases: `convos`.
+
+Flags:
+
+- `-n, --limit int` - How many recent runs to group, 1-100. (default `100`)
+
 ### `miosa create`
 
 Create a new sandbox.
@@ -2786,6 +2826,9 @@ Examples:
   miosa create my-box --no-env
   miosa create my-box --setup-file ./setup.sh
   miosa create my-box --wait --ttl 2h --meta team=infra
+  miosa create my-box -e API_URL=https://api.example.com -e DEBUG=1
+  miosa create ci --count 20 --wait
+  miosa create --from web-stack --wait     # from a named snapshot
 
 ```
 Creation returns while the sandbox boots. --wait blocks until it accepts
@@ -2796,11 +2839,21 @@ starts from; without it your default environment is used. --no-env passes
 nothing of yours. --setup-file runs a script (UTF-8, up to 64KB) in the
 background once the sandbox is ready; watch it with 'miosa info'.
 
+-e KEY=VALUE sets a variable in this sandbox only, on top of the environment's.
+
+--count N creates N identical sandboxes in one batch, their names starting with
+<name> (--concurrency caps how many start at once); with --wait it blocks until all
+have settled and exits non-zero if any failed. 'miosa batch' manages the batch.
+--env, --no-env, --runtime, --meta and --expires apply to one sandbox only.
+
 Flags:
 
 - `--always-on` - Keep the sandbox running: no idle pause, and the platform resumes it after a host restart.
+- `--concurrency int` - With --count: how many to create at once (default: the server's).
+- `--count int` - Create this many identical sandboxes in one batch.
 - `--env string` - Environment the sandbox starts from (default: your default environment).
 - `--expires string` - Governance deadline: 24h, 7d or an RFC 3339 time (purpose=test defaults to 24h).
+- `--from string` - Start from a snapshot: its id, or the name of a named snapshot.
 - `--idle-timeout string` - Pause after this much inactivity: seconds, 15m, 1h.
 - `--meta stringArray` - Metadata, KEY=VALUE (repeatable).
 - `--no-env` - Pass nothing of yours to the sandbox (safe to hand to third parties).
@@ -2810,6 +2863,7 @@ Flags:
 - `--tag stringArray` - Governance tag, KEY=VALUE (repeatable): owner, entity, purpose, project.
 - `--template string` - Sandbox template, for example miosa-sandbox, nextjs, static-html, or fastapi-auth. (default `miosa-sandbox`)
 - `--ttl string` - Time to live: seconds, 90m, 2h or 2d (default: the plan's).
+- `-e, --var stringArray` - Variable for this sandbox only, KEY=VALUE (repeatable).
 - `--wait` - Wait until the sandbox is ready for commands.
 - `--wait-timeout duration` - How long --wait may take. (default `3m0s`)
 - `--workspace string` - Workspace slug to assign the sandbox to (default: the profile's default workspace).
@@ -2957,11 +3011,15 @@ Create a managed database.
 ```
   miosa db create app-db --engine postgres --version 16 --size small
   miosa db create app-db --extensions vector,pg_trgm,pgcrypto --workspace tz
+  miosa db create app-db --project shop
 
 ```
 --extensions applies to PostgreSQL only; allowed: vector, pg_trgm, pgcrypto, uuid-ossp,
 pg_stat_statements, citext, hstore, btree_gin, btree_gist. --version is a version with an
 image (postgres 16, mysql 8, redis 7, mongodb 7). --size is one of tiny, xs, small, medium, large.
+
+--project adds the database to a project, where its services can reference it; it is
+created in the project's workspace unless --workspace says otherwise.
 
 --engine optimal creates an Optimal Engine; 'miosa engine create' is the same call with
 the Engine-specific flags and an idempotent name.
@@ -2971,6 +3029,7 @@ Flags:
 - `--class string` - Data classification: public, internal, confidential or restricted (public|internal|confidential|restricted).
 - `--engine string` - Engine: postgres, mysql, redis, mongodb, qdrant or optimal (postgres|postgresql|mysql|redis|mongodb|qdrant|optimal). (default `postgres`)
 - `--extensions stringArray` - PostgreSQL extensions to enable at create, comma separated.
+- `--project string` - Add it to this project (name, slug or id), in the project's workspace.
 - `--region string` - Pin to a region.
 - `--size string` - Size: tiny, xs, small, medium or large (tiny|xs|small|medium|large).
 - `--version string` - Engine version (default: the engine's current one).
@@ -3011,7 +3070,15 @@ miosa db logs <database> [flags]
 
 Flags:
 
+- `-f, --follow` - Keep streaming new lines until Ctrl-C.
 - `-n, --tail int` - How many lines.
+
+Examples:
+
+```
+miosa db logs my-db -n 200
+  miosa db logs my-db --follow
+```
 
 #### `miosa db public`
 
@@ -3601,8 +3668,11 @@ miosa deploy logs <deployment> [flags]
 Prints the most recent lines the deployment's process wrote.
 Static sites (uploaded files) run no process, so they have no runtime log.
 
+--follow then streams new lines until Ctrl-C: a build in progress is followed until it finishes, a running app's stdout and stderr until you stop.
+
 Flags:
 
+- `-f, --follow` - Keep streaming new lines until Ctrl-C.
 - `-n, --lines int` - Number of lines.
 
 Examples:
@@ -3610,6 +3680,7 @@ Examples:
 ```
 miosa deploy logs my-app
   miosa deploy logs my-app -n 200
+  miosa deploy logs my-app --follow
 ```
 
 #### `miosa deploy observe`
@@ -5566,24 +5637,36 @@ Flags:
 
 ### `miosa events`
 
-Stream a sandbox's lifecycle events.
+Stream a sandbox's lifecycle events, or its agent's chat events.
 
 ```
-miosa events [sandbox]
+miosa events [sandbox] [flags]
 ```
 
 Stream events (state changes, readiness, previews) as they happen.
 Ctrl-C stops.
 With --json each event is one JSON object per line.
 
+--agent shows the agent's events instead (prompts, tool calls, answers) of the
+newest run in the sandbox; --convo <chat-id> those of one chat. -f keeps
+following until the run ends.
+
 ```
   miosa events my-box
   miosa events my-box --json | jq -c 'select(.event == "state")'
+  miosa events my-box --agent -f
+  miosa events --convo 3f0c...
 ```
+
+Flags:
+
+- `--agent` - Show the agent's chat events instead of the sandbox's lifecycle.
+- `--convo string` - Show one chat's agent events (a chat id).
+- `-f, --follow` - With --agent or --convo: keep following until the run ends.
 
 ### `miosa exec`
 
-Execute a command in a sandbox.
+Execute a command in a sandbox, in the foreground or the background.
 
 ```
 miosa exec [name|id] -- <cmd> [args...] [flags]
@@ -5596,9 +5679,21 @@ The -- separator is required before the command and its arguments.
 
 --cwd sets the working directory, relative to the sandbox home directory (or
 absolute).
-The global --timeout also bounds the command: seconds, 1-300, default
-30 when not given, 0 means the 300 second maximum.
+The global --timeout bounds the command in seconds: up to 300 the
+command runs as one request (default 30); 0 (no limit, up to a day) or more than
+300 streams the output live as the command writes it, and so does --stream.
+A command that runs out of time exits 124.
+Ctrl-C stops following.
 
+--detach starts the command in the background and prints its id; it keeps
+running after the CLI exits and its output is kept.
+Then:
+```
+  --attach <id>   print its output as it grows, exit with its code when it ends
+  --status <id>   show whether it is running and its exit code
+  --kill <id>     stop it
+
+```
 A sandbox that is still starting refuses commands; exec retries with backoff
 until it is ready (up to 90 seconds).
 
@@ -5607,12 +5702,20 @@ Examples:
   miosa exec my-box -- echo hello
   miosa exec -- ls -la /home      # uses current sandbox
   miosa exec my-box --cwd my-repo --timeout 120 -- npm run build
+  miosa exec my-box --timeout 0 -- ./long-test-suite.sh
+  miosa exec my-box --detach -- npm run train
+  miosa exec my-box --attach <id>
   miosa exec my-box -- bash -c 'for i in 1 2 3; do echo $i; done'
 ```
 
 Flags:
 
+- `--attach string` - Follow a background command's output and exit with its code.
 - `--cwd string` - Working directory, relative to the sandbox home directory.
+- `--detach` - Run in the background and print the command's id.
+- `--kill string` - Stop a background command.
+- `--status string` - Show a background command's state.
+- `--stream` - Print the output live as the command writes it.
 
 ### `miosa export`
 
@@ -5656,12 +5759,42 @@ See the time left with 'miosa usage'.
 
 ```
   miosa extend my-box --for 2h
-  miosa extend --for 1d
+  miosa extend --hours 6
+  miosa extend my-box --no-auto-stop
 ```
 
 Flags:
 
 - `--for string` - New time to live: seconds, 90m, 2h or 2d.
+- `--hours int` - New time to live in hours (same as --for <n>h).
+- `--no-auto-stop` - Keep it running: no time limit or idle pause (always on).
+
+### `miosa feedback`
+
+Send feedback to the MIOSA team.
+
+```
+miosa feedback <message> [flags]
+```
+
+Send a message straight to the MIOSA team: a bug, a missing feature, or anything
+that got in your way.
+Every message is emailed to the team and read by a person,
+and replies come to your account's email address.
+
+The CLI version and your operating system are attached so the team can
+reproduce what you saw.
+Pass - to read the message from standard input.
+
+```
+  miosa feedback "miosa deploy hangs after the build finishes"
+  miosa feedback --type feature "let me pick the region on create"
+  miosa logs my-box | miosa feedback --type bug -
+```
+
+Flags:
+
+- `-t, --type string` - Kind of feedback: bug, feature, improvement or general. (default `general`)
 
 ### `miosa files`
 
@@ -7699,10 +7832,19 @@ Fork a running sandbox into a copy.
 miosa fork [sandbox] [flags]
 ```
 
+Fork a running sandbox: the copy starts from its disk as it is now. --wait blocks
+until the fork accepts commands.
+
+```
+  miosa fork my-box --name my-box-try --ttl 2h --wait
+```
+
 Flags:
 
+- `--name string` - Name of the fork (default: derived from the source's).
 - `--template string` - Template for the fork.
 - `--ttl string` - Lifetime of the fork: seconds, 90m, 2h or 2d.
+- `--wait` - Wait until the fork is ready for commands.
 
 ### `miosa function`
 
@@ -9521,6 +9663,26 @@ Example:
 
 Aliases: `status`.
 
+### `miosa interrupt`
+
+Stop the agent running in a sandbox, or one chat's running turn.
+
+```
+miosa interrupt [sandbox] [flags]
+```
+
+Stops the agent run in a sandbox (default: the current one). --convo <chat-id>
+stops the running turn of one chat instead, wherever it runs.
+
+```
+  miosa interrupt my-box
+  miosa interrupt --convo 3f0c...
+```
+
+Flags:
+
+- `--convo string` - Stop this chat's running turn (a chat id).
+
 ### `miosa limits`
 
 Limits of the organization a new machine would bill.
@@ -9637,6 +9799,17 @@ or skip login and export MIOSA_API_KEY.
   miosa login --no-browser          # print the URL instead of opening it
   miosa login --with-key            # paste a key (input hidden)
   miosa login --profile work        # store as a separate profile
+
+```
+For an agent that cannot keep a command waiting, sign-in is two steps: the
+first prints the link and code for a person to approve and returns at once,
+the second waits for the approval and stores the key.
+Running the first again
+shows the same pending link until it expires; --new starts over.
+
+```
+  miosa login --no-wait --json      # {"url": ..., "user_code": ..., "expires_at": ...}
+  miosa login --wait --json         # after the person approved
 ```
 
 Flags:
@@ -9644,8 +9817,11 @@ Flags:
 - `--all-orgs` - Pre-select every organization on the approval page.
 - `--device` - Use the browser flow even when stdin is not a terminal.
 - `--key-stdin` - Read the API key from standard input.
+- `--new` - With --no-wait: start a new sign-in instead of showing the pending one.
 - `--no-browser` - Print the sign-in URL instead of opening a browser.
+- `--no-wait` - Start a browser sign-in, print its link and code, and return (finish with --wait).
 - `--org stringArray` - Pre-select this organization on the approval page (repeatable).
+- `--wait` - Finish the sign-in that --no-wait started: wait for approval, then store the key.
 - `--with-key` - Paste an API key instead of using the browser.
 
 ### `miosa logout`
@@ -11031,6 +11207,88 @@ miosa project
 
 Aliases: `projects`.
 
+#### `miosa project changes`
+
+Staged changes of a Deploy target: list, apply or discard them.
+
+```
+miosa project changes
+```
+
+Changes staged in the console (services created or edited, variables set or
+removed) wait in a set until they are applied together.
+Apply writes all of them or
+none, and by default deploys every service the set touched, once each.
+
+```
+  miosa project changes list shop
+  miosa project changes apply shop
+  miosa project changes apply shop --no-deploy
+  miosa project changes rm shop <change-id>
+  miosa project changes discard shop --yes
+```
+
+##### `miosa project changes apply`
+
+Apply the staged changes (all or none), then deploy what they touched.
+
+```
+miosa project changes apply <project> [flags]
+```
+
+Apply every staged change at once: a change that fails stops the whole set and
+nothing is written.
+Then each service the set touched is deployed once, unless
+--no-deploy.
+A set staged before another apply answers that it is stale; list it,
+review, and apply again.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--no-deploy` - Apply without deploying the services the changes touched.
+
+##### `miosa project changes discard`
+
+Drop every staged change.
+
+```
+miosa project changes discard <project> [flags]
+```
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `-y, --yes` - Do not ask for confirmation.
+
+##### `miosa project changes list`
+
+List the staged changes.
+
+```
+miosa project changes list <project> [flags]
+```
+
+Aliases: `ls`.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
+##### `miosa project changes rm`
+
+Drop one staged change.
+
+```
+miosa project changes rm <project> <change-id> [flags]
+```
+
+Aliases: `unstage`.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+
 #### `miosa project create`
 
 Create a project.
@@ -11287,11 +11545,14 @@ Flags:
 - `--machine string` - Kind of new machine: sandbox or computer.
 - `--max-time int` - Stop the run after this many seconds.
 - `--model string` - Model for the harness (default: the harness default; see 'miosa connections harnesses HARNESS').
+- `--new` - Same as --new-chat.
 - `--new-chat` - Start a chat (a new chat id is generated and printed).
 - `--new-machine` - Provision a machine for this run.
 - `--no-follow` - Print the run id and return without waiting.
 - `--notify-email` - Email you when the run finishes.
 - `--notify-webhook string` - Webhook id to notify when the run finishes.
+- `--reasoning-effort string` - Reasoning effort for this run, as the model takes it (for example low, medium, high); the API names what a model accepts.
+- `--resume string` - Same as --chat: continue this chat.
 - `--reuse string` - New machine lifetime: run (one per run) or chat (one per --chat, files persist).
 - `-s, --sandbox string` - Sandbox to run in (default: the current sandbox).
 - `--size string` - Size of a new machine: micro, tiny, xs, small, quad, medium, large, xl.
@@ -11373,6 +11634,37 @@ List background processes (same as 'process list').
 miosa ps [sandbox]
 ```
 
+### `miosa push`
+
+Copy a directory into a sandbox, leaving out what .gitignore names.
+
+```
+miosa push [sandbox] <dir> [flags]
+```
+
+Copy a local directory into a sandbox, by default to /workspace/<dir name>.
+In a git repository only the files git tracks or does not ignore are copied
+(git ls-files: every .gitignore, .git/info/exclude and the global excludes apply).
+Outside one, the directory's .gitignore is read.
+Either way .git and what
+.miosaignore names are left out; --no-ignore copies everything.
+Patterns follow
+.gitignore: '#' comments, '!' to put a path back, a trailing '/' for directories,
+a leading '/' to anchor at the root, '**/' for any depth.
+
+Without a sandbox the current one is used ('miosa use').
+
+```
+  miosa push ./app
+  miosa push my-box ./app --to /workspace/app
+  miosa push my-box . --no-ignore
+```
+
+Flags:
+
+- `--no-ignore` - Copy everything, ignoring .gitignore, .miosaignore and .git.
+- `--to string` - Where in the sandbox (default: /workspace/<dir name>).
+
 ### `miosa recover`
 
 Recover a sandbox from its disk into a NEW sandbox.
@@ -11413,6 +11705,21 @@ List regions and whether they have capacity.
 miosa regions
 ```
 
+### `miosa rename`
+
+Rename a sandbox.
+
+```
+miosa rename [sandbox] <name>
+```
+
+Give a sandbox a new name.
+Its id does not change.
+
+```
+  miosa rename my-box api-box
+```
+
 ### `miosa restore`
 
 Restore a sandbox from a checkpoint.
@@ -11434,11 +11741,22 @@ Example:
 
 ### `miosa resume`
 
-Resume a paused sandbox.
+Resume a paused or stopped sandbox.
 
 ```
-miosa resume [sandbox]
+miosa resume [sandbox] [flags]
 ```
+
+Resume a sandbox from where it paused or stopped. --wait blocks, with progress,
+until it accepts commands.
+
+```
+  miosa resume my-box --wait
+```
+
+Flags:
+
+- `--wait` - Wait until it is ready for commands.
 
 ### `miosa rollback`
 
@@ -11495,12 +11813,13 @@ Aliases: `runs`.
 
 Flags:
 
-- `--cwd string` - Working directory for the command.
+- `--cwd string` - Working directory for the command (default: the pushed directory).
+- `--keep` - Keep the sandbox after the command (default: delete it).
 - `--meta stringArray` - Metadata KEY=VALUE on the sandbox (repeatable).
 - `--name string` - Name for the sandbox.
-- `--rm` - Destroy the sandbox when the command finishes.
+- `--push string` - Copy this local directory in first, as 'miosa push' does, and run there.
 - `--sandbox` - In a linked directory, use a sandbox instead of running here.
-- `--set stringArray` - Environment variable KEY=VALUE for the command (repeatable).
+- `-e, --set stringArray` - Environment variable KEY=VALUE for the command (repeatable).
 - `--size string` - Sandbox size, as for 'miosa create'.
 - `--template string` - Sandbox template (default miosa-sandbox).
 - `--workspace string` - Workspace slug (default: the profile's default workspace).
@@ -11960,6 +12279,32 @@ Flags:
 
 - `--agent string` - The agent, for a schedule created with --agent.
 
+### `miosa scp`
+
+Copy files to or from a sandbox (same as 'files cp'; no SSH key needed).
+
+```
+miosa scp <src> <dst> [flags]
+```
+
+Copy files between your machine and a sandbox, or between sandboxes.
+Remote paths are <sandbox>:<path>.
+A directory needs -r.
+
+```
+  Local to remote:   miosa files cp ./local.txt my-box:/workspace/local.txt
+  Remote to local:   miosa files cp my-box:/workspace/out.txt ./out.txt
+  Remote to remote:  miosa files cp a:/src.txt b:/dst.txt
+  A directory:       miosa files cp -r ./site my-box:/workspace/
+
+```
+A destination ending in / (or an existing directory) receives the source's name.
+File contents go through the JSON API as base64; the server's upload limit applies.
+
+Flags:
+
+- `-r, --recursive` - Copy directories.
+
 ### `miosa secret`
 
 Organization and workspace secrets.
@@ -12332,29 +12677,49 @@ Flags:
 
 #### `miosa service logs`
 
-Show a release's events, or a build's log.
+Show a service's output, a release's events, or a build's log.
 
 ```
 miosa service logs <project> <service> [flags]
 ```
 
-Show what happened to a release: every state transition, and the reason a release
-failed.
-The newest release is used unless --release names one (a release number or id).
+Show what the service's process writes (stdout and stderr), the tail of each
+replica's log.
+With several replicas each line names its replica; --replica reads
+one. --follow keeps printing new lines until Ctrl-C.
 
-With --build this shows the build log instead: the build the release used, or the
-build named by --build-id. --tail limits the first page, and --follow keeps reading
-until the build finishes.
-A service built from an image has no build log.
+With --events this shows what happened to a release instead: every state
+transition, and the reason a release failed.
+The newest release is used unless
+--release names one (a release number or id).
+
+With --build this shows the build log: the build the release used, or the build
+named by --build-id. --follow keeps reading until the build finishes.
+A service
+built from an image has no build log.
+
+--tail is the number of lines from the end of the log (runtime 1-1000, build
+1-2000).
 
 Flags:
 
-- `--build` - Show the build log instead of release events.
+- `--build` - Show the build log instead of the service's output.
 - `--build-id string` - Build id to read with --build (default: latest).
 - `--deploy-target string` - Deploy target name or id (default: the project's default).
-- `--follow` - With --build: keep reading until the build finishes.
-- `--release string` - Release number or id (default: the newest).
-- `--tail int` - Lines from the end of the build log (1-2000). (default `200`)
+- `--events` - Show a release's events instead of the service's output.
+- `-f, --follow` - Keep printing new lines (with --build: until the build finishes).
+- `--release string` - With --events: release number or id (default: the newest).
+- `--replica string` - Read one replica's log (its id).
+- `--tail int` - Lines from the end of the log (runtime 1-1000, build 1-2000). (default `200`)
+
+Examples:
+
+```
+miosa service logs shop api
+  miosa service logs shop api --follow
+  miosa service logs shop api --events
+  miosa service logs shop api --build --follow
+```
 
 #### `miosa service metrics`
 
@@ -13030,12 +13395,49 @@ Flags:
 - `--snapshot string` - Pin this existing snapshot id instead of a machine.
 - `--wait` - Wait until a new capture is ready. (default `true`)
 
+#### `miosa snapshot share`
+
+Make a read-only link to a snapshot's files (the link is shown once).
+
+```
+miosa snapshot share <snapshot-id> [flags]
+```
+
+Create a link anyone holding it can use to browse and download the snapshot's files,
+read-only, until it expires. --path limits it to one directory.
+
+```
+  miosa snapshot share <snapshot-id> --hours 24 --path /workspace/app --label review
+```
+
+Flags:
+
+- `--hours int` - Hours until the link expires.
+- `--label string` - A note for 'snapshot shares'.
+- `--path string` - Share only this directory (default /).
+
+#### `miosa snapshot shares`
+
+List a snapshot's share links (tokens are never shown again).
+
+```
+miosa snapshot shares <snapshot-id>
+```
+
 #### `miosa snapshot tree`
 
 List the files in a snapshot (works while the machine is stopped).
 
 ```
 miosa snapshot tree <snapshot-id> [path]
+```
+
+#### `miosa snapshot unshare`
+
+Revoke a share link.
+
+```
+miosa snapshot unshare <snapshot-id> <share-id>
 ```
 
 ### `miosa ssh`
@@ -13081,6 +13483,26 @@ Flags:
 
 - `--api` - Run over the MIOSA API instead of an SSH connection.
 - `--cwd string` - Working directory, relative to the sandbox home directory.
+
+### `miosa steer`
+
+Send the agent running in a sandbox a new message without stopping it.
+
+```
+miosa steer [sandbox] <message>
+```
+
+Adds a message as the next turn of the agent running in a sandbox (default: the
+current one): it finishes what it is doing, then continues the same chat with your
+message.
+With no agent running this fails with NO_AGENT_RUN. "-" reads the message
+from standard input (up to 64 KiB).
+
+```
+  miosa steer my-box "also add a changelog entry"
+  miosa steer "use the existing helper instead"
+  git diff | miosa steer my-box -
+```
 
 ### `miosa stop`
 
@@ -14158,13 +14580,17 @@ Flags:
 Show who this CLI is signed in as: user, organization, plan and access.
 
 ```
-miosa whoami
+miosa whoami [flags]
 ```
 
 Asks the API who the key or session is (GET /whoami), which works for an API key as
 well as a browser session.
 Servers that predate that route fall back to the
 organization record, which has no user, workspace or scopes.
+
+Flags:
+
+- `--check` - Only check the sign-in: exit 0 when it works, 3 when it does not.
 
 ### `miosa workflow`
 

@@ -52,6 +52,7 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa api-key rm` | DELETE | `/api-keys/{0}` |
 | `miosa api-key rotate` | POST | `/api-keys/{0}/rotate` |
 | `miosa api-key update` | PATCH | `/api-keys/{0}` |
+| `miosa api-key usage` | GET | `/api-keys/{0}` |
 | `miosa audit` | GET | `/audit-log` |
 | `miosa batch cancel` | POST | `/sandboxes/batches/{0}/cancel` |
 | `miosa batch items` | GET | `/sandboxes/batches/{0}/items` |
@@ -341,6 +342,7 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa ps` | GET | `/sandboxes/{0}/processes` |
 | `miosa recover` | POST | `/sandboxes/{0}/recover` |
 | `miosa regions` | GET | `/regions` |
+| `miosa rename` | PATCH | `/sandboxes/{0}` |
 | `miosa resume` | POST | `/sandboxes/{0}/resume` |
 | `miosa run diagnostics` | GET | `/runs/{0}/diagnostics` |
 | `miosa run events` | GET | `/runs/{0}/events` |
@@ -369,6 +371,9 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa service-account new` | POST | `/service-accounts` |
 | `miosa service-account rm` | DELETE | `/service-accounts/{0}` |
 | `miosa service-account update` | PATCH | `/service-accounts/{0}` |
+| `miosa snapshot share` | POST | `/snapshots/{0}/shares` |
+| `miosa snapshot shares` | GET | `/snapshots/{0}/shares` |
+| `miosa snapshot unshare` | DELETE | `/snapshots/{0}/shares/{1}` |
 | `miosa stop` | POST | `/sandboxes/{0}/stop` |
 | `miosa storage create` | POST | `/storage/buckets` |
 | `miosa storage get` | GET | `/storage/buckets/{0}` |

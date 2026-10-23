@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -126,6 +127,40 @@ type serviceEvent struct {
 	Detail     map[string]any `json:"detail"`
 	Actor      string         `json:"actor"`
 	At         string         `json:"at"`
+}
+
+// UnmarshalJSON reads both event shapes: the API's release events route
+// answers {from, to, reason: {code, detail}}, which the CLI printed as
+// "- -> " because it knew only from_state/to_state/reason_code.
+func (e *serviceEvent) UnmarshalJSON(b []byte) error {
+	type plain serviceEvent
+	var raw struct {
+		plain
+		From   *string `json:"from"`
+		To     string  `json:"to"`
+		Reason *struct {
+			Code   string `json:"code"`
+			Detail any    `json:"detail"`
+		} `json:"reason"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	*e = serviceEvent(raw.plain)
+	if e.FromState == nil {
+		e.FromState = raw.From
+	}
+	if e.ToState == "" {
+		e.ToState = raw.To
+	}
+	if r := raw.Reason; r != nil && e.ReasonCode == nil && r.Code != "" {
+		code := r.Code
+		e.ReasonCode = &code
+		if d, ok := r.Detail.(string); ok && d != "" && detailMessage(e.Detail) == "" {
+			e.Detail = map[string]any{"detail": d}
+		}
+	}
+	return nil
 }
 
 type serviceVariable struct {
@@ -708,23 +743,39 @@ func serviceDeployCmd() *cobra.Command {
 // ── logs ─────────────────────────────────────────────────────────────────────
 
 func serviceLogsCmd() *cobra.Command {
-	var env, releaseRef, buildID string
-	var follow, build bool
+	var env, releaseRef, buildID, replica string
+	var follow, build, events bool
 	var tail int
 	cmd := &cobra.Command{
 		Use:   "logs <project> <service>",
-		Short: "Show a release's events, or a build's log",
-		Long: `Show what happened to a release: every state transition, and the reason a release
-failed. The newest release is used unless --release names one (a release number or id).
+		Short: "Show a service's output, a release's events, or a build's log",
+		Long: `Show what the service's process writes (stdout and stderr), the tail of each
+replica's log. With several replicas each line names its replica; --replica reads
+one. --follow keeps printing new lines until Ctrl-C.
 
-With --build this shows the build log instead: the build the release used, or the
-build named by --build-id. --tail limits the first page, and --follow keeps reading
-until the build finishes. A service built from an image has no build log.`,
+With --events this shows what happened to a release instead: every state
+transition, and the reason a release failed. The newest release is used unless
+--release names one (a release number or id).
+
+With --build this shows the build log: the build the release used, or the build
+named by --build-id. --follow keeps reading until the build finishes. A service
+built from an image has no build log.
+
+--tail is the number of lines from the end of the log (runtime 1-1000, build
+1-2000).`,
+		Example: `  miosa service logs shop api
+  miosa service logs shop api --follow
+  miosa service logs shop api --events
+  miosa service logs shop api --build --follow`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p := printerFor(cmd)
-			if follow && !build && buildID == "" {
-				return usagef("--follow needs --build; release events are a finished history")
+			events = events || releaseRef != ""
+			if events && (build || buildID != "") {
+				return usagef("--events and --build show different logs; pick one")
+			}
+			if follow && events {
+				return usagef("--follow does not apply to --events; release events are a finished history")
 			}
 			c, _, err := buildClient()
 			if err != nil {
@@ -743,23 +794,29 @@ until the build finishes. A service built from an image has no build log.`,
 				}
 				return serviceBuildLogs(ctx, cmd, c.API, projectID, svc, target, tail, follow)
 			}
+			if !events {
+				if err := printServiceRuntimeLogs(cmd, c.API, projectID, svc.ID, replica, tail, follow); err != nil {
+					return die(err)
+				}
+				return nil
+			}
 
 			release, err := latestOrNamedRelease(ctx, c.API, projectID, svc.ID, releaseRef)
 			if err != nil {
 				return err
 			}
-			events, err := serviceEvents(ctx, c.API, projectID, svc.ID, release.ID)
+			evs, err := serviceEvents(ctx, c.API, projectID, svc.ID, release.ID)
 			if err != nil {
 				return err
 			}
 			if isJSON() {
-				return p.JSON(map[string]any{"release": release, "events": events})
+				return p.JSON(map[string]any{"release": release, "events": evs})
 			}
 			p.Line("Release %d (%s) %s", release.Number, release.State, release.ID)
 			if release.Reason != nil {
 				p.Line("Reason: %s %s", release.Reason.Code, release.Reason.Detail)
 			}
-			for _, e := range events {
+			for _, e := range evs {
 				from := "-"
 				if e.FromState != nil {
 					from = *e.FromState
@@ -778,11 +835,13 @@ until the build finishes. A service built from an image has no build log.`,
 	}
 	fs := cmd.Flags()
 	fs.StringVar(&env, "deploy-target", "", "Deploy target name or id (default: the project's default)")
-	fs.StringVar(&releaseRef, "release", "", "Release number or id (default: the newest)")
-	fs.BoolVar(&build, "build", false, "Show the build log instead of release events")
+	fs.BoolVar(&events, "events", false, "Show a release's events instead of the service's output")
+	fs.StringVar(&releaseRef, "release", "", "With --events: release number or id (default: the newest)")
+	fs.BoolVar(&build, "build", false, "Show the build log instead of the service's output")
 	fs.StringVar(&buildID, "build-id", "", "Build id to read with --build (default: latest)")
-	fs.IntVar(&tail, "tail", 200, "Lines from the end of the build log (1-2000)")
-	fs.BoolVar(&follow, "follow", false, "With --build: keep reading until the build finishes")
+	fs.StringVar(&replica, "replica", "", "Read one replica's log (its id)")
+	fs.IntVar(&tail, "tail", 200, "Lines from the end of the log (runtime 1-1000, build 1-2000)")
+	fs.BoolVarP(&follow, "follow", "f", false, "Keep printing new lines (with --build: until the build finishes)")
 	return cmd
 }
 
