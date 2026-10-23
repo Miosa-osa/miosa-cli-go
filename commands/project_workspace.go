@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -14,49 +15,70 @@ import (
 // API refuses without one (WORKSPACE_REQUIRED). A given slug or name becomes
 // its id. Without the flag it picks what the console would: the profile's
 // default workspace, else the organization's default, else its only one.
+// settleProjectWorkspace fills the workspace a new project goes into.
+//
+// The API requires it: a create without `workspace_id` answers 400
+// WORKSPACE_REQUIRED, so this runs before the request and never guesses. The
+// order is the one the console uses: the profile's default ('miosa workspace
+// use'), then the workspace the organization marks default, then a workspace
+// whose slug is "default", then the organization's only workspace.
 func settleProjectWorkspace(cmd *cobra.Command, c *api.Client) error {
-	flag := cmd.Flags().Lookup("workspace-id")
-	if flag == nil {
+	if cmd.Flags().Lookup("workspace") == nil {
 		return nil
 	}
-	if ref := strings.TrimSpace(flag.Value.String()); ref != "" {
-		id, err := c.ResolveWorkspace(cmd.Context(), ref)
-		if err != nil {
-			return die(err)
+
+	// `--workspace` carries the body field; `--workspace-id` is the older
+	// spelling and still works, so a script that used it keeps working.
+	ref := strings.TrimSpace(cmd.Flags().Lookup("workspace").Value.String())
+	if legacy := cmd.Flags().Lookup("workspace-id"); legacy != nil {
+		if v := strings.TrimSpace(legacy.Value.String()); v != "" {
+			ref = v
 		}
-		return cmd.Flags().Set("workspace-id", id)
+	}
+	if ref != "" {
+		// Resolve against the list, not through ResolveWorkspace: that helper
+		// hands an unknown ref back unchanged so the server can answer for it,
+		// and a project create would then send a slug where the API wants an id.
+		id, err := resolveWorkspaceRef(cmd.Context(), c, ref)
+		if err != nil {
+			return err
+		}
+		return cmd.Flags().Set("workspace", id)
 	}
 
-	var resp struct {
-		Data []struct {
-			ID        string `json:"id"`
-			Slug      string `json:"slug"`
-			IsDefault bool   `json:"is_default"`
-		} `json:"data"`
+	list, err := listWorkspaces(cmd, c)
+	if err != nil {
+		return die(fmt.Errorf(
+			"creating a project needs a workspace and the list could not be read: %w; pass --workspace <slug>",
+			err))
 	}
-	if err := c.Get(cmd.Context(), "/workspaces", nil, &resp); err != nil {
-		return die(fmt.Errorf("finding the default workspace: %w", err))
-	}
-	list := resp.Data
 
-	pick := func(match func(i int) bool) (string, string, bool) {
-		for i, w := range list {
-			if match(i) {
-				return w.ID, w.Slug, true
+	pick := func(match func(w workspaceRow) bool) (workspaceRow, bool) {
+		for _, w := range list {
+			if match(w) {
+				return w, true
 			}
 		}
-		return "", "", false
+		return workspaceRow{}, false
 	}
+
 	cfg, _ := config.Load()
-	id, slug, ok := "", "", false
+	var chosen workspaceRow
+	var ok bool
 	if want := strings.TrimSpace(cfg.DefaultWorkspace); want != "" {
-		id, slug, ok = pick(func(i int) bool { return list[i].Slug == want || list[i].ID == want })
+		chosen, ok = pick(func(w workspaceRow) bool { return w.Slug == want || w.ID == want || w.Name == want })
 	}
 	if !ok {
-		id, slug, ok = pick(func(i int) bool { return list[i].IsDefault })
+		chosen, ok = pick(func(w workspaceRow) bool { return w.IsDefault })
+	}
+	if !ok {
+		chosen, ok = pick(func(w workspaceRow) bool { return strings.EqualFold(w.Slug, "default") })
+	}
+	if !ok {
+		chosen, ok = pick(func(w workspaceRow) bool { return strings.EqualFold(w.Name, "default") })
 	}
 	if !ok && len(list) == 1 {
-		id, slug, ok = list[0].ID, list[0].Slug, true
+		chosen, ok = list[0], true
 	}
 	if !ok {
 		slugs := make([]string, 0, len(list))
@@ -64,10 +86,58 @@ func settleProjectWorkspace(cmd *cobra.Command, c *api.Client) error {
 			slugs = append(slugs, w.Slug)
 		}
 		sort.Strings(slugs)
-		return usagef("this organization has no default workspace; pass --workspace-id (one of: %s)", strings.Join(slugs, ", "))
+		return usagef("this organization has no default workspace; pass --workspace (one of: %s)", strings.Join(slugs, ", "))
 	}
+
 	if !isJSON() {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Using workspace %s (pass --workspace-id to choose another).\n", slug)
+		fmt.Fprintf(cmd.ErrOrStderr(), "Using workspace %s (pass --workspace to choose another).\n", chosen.Slug)
 	}
-	return cmd.Flags().Set("workspace-id", id)
+	return cmd.Flags().Set("workspace", chosen.ID)
+}
+
+type workspaceRow struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Slug      string `json:"slug"`
+	IsDefault bool   `json:"is_default"`
+}
+
+// listWorkspaces reads the organization's workspaces, once, with one retry: a
+// create should not fail because a read hiccuped, and the answer is small.
+func listWorkspaces(cmd *cobra.Command, c *api.Client) ([]workspaceRow, error) {
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		var resp struct {
+			Data json.RawMessage `json:"data"`
+		}
+		if err := c.Get(cmd.Context(), "/workspaces", nil, &resp); err != nil {
+			lastErr = err
+			continue
+		}
+		list, err := decodeWorkspaces(resp.Data)
+		if err != nil {
+			return nil, err
+		}
+		return list, nil
+	}
+	return nil, lastErr
+}
+
+// decodeWorkspaces accepts both shapes the endpoint has answered with: a bare
+// array, and an object carrying the array under "workspaces".
+func decodeWorkspaces(raw json.RawMessage) ([]workspaceRow, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var list []workspaceRow
+	if err := json.Unmarshal(raw, &list); err == nil {
+		return list, nil
+	}
+	var wrapped struct {
+		Workspaces []workspaceRow `json:"workspaces"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, fmt.Errorf("the workspace list is not a shape this CLI knows: %w", err)
+	}
+	return wrapped.Workspaces, nil
 }

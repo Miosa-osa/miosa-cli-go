@@ -134,3 +134,81 @@ func TestProjectDeleteIsAlsoAvailableAsDelete(t *testing.T) {
 		t.Fatalf("DELETE /projects/%s was not called", id)
 	}
 }
+
+// The live /workspaces answer is `{"data":[{id, name, slug, is_default, ...}]}`
+// and an organization can hold dozens: acme-qa had 40+ test workspaces with the
+// real default far from the front. The rehearsal failed there, so these use the
+// real shape and put the default where it actually was.
+const manyWorkspaces = `{"data":[
+ {"id":"a1","name":"engine-console-bound","slug":"engine-console-bound-470441","is_default":false,"tenant_id":"t"},
+ {"id":"a2","name":"engine-console-final","slug":"engine-console-final-ws-886483","is_default":false,"tenant_id":"t"},
+ {"id":"a3","name":"probe","slug":"engine-console-probe-291942","is_default":false,"tenant_id":"t"},
+ {"id":"b89beea8-9094-43ef-9e00-477520c0932e","name":"Default","slug":"default","is_default":true,"tenant_id":"t"},
+ {"id":"a4","name":"zzz","slug":"zzz","is_default":false,"tenant_id":"t"}]}`
+
+func TestProjectCreateFindsTheDefaultWorkspaceDeepInTheList(t *testing.T) {
+	f := projectAPI(t, manyWorkspaces)
+	writeConfigFile(t, "default_workspace = \"\"\n")
+
+	if out, err := run(t, "project", "create", "shop"); err != nil {
+		t.Fatalf("project create: %v\n%s", err, out)
+	}
+	if got := createdIn(t, f); got != "b89beea8-9094-43ef-9e00-477520c0932e" {
+		t.Fatalf("workspace_id = %v", got)
+	}
+}
+
+func TestProjectCreatePrefersTheSlugDefaultWhenNoneIsMarked(t *testing.T) {
+	f := projectAPI(t, `{"data":[
+	 {"id":"x1","name":"one","slug":"one","is_default":false},
+	 {"id":"x2","name":"Default","slug":"default","is_default":false}]}`)
+	writeConfigFile(t, "default_workspace = \"\"\n")
+
+	if out, err := run(t, "project", "create", "shop"); err != nil {
+		t.Fatalf("project create: %v\n%s", err, out)
+	}
+	if got := createdIn(t, f); got != "x2" {
+		t.Fatalf("workspace_id = %v", got)
+	}
+}
+
+func TestProjectCreateReadsTheWrappedWorkspaceShape(t *testing.T) {
+	f := projectAPI(t, `{"data":{"workspaces":[{"id":"w9","name":"Default","slug":"default","is_default":true}]}}`)
+	writeConfigFile(t, "default_workspace = \"\"\n")
+
+	if out, err := run(t, "project", "create", "shop"); err != nil {
+		t.Fatalf("project create: %v\n%s", err, out)
+	}
+	if got := createdIn(t, f); got != "w9" {
+		t.Fatalf("workspace_id = %v", got)
+	}
+}
+
+func TestProjectCreateRefusesAnUnknownWorkspace(t *testing.T) {
+	f := projectAPI(t, manyWorkspaces)
+	writeConfigFile(t, "default_workspace = \"\"\n")
+
+	_, err := run(t, "project", "create", "shop", "--workspace", "nope")
+	if err == nil || commands.ExitCode(err) != 2 || !strings.Contains(err.Error(), "default") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(f.find("POST", "/projects")) != 0 {
+		t.Fatal("nothing may be created")
+	}
+}
+
+func TestProjectCreateSaysWhatToDoWhenTheListCannotBeRead(t *testing.T) {
+	f := fakeRoutes(t, map[string]any{
+		"GET /workspaces": resp{500, `{"error":{"code":"INTERNAL","message":"boom"}}`},
+		"POST /projects":  resp{201, `{"data":{"id":"p1","name":"shop"}}`},
+	})
+	writeConfigFile(t, "default_workspace = \"\"\n")
+
+	_, err := run(t, "project", "create", "shop")
+	if err == nil || !strings.Contains(err.Error(), "--workspace") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(f.find("POST", "/projects")) != 0 {
+		t.Fatal("nothing may be created")
+	}
+}

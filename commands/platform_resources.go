@@ -796,12 +796,17 @@ func projectCmd() *cobra.Command {
 		Op{Use: "get <project>", Aliases: []string{"show"}, Short: "Show a project", Method: "GET", Path: "/projects/{0}", Args: []Arg{idArg("project")}},
 		Op{
 			Use: "create <name>", Short: "Create a project", Method: "POST", Path: "/projects", Args: []Arg{idArg("name")},
-			Long: `Create a project in a workspace. Without --workspace-id it goes where the
-console would put it: the profile's default workspace ('miosa workspace use'),
-else the organization's default workspace, else its only workspace.`,
+			Long: `Create a project in a workspace. The API requires one, so without --workspace
+it goes where the console would put it: the profile's default workspace
+('miosa workspace use'), else the workspace the organization marks default, else
+the one whose slug is "default", else its only workspace.`,
 			Example: `  miosa project create shop
-  miosa project create shop --workspace-id staging`,
-			Flags:  []Flag{{Name: "workspace-id", Usage: "Workspace: slug, name or id (default: the default workspace)", Field: "workspace_id"}, {Name: "description", Usage: "What it is for"}},
+  miosa project create shop --workspace staging`,
+			Flags: []Flag{
+				{Name: "workspace", Usage: "Workspace: slug, name or id (default: the default workspace)", Field: "workspace_id"},
+				{Name: "workspace-id", Usage: "Workspace id (same as --workspace)", In: "local"},
+				{Name: "description", Usage: "What it is for"},
+			},
 			Body:   func(a []string, body map[string]any) (map[string]any, error) { body["name"] = a[0]; return body, nil },
 			Before: settleProjectWorkspace,
 		},
