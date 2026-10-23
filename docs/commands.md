@@ -45,6 +45,7 @@ Regenerate with `make docs`.
 - [`miosa device`](#miosa-device) - Every machine you can run work on, across runtime kinds
 - [`miosa doctor`](#miosa-doctor) - Diagnose configuration, connectivity and authentication
 - [`miosa domain`](#miosa-domain) - Custom domains of the linked service
+- [`miosa drains`](#miosa-drains) - Send a Deploy target's logs to your own endpoint
 - [`miosa egress`](#miosa-egress) - Outbound network policy for sandboxes
 - [`miosa email`](#miosa-email) - Send email from your apps through MIOSA
 - [`miosa engine`](#miosa-engine) - Operate an Optimal Engine: managed Engines on MIOSA, and two-Engine sync
@@ -70,6 +71,7 @@ Regenerate with `make docs`.
 - [`miosa logs`](#miosa-logs) - Show a sandbox's system log
 - [`miosa mcp`](#miosa-mcp) - Connect AI clients to the MIOSA Model Context Protocol server
 - [`miosa member`](#miosa-member) - People in your organization
+- [`miosa middleware`](#miosa-middleware) - Show, set or clear a service's edge middleware
 - [`miosa module`](#miosa-module) - Apply a manifest of resources to a workspace
 - [`miosa move`](#miosa-move) - Move a resource to another workspace
 - [`miosa notifications`](#miosa-notifications) - Your notifications
@@ -84,6 +86,7 @@ Regenerate with `make docs`.
 - [`miosa profile`](#miosa-profile) - Manage config profiles (several accounts or environments)
 - [`miosa project`](#miosa-project) - Projects group resources inside a workspace
 - [`miosa prompt`](#miosa-prompt) - Run an agent on a sandbox or computer and follow it
+- [`miosa protection`](#miosa-protection) - Put a password in front of a service
 - [`miosa proxy`](#miosa-proxy) - Forward local ports to sandbox ports
 - [`miosa ps`](#miosa-ps) - List background processes (same as 'process list')
 - [`miosa recover`](#miosa-recover) - Recover a sandbox from its disk into a NEW sandbox
@@ -115,6 +118,7 @@ Regenerate with `make docs`.
 - [`miosa variables`](#miosa-variables) - Read and write variables of the linked project, target or service
 - [`miosa version`](#miosa-version) - Print the CLI version
 - [`miosa volume`](#miosa-volume) - Persistent volumes shared between machines
+- [`miosa waf`](#miosa-waf) - Show or change the service's web application firewall
 - [`miosa wait`](#miosa-wait) - Wait until a sandbox reaches a state
 - [`miosa webhook`](#miosa-webhook) - Send events to your own HTTPS endpoints
 - [`miosa whoami`](#miosa-whoami) - Show who this CLI is signed in as: user, organization, plan and access
@@ -1164,6 +1168,56 @@ Credits are cents.
 Changing
 plans and payment methods happens in the console ('miosa open billing').
 
+#### `miosa billing auto-reload`
+
+Add credits when the balance is low.
+
+```
+miosa billing auto-reload
+```
+
+Auto-reload adds credits when the balance falls below a threshold.
+
+```
+  miosa billing auto-reload
+  miosa billing auto-reload set --threshold 500 --amount 5000 --monthly-cap 20000
+  miosa billing auto-reload off
+
+```
+Numbers are credits (cents). 'off' keeps the amounts and turns the request off;
+the API reports 'enabled' as true only when the request is on, a card is ready
+and the amounts make sense, so read the answer rather than the flag.
+
+##### `miosa billing auto-reload get`
+
+Show the current settings.
+
+```
+miosa billing auto-reload get
+```
+
+##### `miosa billing auto-reload off`
+
+Turn auto-reload off.
+
+```
+miosa billing auto-reload off
+```
+
+##### `miosa billing auto-reload set`
+
+Turn auto-reload on with these amounts.
+
+```
+miosa billing auto-reload set [flags]
+```
+
+Flags:
+
+- `--amount int` - Credits to add each time.
+- `--monthly-cap int` - Most credits to add in a month.
+- `--threshold int` - Balance that triggers an add, in credits.
+
 #### `miosa billing balance`
 
 Show the credit balance.
@@ -1239,6 +1293,38 @@ List invoices.
 
 ```
 miosa billing invoices
+```
+
+#### `miosa billing payment-methods`
+
+List the cards on file, or choose the default.
+
+```
+miosa billing payment-methods
+```
+
+miosa billing payment-methods list
+```
+  miosa billing payment-methods default <id>
+
+```
+Adding or removing a card happens in the console: card details never reach this
+CLI, which only ever sees the brand, last four digits and expiry.
+
+##### `miosa billing payment-methods default`
+
+Charge this card by default.
+
+```
+miosa billing payment-methods default <id>
+```
+
+##### `miosa billing payment-methods list`
+
+List the cards on file.
+
+```
+miosa billing payment-methods list
 ```
 
 #### `miosa billing plan`
@@ -2875,7 +2961,7 @@ Create a managed database.
 ```
 --extensions applies to PostgreSQL only; allowed: vector, pg_trgm, pgcrypto, uuid-ossp,
 pg_stat_statements, citext, hstore, btree_gin, btree_gist. --version is a version with an
-image (postgres 16, mysql 8, redis 7). --size is one of tiny, xs, small, medium, large.
+image (postgres 16, mysql 8, redis 7, mongodb 7). --size is one of tiny, xs, small, medium, large.
 
 --engine optimal creates an Optimal Engine; 'miosa engine create' is the same call with
 the Engine-specific flags and an idempotent name.
@@ -2883,7 +2969,7 @@ the Engine-specific flags and an idempotent name.
 Flags:
 
 - `--class string` - Data classification: public, internal, confidential or restricted (public|internal|confidential|restricted).
-- `--engine string` - Engine: postgres, mysql, redis, qdrant or optimal (postgres|postgresql|mysql|redis|qdrant|optimal). (default `postgres`)
+- `--engine string` - Engine: postgres, mysql, redis, mongodb, qdrant or optimal (postgres|postgresql|mysql|redis|mongodb|qdrant|optimal). (default `postgres`)
 - `--extensions stringArray` - PostgreSQL extensions to enable at create, comma separated.
 - `--region string` - Pin to a region.
 - `--size string` - Size: tiny, xs, small, medium or large (tiny|xs|small|medium|large).
@@ -2926,6 +3012,37 @@ miosa db logs <database> [flags]
 Flags:
 
 - `-n, --tail int` - How many lines.
+
+#### `miosa db public`
+
+Show, turn on or turn off a database's public endpoint.
+
+```
+miosa db public <database> [on|off] [flags]
+```
+
+Without on/off, prints the state.
+Turning it on opens a TCP endpoint on a
+port from 30000-39999, one per database, and prints the host and port.
+
+```
+  miosa db public app-db
+  miosa db public app-db on
+  miosa db public app-db on --allow 203.0.113.0/24 --allow 198.51.100.7
+  miosa db public app-db off
+
+```
+The allowlist REPLACES the stored one; on with no --allow means any source.
+TLS
+is required (Postgres needs sslmode=require), the certificate is self-signed,
+and the allowlist closes disallowed sources before any TLS is attempted.
+MySQL,
+Postgres, Redis and MongoDB are supported; other engines answer
+ENGINE_NOT_SUPPORTED.
+
+Flags:
+
+- `--allow stringArray` - Allowed source: an IP or CIDR (repeatable; empty means any source).
 
 #### `miosa db recover`
 
@@ -4217,6 +4334,102 @@ domain is active or failed.
 Flags:
 
 - `--no-wait` - Check once and return.
+
+### `miosa drains`
+
+Send a Deploy target's logs to your own endpoint.
+
+```
+miosa drains
+```
+
+A drain forwards runtime and build logs to an endpoint you control: HTTPS as
+one JSON object per line, or syslog over TLS.
+
+```
+  miosa drains list
+  miosa drains add --name ops --url https://logs.example.test/ingest
+  miosa drains add --name archive --kind syslog --url syslog+tls://logs.example.org:6514
+  miosa drains test ops
+  miosa drains pause ops
+  miosa drains rotate-secret ops
+  miosa drains rm ops
+
+```
+An HTTPS drain gets a signing secret once, on add and on rotate: copy it then,
+it is not shown again.
+A syslog drain has no secret, because TLS is the
+authenticity.
+
+Aliases: `drain`.
+
+Flags:
+
+
+#### `miosa drains add`
+
+Create a drain and show its secret once.
+
+```
+miosa drains add --name <name> --url <url> [flags]
+```
+
+Flags:
+
+- `--kind string` - Kind: http (default) or syslog. (default `http`)
+- `--name string` - Drain name: 1-63 lowercase letters, digits and hyphens.
+- `--source stringArray` - Which logs: runtime, build (repeatable; default both).
+- `--url string` - Endpoint: https://... or, with --kind syslog, syslog+tls://host[:port].
+
+#### `miosa drains list`
+
+List the drains of a Deploy target.
+
+```
+miosa drains list
+```
+
+#### `miosa drains pause`
+
+Stop delivering lines, keeping the drain.
+
+```
+miosa drains pause <name>
+```
+
+#### `miosa drains resume`
+
+Deliver lines again.
+
+```
+miosa drains resume <name>
+```
+
+#### `miosa drains rm`
+
+Delete a drain.
+
+```
+miosa drains rm <name>
+```
+
+Aliases: `delete`, `remove`.
+
+#### `miosa drains rotate-secret`
+
+Replace an HTTPS drain's signing secret.
+
+```
+miosa drains rotate-secret <name>
+```
+
+#### `miosa drains test`
+
+Send one signed line now and report what the endpoint answered.
+
+```
+miosa drains test <name>
+```
 
 ### `miosa egress`
 
@@ -9247,6 +9460,47 @@ Flags:
 - `--workspace string` - MIOSA workspace (slug, name or id).
 - `--yes` - With --cleanup: do not ask.
 
+#### `miosa import vercel`
+
+Read a vercel.json and write a reviewable plan.
+
+```
+miosa import vercel --from-file vercel.json [flags]
+```
+
+Read a Vercel project's vercel.json and write a plan: the MIOSA project,
+the production Deploy target, one service, and the environment variable names
+it declares.
+Review the plan, then --apply it.
+
+What maps: the app, its region (when the file names one MIOSA has), and the
+environment variable names.
+What does not, and is listed with the reason:
+rewrites, redirects, headers, builds, the functions block, cleanUrls,
+trailingSlash, buildCommand, installCommand, outputDirectory and crons.
+
+```
+  miosa import vercel --from-file vercel.json --name shop --repo https://github.com/acme/shop
+  miosa import vercel --from-file vercel.json --out plan.json
+  miosa import vercel --apply --plan plan.json
+```
+
+Flags:
+
+- `--allow-missing-values` - Create variables with no value as empty strings.
+- `--apply` - Create what the plan says.
+- `--from-file string` - The vercel.json to read.
+- `--into string` - Import into an existing MIOSA project.
+- `--name string` - MIOSA project name (default: vercel-app).
+- `--out string` - Write the plan JSON here.
+- `--plan string` - With --apply: the plan to apply.
+- `--region string` - Region: us-east, us-west or us-mia (overrides the file).
+- `--repo string` - Git URL for the service's source.
+- `--resume` - Continue an interrupted apply.
+- `--service string` - Service name inside the project. (default `web`)
+- `--state string` - Where created ids are recorded (default .miosa/import-vercel-<project>.json).
+- `--workspace string` - MIOSA workspace (slug, name or id).
+
 ### `miosa info`
 
 Show a machine's state, environment and setup status.
@@ -9752,6 +10006,48 @@ miosa member role <member-id> [flags]
 Flags:
 
 - `--role string` - New role (admin|member|viewer).
+
+### `miosa middleware`
+
+Show, set or clear a service's edge middleware.
+
+```
+miosa middleware <project> <service> [flags]
+```
+
+Edge middleware runs in front of a server service: ordered path rules
+(redirect, rewrite, request and response headers) and, optionally, a published
+function that can answer, continue or rewrite.
+
+```
+  miosa middleware shop API --from middleware.json
+  miosa middleware shop API            # what is configured now
+  miosa middleware shop API --off
+
+```
+The file is the rule set exactly as the API takes it:
+
+```
+  {
+    "rules": [
+      {"path": "/old/*", "redirect": {"to": "/new", "status": 308}},
+      {"path": "/api/*", "request_headers": {"set": {"x-plan": "pro"}}}
+    ],
+    "function": {"slug": "gate", "paths": ["/app/*"], "timeout_ms": 250, "on_error": "closed"}
+  }
+
+```
+Rules and the function are validated by the API; its error names the path
+(settings.edge_middleware.<field>).
+Changes apply within about five seconds.
+Protected header names (host, content-length, x-miosa-*, x-forwarded-* and
+the rest) are refused.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--from string` - JSON file holding the rule set.
+- `--off` - Remove every rule and the function.
 
 ### `miosa module`
 
@@ -10780,6 +11076,25 @@ miosa project list
 
 Aliases: `ls`.
 
+#### `miosa project rm`
+
+Delete a project and everything in it.
+
+```
+miosa project rm <project> [flags]
+```
+
+Delete a project.
+A workspace's default project cannot be deleted, and a
+project that still owns services, databases or deployments answers 409: move or
+delete those first.
+
+Aliases: `delete`.
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
+
 #### `miosa project target`
 
 Deploy targets of a project (production, staging, ...).
@@ -10981,6 +11296,37 @@ Flags:
 - `--source string` - Label recorded on the run (max 40 characters).
 - `--template string` - Template of a new machine.
 - `--workspace string` - Workspace (slug or id) for a new machine.
+
+### `miosa protection`
+
+Put a password in front of a service.
+
+```
+miosa protection <project> <service> [flags]
+```
+
+Without flags, shows whether the service is protected.
+
+```
+  miosa protection shop API --password 'open-sesame'
+  miosa protection shop API --off
+  miosa protection shop API --share-link --expires 3600
+  miosa protection shop API --revoke <link-id>
+
+```
+The password is never printed back.
+A share link is a way past the password for
+one person: the token is shown once, and expires after --expires seconds (the
+API's default when omitted).
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--expires int` - Share link lifetime in seconds (7 days when omitted, at most 90).
+- `--off` - Remove protection.
+- `--password string` - Password visitors must enter (never printed back).
+- `--revoke string` - Revoke this share link id.
+- `--share-link` - Mint a share link that skips the password (token shown once).
 
 ### `miosa proxy`
 
@@ -11833,22 +12179,26 @@ A web or static service gets a public address unless --no-public is given.
   miosa service create cliniciq Jobs --type worker --repo https://github.com/acme/api --start-command "node worker.js"
   miosa service create cliniciq Cache --type private --image redis:7
   miosa service create cliniciq Nightly --type schedule --repo https://github.com/acme/api --schedule "0 3 * * *"
+  miosa service create cliniciq API --repo https://github.com/acme/api --size dedicated-4
 ```
 
 Flags:
 
 - `--branch string` - Git branch (default: the repository default).
+- `--build-command string` - Static services: build command (Railpack builds only).
 - `--deploy-target string` - Deploy target name or id (default: the project's default).
 - `--dockerfile string` - Dockerfile path (needs Services build cells).
 - `--env stringArray` - Variable KEY=VALUE (repeatable); a value may be a ${{...}} reference.
 - `--image string` - Container image reference.
 - `--no-public` - Do not give a web or static service a public address.
+- `--output-dir string` - Static services: directory to serve (default: detected).
 - `--port int` - Port the container listens on (--image only).
 - `--region string` - Region: us-west, us-east or us-mia.
 - `--replicas int` - Replicas to run (1-50).
 - `--repo string` - Git repository URL.
 - `--root-dir string` - Directory inside the repository to build.
 - `--schedule string` - Five field schedule expression (with --type schedule).
+- `--size string` - Dedicated vCPU size: dedicated-2, dedicated-4, dedicated-8, dedicated-16.
 - `--slug string` - URL label (default: from the name).
 - `--start-command string` - Command the service starts with.
 - `--type string` - Service type: web, worker, private, static, schedule, database. (default `web`)
@@ -12003,6 +12353,29 @@ Flags:
 - `--follow` - With --build: keep reading until the build finishes.
 - `--release string` - Release number or id (default: the newest).
 - `--tail int` - Lines from the end of the build log (1-2000). (default `200`)
+
+#### `miosa service metrics`
+
+Requests, errors and latency for a service.
+
+```
+miosa service metrics <project> <service> [flags]
+```
+
+The service's own metric series: requests, errors, error rate and response
+latency (p50 and p95).
+CPU, memory and network are not collected for services,
+so those fields are null and the footer says which columns are real.
+
+```
+  miosa service metrics cliniciq API
+  miosa service metrics cliniciq API --range 24h --json
+```
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--range string` - Window: 15m, 1h, 6h, 24h or 7d. (default `1h`)
 
 #### `miosa service promote`
 
@@ -12209,22 +12582,39 @@ Change a service's name or settings.
 miosa service update <project> <service> [flags]
 ```
 
-Change a service's name, start command, replicas or region.
-Settings are merged:
-only the flags you pass change.
+Change a service's name or settings.
+Settings are merged: only the flags you
+pass change.
 
 ```
   miosa service update cliniciq API --replicas 3
   miosa service update cliniciq API --name backend --start-command "node dist/server.js"
+  miosa service update cliniciq API --strategy rolling --rollout-step 10 --rollout-step 50 --rollout-step 100
+  miosa service update cliniciq API --spread single_host
+  miosa service update cliniciq API --size dedicated-4
+  miosa service update cliniciq site --build-command "npm run build" --output-dir dist
+
 ```
+--spread is auto (replicas land on different hosts where the network allows) or
+single_host. --strategy is replace or rolling; rolling starts the new version
+beside the old one, shifts traffic in steps and rolls back automatically if the
+new replica is unhealthy. --rollout-step must ascend and end at 100.
 
 Flags:
 
+- `--build-command string` - Static services: build command (Railpack builds only).
 - `--deploy-target string` - Deploy target name or id (default: the project's default).
 - `--name string` - New name.
+- `--output-dir string` - Static services: directory to serve (default: detected).
 - `--region string` - Region: us-west, us-east or us-mia.
 - `--replicas int` - Replicas to run (1-50).
+- `--rollout-step intSlice` - Traffic step in percent (repeatable, ascending, ends at 100).
+- `--rollout-step-s int` - Seconds to wait between steps (10-3600).
+- `--size string` - Dedicated vCPU size: dedicated-2, dedicated-4, dedicated-8, dedicated-16.
+- `--spread string` - Replica placement: auto or single_host.
 - `--start-command string` - Command the service starts with.
+- `--strategy string` - Release strategy: replace or rolling.
+- `--terminate-grace int` - Seconds the old version drains during a rolling deploy (>=10).
 
 #### `miosa service vars`
 
@@ -13574,6 +13964,40 @@ Flags:
 
 - `--project string` - Project name or id (default: the workspace's Default project).
 - `--workspace string` - Workspace whose project to use (default: the profile's, then the organization's Default workspace).
+
+### `miosa waf`
+
+Show or change the service's web application firewall.
+
+```
+miosa waf <project> <service> [flags]
+```
+
+Without flags, shows the current rules.
+
+```
+  miosa waf shop API --mode enforce --deny 203.0.113.0/24 --rate 120
+  miosa waf shop API --allow 198.51.100.0/24 --country-allow US --country-allow CA
+  miosa waf shop API --off
+
+```
+--mode is off, observe or enforce.
+Country rules only apply when something in
+front of the service sets the country header; without it they are skipped, which
+the help says rather than pretending they work. --rate is requests per minute
+per source; 0 clears the limit.
+
+Flags:
+
+- `--allow stringArray` - Allowed source: IP or CIDR (ip_allow; repeatable).
+- `--attack-mode string` - Attack mode: on or off.
+- `--country-allow stringArray` - Allowed country, alpha-2 (repeatable).
+- `--country-deny stringArray` - Blocked country, alpha-2 (repeatable).
+- `--deny stringArray` - Blocked source: IP or CIDR (ip_deny; repeatable).
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--mode string` - Mode: off, observe or enforce.
+- `--off` - Remove every WAF rule.
+- `--rate int` - Requests per minute per source (0 clears the limit).
 
 ### `miosa wait`
 

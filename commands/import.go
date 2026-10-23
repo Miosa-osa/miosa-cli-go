@@ -194,6 +194,7 @@ numbers.`,
 		"Engine import key; a random one is used when empty, and repeating it returns the same job")
 	_ = cmd.MarkFlagRequired("to")
 	cmd.AddCommand(railwayImportCmd())
+	cmd.AddCommand(vercelImportCmd())
 	return cmd
 }
 

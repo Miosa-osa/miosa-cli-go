@@ -613,3 +613,33 @@ func TestServiceLogsBuildFollowReadsFromTheOffset(t *testing.T) {
 		t.Fatalf("want the second read to continue after offset 7, got %q", calls[1].Query)
 	}
 }
+
+func TestServiceCreateSizeSetsShape(t *testing.T) {
+	f := servicesAPI(t)
+	_, err := run(t, "service", "create", "cliniciq", "API", "--type", "web",
+		"--repo", "https://github.com/acme/api", "--size", "dedicated-4")
+	if err != nil {
+		t.Fatalf("service create: %v", err)
+	}
+	created := f.find("POST", "/projects/11111111-1111-1111-1111-111111111111/services")
+	if len(created) != 1 {
+		t.Fatalf("want one create call, got %d", len(created))
+	}
+	settings, _ := created[0].Body["settings"].(map[string]interface{})
+	if settings["shape"] != "dedicated-4" {
+		t.Fatalf("size must be sent as settings.shape, got %#v", settings)
+	}
+}
+
+func TestServiceSizeRejectsUnknownSize(t *testing.T) {
+	servicesAPI(t)
+	_, err := run(t, "service", "create", "cliniciq", "API", "--type", "web",
+		"--repo", "https://github.com/acme/api", "--size", "dedicated-3")
+	if err == nil || !strings.Contains(err.Error(), "--size must be one of dedicated-2, dedicated-4, dedicated-8, dedicated-16") {
+		t.Fatalf("want a --size error, got: %v", err)
+	}
+	_, err = run(t, "service", "update", "cliniciq", "API", "--size", "large")
+	if err == nil || !strings.Contains(err.Error(), "--size") {
+		t.Fatalf("want a --size error on update, got: %v", err)
+	}
+}

@@ -217,6 +217,10 @@ func init() {
 		newRollbackCmd(),
 		newDomainCmd(),
 		newEnvironmentCmd(),
+		newMiddlewareCmd(),
+		newDrainsCmd(),
+		newProtectionCmd(),
+		newWAFCmd(),
 	)
 }
 
