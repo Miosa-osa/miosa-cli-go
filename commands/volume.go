@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -186,11 +187,16 @@ func resolveWorkspaceRef(ctx context.Context, c *api.Client, ref string) (string
 		return "", err
 	}
 	for _, w := range out.Data {
-		if w.Slug == ref || w.Name == ref {
+		if w.ID == ref || strings.EqualFold(w.Slug, ref) || strings.EqualFold(w.Name, ref) {
 			return w.ID, nil
 		}
 	}
-	return "", fmt.Errorf("workspace %q not found (see 'miosa workspace list')", ref)
+	slugs := make([]string, 0, len(out.Data))
+	for _, w := range out.Data {
+		slugs = append(slugs, w.Slug)
+	}
+	sort.Strings(slugs)
+	return "", usagef("no workspace called %q in this organization; one of: %s", ref, strings.Join(slugs, ", "))
 }
 
 type volumeRow struct {

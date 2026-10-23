@@ -11040,20 +11040,22 @@ miosa project create <name> [flags]
 ```
 
 Create a project in a workspace.
-Without --workspace-id it goes where the
-console would put it: the profile's default workspace ('miosa workspace use'),
-else the organization's default workspace, else its only workspace.
+The API requires one, so without --workspace
+it goes where the console would put it: the profile's default workspace
+('miosa workspace use'), else the workspace the organization marks default, else
+the one whose slug is "default", else its only workspace.
 
 Flags:
 
 - `--description string` - What it is for.
-- `--workspace-id string` - Workspace: slug, name or id (default: the default workspace).
+- `--workspace string` - Workspace: slug, name or id (default: the default workspace).
+- `--workspace-id string` - Workspace id (same as --workspace).
 
 Examples:
 
 ```
 miosa project create shop
-  miosa project create shop --workspace-id staging
+  miosa project create shop --workspace staging
 ```
 
 #### `miosa project get`
