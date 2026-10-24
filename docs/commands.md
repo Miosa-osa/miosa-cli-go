@@ -120,6 +120,7 @@ Regenerate with `make docs`.
 - [`miosa stop`](#miosa-stop) - Stop a sandbox, keeping its disk
 - [`miosa storage`](#miosa-storage) - Object storage buckets
 - [`miosa tag`](#miosa-tag) - Show, add or remove sandbox tags
+- [`miosa telemetry`](#miosa-telemetry) - Export sandbox and account metrics and lifecycle events over OTLP
 - [`miosa template`](#miosa-template) - Sandbox templates
 - [`miosa token`](#miosa-token) - Mint short-lived tokens for your end users
 - [`miosa top`](#miosa-top) - List every process in a sandbox, busiest first, even while it is stopped
@@ -859,6 +860,7 @@ Flags:
 - `--quiet-key` - Print only the secret.
 - `--rate-limit int` - Requests per minute for this key.
 - `--scope stringArray` - A scope to grant, for example sandboxes:exec (repeatable).
+- `--ttl duration` - Expire after this long, in whole days: 30d, 720h (same as --expires-in).
 - `--workspace-id string` - Bind the key to one workspace.
 
 #### `miosa api-key events`
@@ -13423,6 +13425,7 @@ Flags:
 - `--quiet-key` - Print only the secret.
 - `--rate-limit int` - Requests per minute for this key.
 - `--scope stringArray` - A scope to grant, for example sandboxes:exec (repeatable).
+- `--ttl duration` - Expire after this long, in whole days: 30d, 720h (same as --expires-in).
 - `--workspace-id string` - Bind the key to one workspace.
 
 #### `miosa service-account keys`
@@ -14062,6 +14065,68 @@ Flags:
 - `--remove stringArray` - Remove a tag by key (repeatable).
 - `--set stringArray` - Add or change a tag, KEY=VALUE (repeatable).
 
+### `miosa telemetry`
+
+Export sandbox and account metrics and lifecycle events over OTLP.
+
+```
+miosa telemetry
+```
+
+Send the organization's telemetry to an OpenTelemetry endpoint (OTLP/HTTP):
+every minute the sandbox and account metrics (sandboxes by state, each running
+sandbox, the credit balance), and every lifecycle event (create, pause, resume,
+destroy, exec) since the last export, as log records.
+
+With no subcommand it shows the export and how its last run went.
+
+```
+  miosa telemetry
+  miosa telemetry set https://otlp.datadoghq.com -H dd-api-key=$DD_API_KEY
+  miosa telemetry set https://api.honeycomb.io -H x-honeycomb-team=$HONEYCOMB_KEY
+  miosa telemetry unset
+
+```
+The URL is the OTLP base: /v1/metrics and /v1/logs are added to it.
+Header
+values are stored encrypted and never shown again, only their names.
+Setting
+an export replaces the current one and sends a test export at once.
+Changing
+it needs an owner or administrator.
+
+#### `miosa telemetry set`
+
+Replace the export and send a test export now.
+
+```
+miosa telemetry set <url> [flags]
+```
+
+Replace the export with <url> (https, the OTLP base) and the given request
+headers, then send a test export at once.
+The export is saved either way; when
+the endpoint refuses the test, the command says what it answered and exits 1.
+
+```
+  miosa telemetry set https://otlp.datadoghq.com -H dd-api-key=$DD_API_KEY
+  miosa telemetry set https://otel.example.com:4318 -H authorization="Bearer $TOKEN"
+```
+
+Flags:
+
+- `-H, --header stringArray` - Request header sent with every export, name=value (repeatable).
+
+#### `miosa telemetry unset`
+
+Remove the export.
+
+```
+miosa telemetry unset
+```
+
+Aliases: `rm`.
+
 ### `miosa template`
 
 Sandbox templates.
@@ -14354,8 +14419,25 @@ Example:
 Show runtime, time left and estimated cost.
 
 ```
-miosa usage [sandbox]
+miosa usage [sandbox] [flags]
 ```
+
+Show a sandbox's runtime, time left and estimated cost. --since (and --until,
+default now) adds what it used inside that window: run time and the credits
+billed for it.
+Each takes a time (2026-10-20T10:00:00Z) or a duration back
+from now (24h, 7d).
+
+```
+  miosa usage my-box
+  miosa usage my-box --since 7d
+  miosa usage my-box --since 2026-10-20T00:00:00Z --until 2026-10-21T00:00:00Z
+```
+
+Flags:
+
+- `--since string` - Start of the window: a time or a duration back (24h, 7d).
+- `--until string` - End of the window (default now): a time or a duration back.
 
 ### `miosa use`
 
@@ -14857,6 +14939,22 @@ miosa webhook rm <id> [flags]
 ```
 
 Aliases: `delete`.
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
+
+#### `miosa webhook rotate-secret`
+
+Replace the signing secret and print the new one once.
+
+```
+miosa webhook rotate-secret <id> [flags]
+```
+
+Replace the webhook's signing secret with a new random one and print it once.
+Every delivery after this is signed with the new secret, so update your
+endpoint's verification first or accept both while you switch.
 
 Flags:
 

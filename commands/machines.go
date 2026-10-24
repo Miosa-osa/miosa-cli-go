@@ -103,11 +103,26 @@ one, it does not add to it. See the time left with 'miosa usage'.
 		}),
 		sandboxVerb(Op{
 			Use: "usage [sandbox]", Short: "Show runtime, time left and estimated cost",
+			Long: `Show a sandbox's runtime, time left and estimated cost. --since (and --until,
+default now) adds what it used inside that window: run time and the credits
+billed for it. Each takes a time (2026-10-20T10:00:00Z) or a duration back
+from now (24h, 7d).
+
+  miosa usage my-box
+  miosa usage my-box --since 7d
+  miosa usage my-box --since 2026-10-20T00:00:00Z --until 2026-10-21T00:00:00Z`,
 			Method: "GET", Path: "/sandboxes/{0}/usage",
+			Flags: []Flag{
+				{Name: "since", Usage: "Start of the window: a time or a duration back (24h, 7d)"},
+				{Name: "until", Usage: "End of the window (default now): a time or a duration back"},
+			},
+			Query: usageWindowQuery,
+			After: usageWindowAfter,
 			Detail: []Col{
 				{Head: "State", Path: "state"}, {Head: "Runtime (s)", Path: "runtime_sec"}, {Head: "Time to live (s)", Path: "timeout_sec"},
 				{Head: "Remaining (ms)", Path: "timeout_remaining_ms"}, {Head: "Rate (cents/h)", Path: "billing_rate_cents_per_hour"},
 				{Head: "Paused rate (cents/h)", Path: "paused_rate_cents_per_hour"}, {Head: "Estimated cost (cents)", Path: "estimated_cost_cents"},
+				{Head: "Window", Path: "window.label"}, {Head: "Window run time (s)", Path: "window.runtime_sec"}, {Head: "Window credits", Path: "window.credits"},
 			},
 		}),
 		sandboxVerb(Op{
