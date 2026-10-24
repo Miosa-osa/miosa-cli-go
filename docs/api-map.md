@@ -422,6 +422,7 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa webhook list` | GET | `/webhooks` |
 | `miosa webhook replay` | POST | `/webhooks/{0}/deliveries/{1}/replay` |
 | `miosa webhook rm` | DELETE | `/webhooks/{0}` |
+| `miosa webhook rotate-secret` | PATCH | `/webhooks/{0}` |
 | `miosa webhook test` | POST | `/webhooks/{0}/test` |
 | `miosa webhook update` | PATCH | `/webhooks/{0}` |
 | `miosa workflow get` | GET | `/workflows/{0}` |

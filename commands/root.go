@@ -316,7 +316,7 @@ var helpGroups = []struct {
 	ID, Title string
 	Commands  []string
 }{
-	{"account", "Account and setup:", []string{"login", "onboard", "logout", "whoami", "profile", "config", "doctor", "update", "version", "open", "org", "limits", "data-retention", "feedback"}},
+	{"account", "Account and setup:", []string{"login", "onboard", "logout", "whoami", "profile", "config", "doctor", "update", "version", "open", "org", "limits", "data-retention", "feedback", "telemetry"}},
 	{"machines", "Sandboxes and computers:", []string{"create", "list", "info", "use", "destroy", "pause", "resume", "restart", "stop", "recover", "fork", "extend", "tag",
 		"exec", "ssh", "console", "files", "push", "logs", "events", "usage", "wait", "ports", "preview", "process", "desktop", "computer", "daemon", "services", "policy", "proxy", "url", "env", "snapshot", "checkpoint", "restore", "catalog", "runtimes", "device", "sandbox"}},
 	{"agents", "Agents:", []string{"prompt", "steer", "interrupt", "conversations", "run", "chat", "agent", "connections"}},

@@ -308,6 +308,7 @@ The secret is printed once. --quiet-key prints only the secret.`,
 	f.StringArrayVar(&scopes, "scope", nil, "A scope to grant, for example sandboxes:exec (repeatable)")
 	f.StringVar(&preset, "preset", "", "Permission preset: read-only, ci, agent, cli, automation or full-access")
 	f.IntVar(&expiresIn, "expires-in", 0, "Expire after this many days (default: never)")
+	f.Var(daysDuration{&expiresIn}, "ttl", "Expire after this long, in whole days: 30d, 720h (same as --expires-in)")
 	f.StringVar(&workspaceID, "workspace-id", "", "Bind the key to one workspace")
 	f.StringArrayVar(&allowedIPs, "allowed-ip", nil, "Only accept requests from this IP or CIDR (repeatable)")
 	f.IntVar(&rateLimit, "rate-limit", 0, "Requests per minute for this key")
@@ -451,6 +452,7 @@ The secret is returned only when the webhook is created.
 				{Name: "retries", Type: "int", Usage: "Delivery retries, 0-10", Field: "retry_count"},
 			},
 		},
+		webhookRotateSecretOp(hook),
 		Op{
 			Use: "rm <id>", Aliases: []string{"delete"}, Short: "Delete a webhook",
 			Method: "DELETE", Path: "/webhooks/{0}", Args: []Arg{hook}, Confirm: "Delete webhook {0}?", Done: "Deleted {0}",

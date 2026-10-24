@@ -62,3 +62,25 @@ func timeoutVar(f *pflag.FlagSet, p *time.Duration, def time.Duration, usage str
 	*p = def
 	f.Var(secondsOrDuration{d: p}, "timeout", usage+" (seconds, or a duration like 3m)")
 }
+
+// daysDuration is a flag that takes a duration (30d, 720h, or seconds) and
+// stores it as whole days, rounding up: an API key's --ttl next to --expires-in.
+type daysDuration struct{ days *int }
+
+func (v daysDuration) String() string {
+	if v.days == nil || *v.days == 0 {
+		return ""
+	}
+	return strconv.Itoa(*v.days) + "d"
+}
+
+func (v daysDuration) Set(s string) error {
+	n, err := parseSeconds(s)
+	if err != nil {
+		return err
+	}
+	*v.days = (n + 86399) / 86400
+	return nil
+}
+
+func (daysDuration) Type() string { return "duration" }
