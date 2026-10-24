@@ -308,6 +308,9 @@ service. A web or static service gets a public address unless --no-public is giv
 			if err != nil {
 				return err
 			}
+			if f.repo != "" && !serviceRepoBuilds(ctx, c.API) {
+				return repoBuildRefusal(args[0], name, "git", f.repo, f.branch)
+			}
 
 			body := map[string]any{"name": name, "kind": typ.kind}
 			if f.slug != "" {
@@ -368,6 +371,9 @@ service. A web or static service gets a public address unless --no-public is giv
 				Data projectServiceRow `json:"data"`
 			}
 			if err := c.API.Post(ctx, path, body, &created); err != nil {
+				if api.IsCode(err, sourceBuildUnavailable) {
+					return repoBuildRefusal(args[0], name, "git", f.repo, f.branch)
+				}
 				return die(err)
 			}
 			svc := created.Data
@@ -681,6 +687,18 @@ func serviceDeployCmd() *cobra.Command {
 				return err
 			}
 
+			// A repository, given here or the service's own, would sit queued until its deadline where services
+			// cannot build one.
+			repo, branch, kind := f.repo, f.branch, "git"
+			if repo == "" && f.dir == "" && f.image == "" && isRepoSource(svc.Source) {
+				repo, _ = svc.Source["ref"].(string)
+				branch, _ = svc.Source["branch"].(string)
+				kind, _ = svc.Source["type"].(string)
+			}
+			if repo != "" && !serviceRepoBuilds(ctx, c.API) {
+				return repoBuildRefusal(args[0], svc.Name, kind, repo, branch)
+			}
+
 			body := map[string]any{}
 			if f.message != "" {
 				body["message"] = f.message
@@ -714,6 +732,9 @@ func serviceDeployCmd() *cobra.Command {
 			}
 			path := servicePath(projectID, svc.ID) + "/deployments"
 			if err := c.API.Post(ctx, path, body, &queued); err != nil {
+				if api.IsCode(err, sourceBuildUnavailable) {
+					return repoBuildRefusal(args[0], svc.Name, kind, repo, branch)
+				}
 				return die(err)
 			}
 			release := queued.Data

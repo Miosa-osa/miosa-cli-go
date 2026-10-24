@@ -106,6 +106,9 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa daemon list` | GET | `/sandboxes/{0}/services` |
 | `miosa daemon logs` | GET | `/sandboxes/{0}/services/{1}/logs` |
 | `miosa daemon restart` | POST | `/sandboxes/{0}/services/{1}/restart` |
+| `miosa data-retention disable` | PUT | `/data-retention` |
+| `miosa data-retention enable` | PUT | `/data-retention` |
+| `miosa data-retention status` | GET | `/data-retention` |
 | `miosa db backup` | POST | `/databases/{0}/backups` |
 | `miosa db backups` | GET | `/databases/{0}/backups` |
 | `miosa db connection` | GET | `/databases/{0}/credentials` |

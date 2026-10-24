@@ -44,6 +44,7 @@ func newOrgCmd() *cobra.Command {
   miosa org invite dana@example.com
   miosa org caps                  per-member spend and concurrency caps
   miosa org caps set dana --spend 25 --concurrent 3
+  miosa org transfer dana@example.com   make dana the owner (the owner only)
 
 A machine keeps billing the organization it was created under, even if you
 change this later. API keys issued in an organization other than your personal
@@ -67,6 +68,7 @@ one are locked to that organization and cannot bill another.`,
 			RunE:    runOrgList,
 		},
 		newOrgBillCmd(),
+		newOrgTransferCmd(),
 		newOrgUseCmd(),
 		newOrgSelectCmd(),
 		&cobra.Command{

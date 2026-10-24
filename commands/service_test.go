@@ -66,7 +66,9 @@ const environmentsJSON = `{"data":[{"id":"e1","project_id":"11111111-1111-1111-1
 // servicesAPI is the route table for a project with one web service and one worker.
 func servicesAPI(t *testing.T) *fakeAPI {
 	return fakeRoutes(t, map[string]any{
-		"GET /projects": serviceProjectJSON,
+		// A platform whose services build repositories (miosa-compute #3433 says so with source_builds).
+		"GET /project-capabilities": `{"data":{"services_api":true,"source_builds":true}}`,
+		"GET /projects":             serviceProjectJSON,
 		"GET /projects/11111111-1111-1111-1111-111111111111/services":                                                                                              webServiceJSON,
 		"GET /projects/11111111-1111-1111-1111-111111111111/services/33333333-3333-3333-3333-333333333333":                                                         oneWebServiceJSON,
 		"POST /projects/11111111-1111-1111-1111-111111111111/services":                                                                                             oneWebServiceJSON,

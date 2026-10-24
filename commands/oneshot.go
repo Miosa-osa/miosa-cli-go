@@ -127,6 +127,7 @@ func attachOneShot(cmd *cobra.Command) {
 	f.StringVar(&workspace, "workspace", "", "Workspace slug (default: the profile's default workspace)")
 	f.StringArrayVarP(&vars, "set", "e", nil, "Environment variable KEY=VALUE for the command (repeatable)")
 	f.StringArrayVar(&tags, "meta", nil, "Metadata KEY=VALUE on the sandbox (repeatable)")
+	f.BoolVar(&failFast, "fail-fast", false, failFastUsage)
 }
 
 // runOneShot creates the sandbox, runs the command and cleans up. The cost

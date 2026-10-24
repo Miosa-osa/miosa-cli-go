@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -46,5 +48,55 @@ func TestComputerCreateSendsTheDesktopTemplateByDefault(t *testing.T) {
 	}
 	if !strings.Contains(cmd.Long, "miosa-desktop") {
 		t.Fatalf("the help should name the default template:\n%s", cmd.Long)
+	}
+}
+
+// A member or billing change refused for a missing second factor must say where
+// to turn it on: the CLI cannot enroll, and "MFA_REQUIRED" alone is not an instruction.
+func TestMfaRequiredNamesTheEnrollPage(t *testing.T) {
+	t.Setenv("MIOSA_CONSOLE_URL", "")
+	resp := &http.Response{
+		StatusCode: 403,
+		Header:     http.Header{"X-Request-Id": []string{"rid-1"}},
+		Body: io.NopCloser(strings.NewReader(`{"error":"MFA_REQUIRED","mfa_required":true,` +
+			`"enroll_path":"/account?section=security",` +
+			`"message":"Turn on two-factor authentication to continue."}`)),
+	}
+
+	got := friendlyMessage(api.ParseError(resp))
+
+	for _, want := range []string{
+		"Turn on two-factor authentication to continue.",
+		"MFA_REQUIRED",
+		"https://miosa.ai/account?section=security",
+		"request_id=rid-1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %q", want, got)
+		}
+	}
+	if strings.Contains(got, "lack the required scope") {
+		t.Fatalf("a two-factor refusal is not a scope problem: %q", got)
+	}
+}
+
+func TestMfaEnrollURLFollowsTheConsole(t *testing.T) {
+	t.Setenv("MIOSA_CONSOLE_URL", "https://console.example.com/")
+	got := mfaEnrollURL(&api.Error{Code: "MFA_REQUIRED", EnrollPath: "//evil.example"})
+	if got != "https://console.example.com/account?section=security" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// A flat error whose "error" is a sentence keeps it as the message.
+func TestFlatSentenceErrorIsNotTreatedAsACode(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: 403,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(`{"error":"not a member of this tenant","message":"ignored"}`)),
+	}
+	e := api.ParseError(resp)
+	if e.Message != "not a member of this tenant" || e.Code != "" {
+		t.Fatalf("got code=%q message=%q", e.Code, e.Message)
 	}
 }

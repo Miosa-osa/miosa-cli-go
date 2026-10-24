@@ -101,8 +101,8 @@ func (t *orgTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			fmt.Fprintln(rootCmd.ErrOrStderr(), line)
 		}
 	}
-	org, billTo := effectiveOrgFlag(), effectiveBillTo()
-	if (org == "" || orgHeaderOff) && billTo == "" {
+	org, billTo, fast := effectiveOrgFlag(), effectiveBillTo(), failFastRequest(req)
+	if (org == "" || orgHeaderOff) && billTo == "" && !fast {
 		return t.base.RoundTrip(req)
 	}
 	// RoundTrip must not modify the caller's request.
@@ -112,6 +112,9 @@ func (t *orgTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	if billTo != "" {
 		clone.Header.Set(billToHeader, billTo)
+	}
+	if fast {
+		clone.Header.Set(failFastHeader, "true")
 	}
 	return t.base.RoundTrip(clone)
 }

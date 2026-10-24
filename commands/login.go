@@ -32,6 +32,7 @@ func newLoginCmd() *cobra.Command {
 		noWait    bool
 		wait      bool
 		fresh     bool
+		method    signInMethod
 	)
 	cmd := &cobra.Command{
 		Use:   "login",
@@ -64,13 +65,20 @@ the second waits for the approval and stores the key. Running the first again
 shows the same pending link until it expires; --new starts over.
 
   miosa login --no-wait --json      # {"url": ..., "user_code": ..., "expires_at": ...}
-  miosa login --wait --json         # after the person approved`,
+  miosa login --wait --json         # after the person approved
+
+--github, --google and --email go straight to that way of signing in on the
+sign-in page; --signup opens account creation instead, for someone new to MIOSA.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if noWait && wait {
 				return usagef("--no-wait starts a sign-in and --wait finishes it; give one")
 			}
-			o := loginOptions{keyStdin: keyStdin, withKey: withKey, device: device, noBrowser: noBrowser, orgs: orgs, allOrgs: allOrgs, noWait: noWait, wait: wait, fresh: fresh}
+			m, err := method.resolve()
+			if err != nil {
+				return err
+			}
+			o := loginOptions{keyStdin: keyStdin, withKey: withKey, device: device, noBrowser: noBrowser, orgs: orgs, allOrgs: allOrgs, noWait: noWait, wait: wait, fresh: fresh, method: m}
 			if noWait {
 				return startPendingLogin(cmd, o)
 			}
@@ -86,6 +94,7 @@ shows the same pending link until it expires; --new starts over.
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Start a browser sign-in, print its link and code, and return (finish with --wait)")
 	cmd.Flags().BoolVar(&wait, "wait", false, "Finish the sign-in that --no-wait started: wait for approval, then store the key")
 	cmd.Flags().BoolVar(&fresh, "new", false, "With --no-wait: start a new sign-in instead of showing the pending one")
+	method.register(cmd)
 	return cmd
 }
 
@@ -98,6 +107,12 @@ type loginOptions struct {
 	lockedOrg string
 	// noWait starts a sign-in and returns; wait finishes the pending one.
 	noWait, wait, fresh bool
+	// method preselects how the person signs in on the page ("" = their choice).
+	method string
+	// next is the command that finishes a --no-wait sign-in.
+	next string
+	// silent leaves the final message to the caller (onboard).
+	silent bool
 }
 
 // sleepFn lets tests skip the poll interval.
@@ -126,7 +141,8 @@ var openBrowser = func(u string) error {
 	return cmd.Start()
 }
 
-func stdinIsTerminal(cmd *cobra.Command) bool {
+// stdinIsTerminal is replaced in tests.
+var stdinIsTerminal = func(cmd *cobra.Command) bool {
 	f, ok := cmd.InOrStdin().(*os.File)
 	return ok && term.IsTerminal(int(f.Fd()))
 }
@@ -209,6 +225,9 @@ func runLogin(cmd *cobra.Command, o loginOptions) error {
 	}
 	if err := storeLogin(baseURL, key, tenantSlug, slugs, grant.Key.OrgScope); err != nil {
 		return die(fmt.Errorf("saving config: %w", err))
+	}
+	if o.silent {
+		return nil
 	}
 	profile := profileLabel()
 	// A server without multi-organization sign-in ignores the request and
@@ -340,6 +359,7 @@ func deviceLogin(cmd *cobra.Command, ac *api.Client, o loginOptions) (deviceToke
 	if target == "" {
 		target = st.VerificationURI
 	}
+	target = withSignInMethod(target, o.method)
 	errOut := cmd.ErrOrStderr()
 	fmt.Fprintf(errOut, "Your sign-in code is %s\n", st.UserCode)
 	opened := false

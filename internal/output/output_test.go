@@ -60,3 +60,14 @@ func TestParseFormat(t *testing.T) {
 		t.Error("yaml must be rejected")
 	}
 }
+
+func TestJSONKeepsURLsReadable(t *testing.T) {
+	var buf bytes.Buffer
+	p := New(&buf, FormatJSON, false)
+	if err := p.JSON(map[string]string{"url": "https://miosa.ai/cli/auth?code=A&method=github"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "code=A&method=github") {
+		t.Fatalf("escaped: %s", buf.String())
+	}
+}

@@ -40,6 +40,8 @@ Regenerate with `make docs`.
 - [`miosa conversations`](#miosa-conversations) - List agent chats: last activity, prompts, running, harness/model, last prompt
 - [`miosa create`](#miosa-create) - Create a new sandbox
 - [`miosa daemon`](#miosa-daemon) - Run named long-lived processes (daemons) in a sandbox
+- [`miosa dashboard`](#miosa-dashboard) - Open the dashboard, already signed in
+- [`miosa data-retention`](#miosa-data-retention) - Keep or delete a sandbox's data when it stops
 - [`miosa db`](#miosa-db) - Managed databases
 - [`miosa deploy`](#miosa-deploy) - Create and operate deployments
 - [`miosa desktop`](#miosa-desktop) - Start and open a sandbox's remote desktop
@@ -80,6 +82,7 @@ Regenerate with `make docs`.
 - [`miosa module`](#miosa-module) - Apply a manifest of resources to a workspace
 - [`miosa move`](#miosa-move) - Move a resource to another workspace
 - [`miosa notifications`](#miosa-notifications) - Your notifications
+- [`miosa onboard`](#miosa-onboard) - Get set up: sign in, then only what the account still lacks
 - [`miosa open`](#miosa-open) - Open the web console (or print its URL)
 - [`miosa optimal`](#miosa-optimal) - Chat with Optimal and manage its chats from the terminal
 - [`miosa org`](#miosa-org) - The organization you work in, who pays for new machines, members and limits
@@ -2905,6 +2908,7 @@ Flags:
 - `--count int` - Create this many identical sandboxes in one batch.
 - `--env string` - Environment the sandbox starts from (default: your default environment).
 - `--expires string` - Governance deadline: 24h, 7d or an RFC 3339 time (purpose=test defaults to 24h).
+- `--fail-fast` - Start only if a machine is ready now; otherwise fail at once and start, bill and count nothing.
 - `--from string` - Start from a snapshot: its id, or the name of a named snapshot.
 - `--idle-timeout string` - Pause after this much inactivity: seconds, 15m, 1h.
 - `--meta stringArray` - Metadata, KEY=VALUE (repeatable).
@@ -3010,6 +3014,88 @@ Stop a daemon by killing its process.
 Start it again with 'daemon restart'.
 
 Aliases: `delete`, `rm`.
+
+### `miosa dashboard`
+
+Open the dashboard, already signed in.
+
+```
+miosa dashboard [flags]
+```
+
+Open the MIOSA dashboard in your browser, signed in as you, with a one-time
+link that works once within 5 minutes.
+Your second factor is still asked for
+if you have one.
+
+It needs a 'miosa login' session.
+With any other key (MIOSA_API_KEY, --api-key)
+it opens the dashboard's sign-in page instead.
+
+```
+  miosa dashboard
+  miosa dashboard --print   # print the one-time link instead of opening it
+```
+
+Flags:
+
+- `--print` - Print the link instead of opening it.
+
+### `miosa data-retention`
+
+Keep or delete a sandbox's data when it stops.
+
+```
+miosa data-retention
+```
+
+An organization keeps a stopped sandbox's disk (mode "keep", the default), so it can be
+resumed later.
+With zero data retention (mode "delete_on_stop") nothing is kept once a
+sandbox stops: a stop destroys the sandbox and its disk, a sandbox stopped for idleness
+is destroyed shortly after, and pauses and snapshots are refused.
+Only organization
+owners and administrators can change it.
+
+```
+  miosa data-retention status
+  miosa data-retention enable --yes
+  miosa data-retention disable
+```
+
+#### `miosa data-retention disable`
+
+Keep a stopped sandbox's disk again (the default).
+
+```
+miosa data-retention disable
+```
+
+#### `miosa data-retention enable`
+
+Delete a sandbox's data when it stops (zero retention).
+
+```
+miosa data-retention enable [flags]
+```
+
+Turn on zero data retention.
+From then on a stop destroys the sandbox and its disk,
+and pauses and snapshots are refused.
+Sandboxes already stopped are not touched.
+--yes is required.
+
+Flags:
+
+- `-y, --yes` - Confirm that stops will destroy sandboxes.
+
+#### `miosa data-retention status`
+
+Show the organization's data retention.
+
+```
+miosa data-retention status
+```
 
 ### `miosa db`
 
@@ -3360,7 +3446,7 @@ Flags:
 - `--no-promote` - Upload the version without making it live; prints the version to promote later.
 - `--no-wait` - Return as soon as the deployment is created instead of waiting until it is live.
 - `--port int` - The port the app serves on (--from-sandbox, or --dir with --run-command).
-- `--project string` - With --forge: the project to link the repository through (one repository per project).
+- `--project string` - Project to put the deployment in (name, slug or id); with --forge, the project to link the repository through (one per project).
 - `--root-directory string` - With --forge: the app's directory inside the repository.
 - `--run-command string` - Command the app starts with (makes the publish dynamic).
 - `--type string` - Runtime to publish as: static, dynamic or docker_deploy (default: static, or dynamic with --run-command).
@@ -7901,6 +7987,7 @@ the fork stays at its source's size.
 Flags:
 
 - `--cpu int` - Number of vCPUs of the fork.
+- `--fail-fast` - Start only if a machine is ready now; otherwise fail at once and start, bill and count nothing.
 - `--memory int` - Memory of the fork in MB.
 - `--name string` - Name of the fork (default: derived from the source's).
 - `--template string` - Template for the fork.
@@ -9903,17 +9990,24 @@ shows the same pending link until it expires; --new starts over.
 ```
   miosa login --no-wait --json      # {"url": ..., "user_code": ..., "expires_at": ...}
   miosa login --wait --json         # after the person approved
+
 ```
+--github, --google and --email go straight to that way of signing in on the
+sign-in page; --signup opens account creation instead, for someone new to MIOSA.
 
 Flags:
 
 - `--all-orgs` - Pre-select every organization on the approval page.
 - `--device` - Use the browser flow even when stdin is not a terminal.
+- `--email` - Sign in with your email address.
+- `--github` - Sign in with GitHub.
+- `--google` - Sign in with Google.
 - `--key-stdin` - Read the API key from standard input.
 - `--new` - With --no-wait: start a new sign-in instead of showing the pending one.
 - `--no-browser` - Print the sign-in URL instead of opening a browser.
 - `--no-wait` - Start a browser sign-in, print its link and code, and return (finish with --wait).
 - `--org stringArray` - Pre-select this organization on the approval page (repeatable).
+- `--signup` - Create a MIOSA account instead of signing in to one.
 - `--wait` - Finish the sign-in that --no-wait started: wait for approval, then store the key.
 - `--with-key` - Paste an API key instead of using the browser.
 
@@ -10482,6 +10576,49 @@ Count unread notifications.
 miosa notifications unread
 ```
 
+### `miosa onboard`
+
+Get set up: sign in, then only what the account still lacks.
+
+```
+miosa onboard [flags]
+```
+
+Walks a new machine or a new account to a working setup, and is safe to run
+again: each step that is already done is only reported.
+
+```
+  1. Sign in, when this CLI is not signed in (the browser flow of 'miosa login').
+  2. Show the organization and the workspace new sandboxes land in.
+  3. Show the plan. On Free, offer the paid plans; picking one opens its
+     checkout and waits for the payment (Ctrl-C stops waiting, not the payment).
+
+  miosa onboard                       # interactive
+  miosa onboard --github              # sign in with GitHub
+  miosa onboard --signup              # create an account first
+  miosa onboard --plan developer      # go straight to that plan's checkout
+
+```
+For an agent, onboarding is two steps like 'login': the first prints the link
+and code for a person to approve and returns, the second waits for the approval
+and finishes the rest.
+
+```
+  miosa onboard --json                # {"status":"pending","url":...,"next":"miosa onboard --wait"}
+  miosa onboard --wait --json         # after the person approved
+```
+
+Flags:
+
+- `--email` - Sign in with your email address.
+- `--github` - Sign in with GitHub.
+- `--google` - Sign in with Google.
+- `--no-open` - Print links instead of opening a browser.
+- `--no-wait` - Return once the checkout exists, without waiting for the payment.
+- `--plan string` - Plan to subscribe to (e.g. developer); opens its checkout.
+- `--signup` - Create a MIOSA account instead of signing in to one.
+- `--wait` - Finish the sign-in a first 'onboard' started, then the rest.
+
 ### `miosa open`
 
 Open the web console (or print its URL).
@@ -10729,6 +10866,7 @@ Show and choose the organization that pays for new sandboxes and computers.
   miosa org invite dana@example.com
   miosa org caps                  per-member spend and concurrency caps
   miosa org caps set dana --spend 25 --concurrent 3
+  miosa org transfer dana@example.com   make dana the owner (the owner only)
 
 ```
 A machine keeps billing the organization it was created under, even if you
@@ -10934,6 +11072,29 @@ Examples:
 miosa org select
   miosa org select --all
 ```
+
+#### `miosa org transfer`
+
+Make another member the owner of the organization.
+
+```
+miosa org transfer <member> [flags]
+```
+
+Hand the organization's ownership to another member, named by email or user
+id.
+Only the current owner can do this, and only the new owner can hand it
+back.
+It asks you to type the organization's slug unless --yes.
+
+```
+  miosa org transfer dana@example.com
+  miosa --org acme org transfer dana@example.com --yes
+```
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
 
 #### `miosa org use`
 
@@ -11885,6 +12046,7 @@ until it accepts commands.
 
 Flags:
 
+- `--fail-fast` - Start only if a machine is ready now; otherwise fail at once and start, bill and count nothing.
 - `--wait` - Wait until it is ready for commands.
 
 ### `miosa rollback`
@@ -11943,6 +12105,7 @@ Aliases: `runs`.
 Flags:
 
 - `--cwd string` - Working directory for the command (default: the pushed directory).
+- `--fail-fast` - Start only if a machine is ready now; otherwise fail at once and start, bill and count nothing.
 - `--keep` - Keep the sandbox after the command (default: delete it).
 - `--meta stringArray` - Metadata KEY=VALUE on the sandbox (repeatable).
 - `--name string` - Name for the sandbox.

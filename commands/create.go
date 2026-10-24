@@ -100,6 +100,7 @@ have settled and exits non-zero if any failed. 'miosa batch' manages the batch.
 	cmd.Flags().IntVar(&opts.count, "count", 0, "Create this many identical sandboxes in one batch")
 	cmd.Flags().StringVar(&opts.from, "from", "", "Start from a snapshot: its id, or the name of a named snapshot")
 	cmd.Flags().IntVar(&opts.concurrency, "concurrency", 0, "With --count: how many to create at once (default: the server's)")
+	cmd.Flags().BoolVar(&failFast, "fail-fast", false, failFastUsage)
 	envFlags.bind(cmd, "sandbox")
 
 	return cmd
@@ -107,6 +108,9 @@ have settled and exits non-zero if any failed. 'miosa batch' manages the batch.
 
 func runCreate(cmd *cobra.Command, args []string, size, template, workspace, runtime string, envFlags machineEnvFlags, opts createOptions) error {
 	p := printerFor(cmd)
+	if failFast && opts.count > 0 {
+		return usagef("--fail-fast starts one machine; it does not combine with --count")
+	}
 	if opts.from != "" {
 		return createFromSnapshot(cmd, opts)
 	}

@@ -90,6 +90,9 @@ type Error struct {
 	// Details is the decoded "details" object, if the server sent one.
 	Details map[string]any
 	Body    []byte
+	// EnrollPath is the console page that turns on two-factor, sent with a
+	// 403 MFA_REQUIRED (e.g. /account?section=security).
+	EnrollPath string
 	// Path is the request path the API refused (e.g. /api/v1/storage/my-bucket),
 	// so a hint can name the command that lists that kind of resource.
 	Path string
@@ -162,6 +165,20 @@ func IsCode(err error, code string) bool {
 	return errors.As(err, &e) && strings.EqualFold(e.Code, code)
 }
 
+// isCodeLike reports whether s is an UPPER_SNAKE machine code such as
+// MFA_REQUIRED, as opposed to a sentence.
+func isCodeLike(s string) bool {
+	if len(s) < 2 || s[0] < 'A' || s[0] > 'Z' {
+		return false
+	}
+	for _, r := range s {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
 // ParseError builds an *Error from a response. It reads and closes the body.
 func ParseError(resp *http.Response) *Error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -193,7 +210,16 @@ func ParseError(resp *http.Response) *Error {
 		case string:
 			e.Message = v
 			e.Code, _ = raw["code"].(string)
+			// {"error":"MFA_REQUIRED","message":"Turn on ..."}: the string is the
+			// code and the sentence is in "message".
+			if m, ok := raw["message"].(string); ok && m != "" && isCodeLike(v) {
+				if e.Code == "" {
+					e.Code = v
+				}
+				e.Message = m
+			}
 		}
+		e.EnrollPath, _ = raw["enroll_path"].(string)
 		if e.Message == "" {
 			if m, ok := raw["message"].(string); ok {
 				e.Message = m

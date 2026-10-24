@@ -665,6 +665,26 @@ func railwayApply(ctx context.Context, cmd *cobra.Command, f *railwayImportFlags
 		}
 	}
 
+	// Variables go in one write per service (a deployment takes them on create).
+	pending := map[string]map[string]any{}
+	order := []string{}
+	for _, a := range plan.Actions {
+		if a.Op != "variable.set" || a.Variable == nil {
+			continue
+		}
+		if pending[a.Service] == nil {
+			pending[a.Service] = map[string]any{}
+			order = append(order, a.Service)
+		}
+		value := ""
+		if a.Variable.HasValue {
+			value = a.Variable.Value
+		}
+		pending[a.Service][a.Variable.Name] = value
+	}
+
+	repoServices := serviceRepoBuilds(ctx, c.API)
+	repos := newImportedRepo()
 	serviceIDs := map[string]string{}
 	for _, a := range plan.Actions {
 		if a.Op != "service.create" {
@@ -672,6 +692,12 @@ func railwayApply(ctx context.Context, cmd *cobra.Command, f *railwayImportFlags
 		}
 		if projectID == "" {
 			return usagef("the plan creates a service before its project")
+		}
+		if goesToDeployment(a, repoServices) {
+			if err := applyRepoDeployment(ctx, c, p, plan, projectID, a, pending[a.Name], created, repos, record); err != nil {
+				return applyFailed(path, err)
+			}
+			continue
 		}
 		if id := created[a.Op+"|"+a.Name]; id != "" {
 			serviceIDs[a.Name] = id
@@ -763,23 +789,6 @@ func railwayApply(ctx context.Context, cmd *cobra.Command, f *railwayImportFlags
 		}
 	}
 
-	// Variables go in one write per service.
-	pending := map[string]map[string]any{}
-	order := []string{}
-	for _, a := range plan.Actions {
-		if a.Op != "variable.set" || a.Variable == nil {
-			continue
-		}
-		if pending[a.Service] == nil {
-			pending[a.Service] = map[string]any{}
-			order = append(order, a.Service)
-		}
-		value := ""
-		if a.Variable.HasValue {
-			value = a.Variable.Value
-		}
-		pending[a.Service][a.Variable.Name] = value
-	}
 	for _, name := range order {
 		serviceID := serviceIDs[name]
 		if serviceID == "" || projectID == "" {
@@ -798,6 +807,14 @@ func railwayApply(ctx context.Context, cmd *cobra.Command, f *railwayImportFlags
 		if a.Op != "domain.custom" {
 			continue
 		}
+		if deploymentID := repos.deployments[a.Service]; deploymentID != "" {
+			if err := addDeploymentDomain(ctx, c, deploymentID, a.Domains[0]); err != nil {
+				repos.byHand = append(repos.byHand, fmt.Sprintf("miosa deploy domain-add %s %s", shellArg(a.Service), a.Domains[0]))
+				continue
+			}
+			p.Line("added custom domain %s to %s", a.Domains[0], a.Service)
+			continue
+		}
 		serviceID := serviceIDs[a.Service]
 		if serviceID == "" || projectID == "" || !domainsLive {
 			printDomainByHand(p, plan, a)
@@ -813,7 +830,7 @@ func railwayApply(ctx context.Context, cmd *cobra.Command, f *railwayImportFlags
 		p.Line("added custom domain %s to %s", a.Domains[0], a.Service)
 	}
 
-	renderApplySummary(p, plan, path)
+	renderApplySummary(p, plan, path, repos)
 	return nil
 }
 
@@ -827,13 +844,17 @@ func printDomainByHand(p printerLike, plan railway.Plan, a railway.Action) {
 
 // renderApplySummary is the one screen a user reads after an apply: what exists,
 // what still needs a value, and the exact next commands.
-func renderApplySummary(p printerLike, plan railway.Plan, statePath string) {
-	var services, databases, targets []string
+func renderApplySummary(p printerLike, plan railway.Plan, statePath string, repos *importedRepo) {
+	var services, deployments, databases, targets []string
 	var needs []string
 	for _, a := range plan.Actions {
 		switch a.Op {
 		case "service.create":
-			services = append(services, a.Name)
+			if repos.deployments[a.Name] != "" {
+				deployments = append(deployments, a.Name)
+			} else if !repos.wasSkipped(a.Name) {
+				services = append(services, a.Name)
+			}
 		case "database.create":
 			databases = append(databases, a.Name)
 		case "database.service":
@@ -851,6 +872,12 @@ func renderApplySummary(p printerLike, plan railway.Plan, statePath string) {
 	if len(services) > 0 {
 		p.Line("  services:  %s", strings.Join(services, ", "))
 	}
+	if len(deployments) > 0 {
+		p.Line("  deployments (repositories, building now): %s", strings.Join(deployments, ", "))
+	}
+	for _, why := range repos.skipped {
+		p.Line("  not created: %s", why)
+	}
 	if len(databases) > 0 {
 		p.Line("  databases: %s", strings.Join(databases, ", "))
 	}
@@ -865,16 +892,27 @@ func renderApplySummary(p printerLike, plan railway.Plan, statePath string) {
 	if len(needs) > 0 {
 		p.Line("  set the new secrets (never reuse the Railway value):")
 		for _, n := range needs {
-			if i := strings.IndexByte(n, '.'); i > 0 {
+			i := strings.IndexByte(n, '.')
+			switch {
+			case i <= 0:
+			case repos.deployments[n[:i]] != "":
+				p.Line("    miosa deploy env-set %s --set %s=<new value>", shellArg(n[:i]), n[i+1:])
+			default:
 				p.Line("    miosa service vars set %s %s %s=<new value>", plan.Target.ProjectName, n[:i], n[i+1:])
 			}
 		}
 	}
+	for _, line := range repos.byHand {
+		p.Line("  %s", line)
+	}
 	for _, name := range services {
 		p.Line("  miosa service deploy %s %s", plan.Target.ProjectName, name)
 	}
+	for _, name := range deployments {
+		p.Line("  miosa deploy get %s", shellArg(name))
+	}
 	for _, a := range plan.Actions {
-		if a.Op == "domain.custom" {
+		if a.Op == "domain.custom" && repos.deployments[a.Service] == "" && !repos.wasSkipped(a.Service) {
 			p.Line("  miosa service domain enable %s %s --domain %s", plan.Target.ProjectName, a.Service, a.Domains[0])
 		}
 	}
@@ -988,6 +1026,8 @@ func railwayCleanup(ctx context.Context, cmd *cobra.Command, f *railwayImportFla
 			continue
 		case "service.create":
 			err = c.API.Delete(ctx, servicePath(state.ProjectID, ref.ID), nil, nil)
+		case repoDeploymentOp:
+			err = c.API.Delete(ctx, "/deployments/"+url.PathEscape(ref.ID), nil, nil)
 		case "target.create":
 			err = c.API.Delete(ctx, "/projects/"+url.PathEscape(state.ProjectID)+"/environments/"+url.PathEscape(ref.ID), nil, nil)
 		case "database.create":
