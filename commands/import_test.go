@@ -164,6 +164,8 @@ func TestImportRailwayApplyCreatesInOrderAndRecordsState(t *testing.T) {
 	f := newFakeAPI(t, func(c call) (int, string) {
 		created = append(created, c.Method+" "+c.Path)
 		switch {
+		case c.is("GET", "/project-capabilities"):
+			return 200, `{"data":{"source_builds":true}}`
 		case c.is("GET", "/projects"):
 			return 200, `{"data":[]}`
 		case c.is("POST", "/projects"):
@@ -296,6 +298,8 @@ func TestImportRailwayApplyEndsWithTheNextCommands(t *testing.T) {
 
 	f := newFakeAPI(t, func(c call) (int, string) {
 		switch {
+		case c.is("GET", "/project-capabilities"):
+			return 200, `{"data":{"source_builds":true}}`
 		case c.is("GET", "/projects"):
 			return 200, `{"data":[]}`
 		case c.is("POST", "/projects"):

@@ -29,8 +29,9 @@ until it accepts commands.
 
   miosa resume my-box --wait`,
 			Method: "POST", Path: "/sandboxes/{0}/resume", Detail: stateRows, Done: "Resumed {0}",
-			Flags: []Flag{{Name: "wait", Type: "bool", Usage: "Wait until it is ready for commands", In: "local"}},
-			After: waitAfterCreate,
+			Flags:  []Flag{{Name: "wait", Type: "bool", Usage: "Wait until it is ready for commands", In: "local"}, failFastFlag},
+			Before: setFailFast,
+			After:  waitAfterCreate,
 		}),
 		sandboxVerb(Op{
 			Use: "stop [sandbox]", Short: "Stop a sandbox, keeping its disk",
@@ -65,9 +66,10 @@ the fork stays at its source's size.
 				{Name: "var", Short: "e", Type: "strings", Usage: "Variable KEY=VALUE for the fork only (repeatable)", In: "local"},
 				{Name: "cpu", Type: "int", Usage: "Number of vCPUs of the fork", In: "local"},
 				{Name: "memory", Type: "int", Usage: "Memory of the fork in MB", In: "local"},
+				failFastFlag,
 			},
 			Body:   durationBody("timeout_sec"),
-			Before: checkForkVars,
+			Before: before(checkForkVars, setFailFast),
 			After:  forkAfter,
 			Detail: []Col{{Head: "Fork", Path: "id"}, {Head: "State", Path: "state"}, {Head: "Name", Path: "name"}},
 		}),

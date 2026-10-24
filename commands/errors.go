@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -195,6 +196,11 @@ func friendlyMessage(err error) string {
 		case 402:
 			return msg + " - add credits at https://miosa.ai/billing"
 		case 403:
+			// A sensitive change (members, billing) needs two-factor on the account:
+			// say where to turn it on, since a terminal cannot enroll.
+			if strings.EqualFold(ae.Code, "MFA_REQUIRED") {
+				return msg + " - turn on two-factor at " + mfaEnrollURL(ae) + ", then run this again"
+			}
 			// A refused --org already says which org the key acts in.
 			if strings.EqualFold(ae.Code, "ORG_MISMATCH") || strings.EqualFold(ae.Code, "NOT_A_MEMBER") {
 				return msg
@@ -224,6 +230,20 @@ func friendlyMessage(err error) string {
 	}
 	msg := err.Error()
 	return strings.TrimPrefix(msg, "miosa: ")
+}
+
+// mfaEnrollURL is the console page where a person turns on two-factor: the path
+// the API named (enroll_path), on the console for MIOSA_CONSOLE_URL or miosa.ai.
+func mfaEnrollURL(ae *api.Error) string {
+	path := "/account?section=security"
+	if p := ae.EnrollPath; strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "//") {
+		path = p
+	}
+	base := "https://miosa.ai"
+	if v := strings.TrimRight(os.Getenv("MIOSA_CONSOLE_URL"), "/"); v != "" {
+		base = v
+	}
+	return base + path
 }
 
 // contextPrefix returns the text a caller wrapped around the API error

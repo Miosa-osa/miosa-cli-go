@@ -144,6 +144,7 @@ func ResetForTest() {
 	_ = pf.Set("bill-to", "")
 	actingOrgChecked = false
 	whereItLandsShown = false
+	failFast = false
 	_ = pf.Set("retries", "0")
 	_ = pf.Set("no-update", "true")
 	// Reset local flags on all subcommands so flag values don't leak between tests.
@@ -190,6 +191,7 @@ func init() {
 	// Register all subcommands.
 	rootCmd.AddCommand(
 		newLoginCmd(),
+		newOnboardCmd(),
 		newLogoutCmd(),
 		newCreateCmd(),
 		newListCmd(),
@@ -225,6 +227,7 @@ func init() {
 		newConfigCmd(),
 		newDoctorCmd(),
 		newOpenCmd(),
+		newDashboardCmd(),
 		newSandboxCmd(),
 		newAdminCmd(),
 		newLinkCmd(),
@@ -313,7 +316,7 @@ var helpGroups = []struct {
 	ID, Title string
 	Commands  []string
 }{
-	{"account", "Account and setup:", []string{"login", "logout", "whoami", "profile", "config", "doctor", "update", "version", "open", "org", "limits", "feedback"}},
+	{"account", "Account and setup:", []string{"login", "onboard", "logout", "whoami", "profile", "config", "doctor", "update", "version", "open", "org", "limits", "data-retention", "feedback"}},
 	{"machines", "Sandboxes and computers:", []string{"create", "list", "info", "use", "destroy", "pause", "resume", "restart", "stop", "recover", "fork", "extend", "tag",
 		"exec", "ssh", "console", "files", "push", "logs", "events", "usage", "wait", "ports", "preview", "process", "desktop", "computer", "daemon", "services", "policy", "proxy", "url", "env", "snapshot", "checkpoint", "restore", "catalog", "runtimes", "device", "sandbox"}},
 	{"agents", "Agents:", []string{"prompt", "steer", "interrupt", "conversations", "run", "chat", "agent", "connections"}},

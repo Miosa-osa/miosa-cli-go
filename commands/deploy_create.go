@@ -98,7 +98,7 @@ func bindDeploySourceFlags(cmd *cobra.Command, f *deployFlags, createOnly bool) 
 		fs.StringVar(&f.runCommand, "run-command", "", "Command the app starts with (makes the publish dynamic)")
 		fs.StringVar(&f.buildCommand, "build-command", "", "Build command (git or Forge source, or a --from-sandbox server publish)")
 		fs.StringVar(&f.forge, "forge", "", "Deploy this Forge repository (id, org/name or name); builds --branch and redeploys on every push")
-		fs.StringVar(&f.project, "project", "", "With --forge: the project to link the repository through (one repository per project)")
+		fs.StringVar(&f.project, "project", "", "Project to put the deployment in (name, slug or id); with --forge, the project to link the repository through (one per project)")
 		fs.BoolVar(&f.noAuto, "no-auto", false, "With --forge: do not build automatically on pushes to the branch")
 		fs.StringVar(&f.rootDir, "root-directory", "", "With --forge: the app's directory inside the repository")
 		fs.StringVar(&f.workspace, "workspace", "", workspaceFlagUsage)
@@ -532,6 +532,14 @@ func deployFromGit(ctx context.Context, c *client.Client, p *output.Printer, f *
 	}
 	if f.workspaceID != "" {
 		body["workspace_id"] = f.workspaceID
+	}
+	// --project puts the deployment in a project, where it shows on the canvas like + Add > GitHub repository.
+	if f.project != "" {
+		projectID, err := resolveServiceProject(ctx, c.API, f.project)
+		if err != nil {
+			return nil, err
+		}
+		body["project_id"] = projectID
 	}
 	if id, name, found, err := existingDeploymentByName(ctx, c, f.name); err != nil {
 		return nil, err

@@ -5,6 +5,8 @@ import (
 	"io"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/Miosa-osa/miosa-cli-go/internal/terminal"
 )
 
@@ -181,4 +183,18 @@ func SetTopupWaitForTest(every, within time.Duration) func() {
 	old := topupWait
 	topupWait.every, topupWait.within = every, within
 	return func() { topupWait = old }
+}
+
+// SetOnboardWaitForTest shortens how long onboard waits for a plan checkout.
+func SetOnboardWaitForTest(every, within time.Duration) func() {
+	old := onboardWait
+	onboardWait.every, onboardWait.within = every, within
+	return func() { onboardWait = old }
+}
+
+// SetStdinTerminalForTest makes the CLI treat standard input as a terminal or not.
+func SetStdinTerminalForTest(on bool) func() {
+	old := stdinIsTerminal
+	stdinIsTerminal = func(*cobra.Command) bool { return on }
+	return func() { stdinIsTerminal = old }
 }

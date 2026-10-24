@@ -47,6 +47,8 @@ func (p *Printer) JSONMode() bool { return p.format == FormatJSON }
 func (p *Printer) JSON(v interface{}) error {
 	enc := json.NewEncoder(p.w)
 	enc.SetIndent("", "  ")
+	// URLs keep their "&" (not "\u0026"): people read this output too.
+	enc.SetEscapeHTML(false)
 	return enc.Encode(Envelope(v))
 }
 
@@ -110,7 +112,9 @@ func Envelope(v interface{}) interface{} {
 
 // JSONLine prints v as one compact JSON line (for streams).
 func (p *Printer) JSONLine(v interface{}) error {
-	return json.NewEncoder(p.w).Encode(v)
+	enc := json.NewEncoder(p.w)
+	enc.SetEscapeHTML(false)
+	return enc.Encode(v)
 }
 
 // Table prints a compact table: a header row and aligned columns, no rules.

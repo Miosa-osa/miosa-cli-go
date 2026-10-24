@@ -108,6 +108,7 @@ func startPendingLogin(cmd *cobra.Command, o loginOptions) error {
 		if url == "" {
 			url = st.VerificationURI
 		}
+		url = withSignInMethod(url, o.method)
 		expires := time.Duration(st.ExpiresIn) * time.Second
 		if expires <= 0 {
 			expires = 10 * time.Minute
@@ -118,9 +119,13 @@ func startPendingLogin(cmd *cobra.Command, o loginOptions) error {
 			return die(fmt.Errorf("saving the pending sign-in: %w", err))
 		}
 	}
+	next := o.next
+	if next == "" {
+		next = "miosa login --wait"
+	}
 	p := printerFor(cmd)
 	if isJSON() {
-		out := map[string]any{"status": "pending", "url": pl.URL, "user_code": pl.UserCode, "expires_at": pl.ExpiresAt.Format(time.RFC3339), "next": "miosa login --wait"}
+		out := map[string]any{"status": "pending", "url": pl.URL, "user_code": pl.UserCode, "expires_at": pl.ExpiresAt.Format(time.RFC3339), "next": next}
 		if replaced {
 			out["event"] = "login_replaced"
 		}
@@ -128,7 +133,7 @@ func startPendingLogin(cmd *cobra.Command, o loginOptions) error {
 	}
 	p.Line("Ask the person who owns the account to open this link and confirm the code %s:", pl.UserCode)
 	p.Line("  %s", pl.URL)
-	p.Line("It expires at %s. Then run: miosa login --wait", pl.ExpiresAt.Local().Format("15:04"))
+	p.Line("It expires at %s. Then run: %s", pl.ExpiresAt.Local().Format("15:04"), next)
 	return nil
 }
 
