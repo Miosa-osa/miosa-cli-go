@@ -324,6 +324,8 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa notifications read` | POST | `/notifications/{0}/read` |
 | `miosa notifications read-all` | POST | `/notifications/read-all` |
 | `miosa notifications unread` | GET | `/notifications/unread-count` |
+| `miosa org default-visibility set` | PUT | `/settings/sandbox-visibility` |
+| `miosa org default-visibility show` | GET | `/settings/sandbox-visibility` |
 | `miosa pause` | POST | `/sandboxes/{0}/pause` |
 | `miosa ports` | GET | `/sandboxes/{0}/ports` |
 | `miosa preview create` | POST | `/sandboxes/{0}/previews` |
@@ -375,6 +377,7 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa service-account new` | POST | `/service-accounts` |
 | `miosa service-account rm` | DELETE | `/service-accounts/{0}` |
 | `miosa service-account update` | PATCH | `/service-accounts/{0}` |
+| `miosa share` | POST | `/sandboxes/{0}/share` |
 | `miosa snapshot share` | POST | `/snapshots/{0}/shares` |
 | `miosa snapshot shares` | GET | `/snapshots/{0}/shares` |
 | `miosa snapshot unshare` | DELETE | `/snapshots/{0}/shares/{1}` |
@@ -401,6 +404,7 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa token list` | GET | `/tokens/scoped` |
 | `miosa token revoke` | DELETE | `/tokens/scoped/{0}` |
 | `miosa top` | GET | `/sandboxes/{0}/top` |
+| `miosa unshare` | POST | `/sandboxes/{0}/unshare` |
 | `miosa usage` | GET | `/sandboxes/{0}/usage` |
 | `miosa volume attach` | POST | `/computers/{1}/volumes` |
 | `miosa volume attachments` | GET | `/volumes/{0}/attachments` |

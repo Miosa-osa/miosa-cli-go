@@ -114,6 +114,7 @@ Regenerate with `make docs`.
 - [`miosa secret`](#miosa-secret) - Organization and workspace secrets
 - [`miosa service`](#miosa-service) - Create and operate web services, workers, private services and static sites
 - [`miosa service-account`](#miosa-service-account) - Non-human accounts that own API keys for pipelines and programs
+- [`miosa share`](#miosa-share) - Let every member of the organization use a sandbox
 - [`miosa snapshot`](#miosa-snapshot) - Browse, name, fork and delete snapshots of sandboxes and computers
 - [`miosa ssh`](#miosa-ssh) - Open an SSH session in a sandbox, or run a command over it
 - [`miosa steer`](#miosa-steer) - Send the agent running in a sandbox a new message without stopping it
@@ -125,6 +126,7 @@ Regenerate with `make docs`.
 - [`miosa token`](#miosa-token) - Mint short-lived tokens for your end users
 - [`miosa top`](#miosa-top) - List every process in a sandbox, busiest first, even while it is stopped
 - [`miosa unlink`](#miosa-unlink) - Detach this directory from its project
+- [`miosa unshare`](#miosa-unshare) - Make a sandbox private to you and the organization's admins
 - [`miosa up`](#miosa-up) - Deploy this directory to the linked service
 - [`miosa update`](#miosa-update) - Update the miosa CLI to the latest release
 - [`miosa url`](#miosa-url) - Print the public URL for a sandbox
@@ -2922,6 +2924,7 @@ Flags:
 - `--template string` - Sandbox template, for example miosa-sandbox, nextjs, static-html, or fastapi-auth. (default `miosa-sandbox`)
 - `--ttl string` - Time to live: seconds, 90m, 2h or 2d (default: the plan's).
 - `-e, --var stringArray` - Variable for this sandbox only, KEY=VALUE (repeatable).
+- `--visibility string` - Who in the organization may use it: shared or private (default: the organization's, see 'miosa org default-visibility').
 - `--wait` - Wait until the sandbox is ready for commands.
 - `--wait-timeout duration` - How long --wait may take. (default `3m0s`)
 - `--workspace string` - Workspace slug to assign the sandbox to (default: the profile's default workspace).
@@ -10869,6 +10872,7 @@ Show and choose the organization that pays for new sandboxes and computers.
   miosa org caps                  per-member spend and concurrency caps
   miosa org caps set dana --spend 25 --concurrent 3
   miosa org transfer dana@example.com   make dana the owner (the owner only)
+  miosa org default-visibility set private   new sandboxes start private
 
 ```
 A machine keeps billing the organization it was created under, even if you
@@ -10978,6 +10982,42 @@ Examples:
 ```
 miosa org caps set dana@example.com --spend 25 --concurrent 3
   miosa org caps set dana@example.com --no-spend-cap
+```
+
+#### `miosa org default-visibility`
+
+Whether new sandboxes start shared or private.
+
+```
+miosa org default-visibility
+```
+
+New sandboxes start shared: every member of the organization may use them.
+An
+organization owner or admin can make them start private instead.
+Existing sandboxes keep
+theirs; change one with 'miosa share' or 'miosa unshare', or pick at create time with
+'miosa create --visibility private'.
+
+```
+  miosa org default-visibility show
+  miosa org default-visibility set private
+```
+
+##### `miosa org default-visibility set`
+
+Set the visibility new sandboxes start with (owners and admins).
+
+```
+miosa org default-visibility set <shared|private>
+```
+
+##### `miosa org default-visibility show`
+
+Show the visibility new sandboxes start with.
+
+```
+miosa org default-visibility show
 ```
 
 #### `miosa org diff`
@@ -13491,6 +13531,28 @@ Flags:
 - `--description string` - New description.
 - `--name string` - New name.
 
+### `miosa share`
+
+Let every member of the organization use a sandbox.
+
+```
+miosa share [sandbox]
+```
+
+Make a private sandbox shared: every member of the organization may run commands in it,
+open its terminal, copy files and SSH in again.
+
+Sharing a sandbox that was private withholds its creator's personal logins (their GitHub
+token and a MIOSA key in their name) from its next start, because other people can now
+use it.
+A running sandbox keeps what it has until it is stopped and resumed.
+Only its
+creator or an organization owner or admin can share it.
+
+```
+  miosa share my-box
+```
+
 ### `miosa snapshot`
 
 Browse, name, fork and delete snapshots of sandboxes and computers.
@@ -14339,6 +14401,26 @@ Detach this directory from its project.
 
 ```
 miosa unlink
+```
+
+### `miosa unshare`
+
+Make a sandbox private to you and the organization's admins.
+
+```
+miosa unshare [sandbox]
+```
+
+Make a sandbox private.
+Only its creator and organization owners and admins may use it;
+other members can still see it in lists and stop or pause it.
+SSH keys other members
+added to it are revoked.
+
+Only its creator or an organization owner or admin can unshare it.
+
+```
+  miosa unshare my-box
 ```
 
 ### `miosa up`

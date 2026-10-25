@@ -35,6 +35,10 @@ type SandboxData struct {
 	TimeoutSec     int            `json:"timeout_sec"`
 	IdleTimeoutSec int            `json:"idle_timeout_sec"`
 	AlwaysOn       bool           `json:"always_on"`
+	// Visibility is "shared" (every member of the organization may use it) or
+	// "private" (its creator and organization owners and admins). Empty from
+	// servers that predate it, which means shared.
+	Visibility     string         `json:"visibility,omitempty"`
 	LostReason     string         `json:"lost_reason,omitempty"`
 	FailureReason  string         `json:"failure_reason,omitempty"`
 	LastError      string         `json:"last_error,omitempty"`
@@ -107,6 +111,8 @@ type CreateSandboxInput struct {
 	// RuntimeProfile selects the sandbox runtime on the wire (the server's
 	// "standard", "soma" or "auto"). Empty omits it and the server decides.
 	RuntimeProfile string `json:"runtime_profile,omitempty"`
+	// Visibility is "shared" or "private". Empty takes the organization's default.
+	Visibility string `json:"visibility,omitempty"`
 }
 
 // ListSandboxesInput are optional query parameters for GET /sandboxes.

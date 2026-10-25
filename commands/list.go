@@ -212,15 +212,23 @@ func runList(cmd *cobra.Command, o listOptions) error {
 
 	current := cfg.CurrentSandbox
 
-	showSetup := false
+	showSetup, showAccess := false, false
 	for _, sandbox := range sandboxes {
 		if sandbox.SetupStatus != "" {
 			showSetup = true
+		}
+		// The column appears once a sandbox is private; until then every
+		// sandbox is shared and the table looks as it always did.
+		if sandbox.Visibility == "private" {
+			showAccess = true
 		}
 	}
 	headers := []string{"NAME", "ID", "STATUS", "SIZE", "TEMPLATE", "ENV"}
 	if showSetup {
 		headers = append(headers, "SETUP")
+	}
+	if showAccess {
+		headers = append(headers, "ACCESS")
 	}
 	headers = append(headers, "CREATED")
 	rows := make([][]string, 0, len(sandboxes))
@@ -239,6 +247,9 @@ func runList(cmd *cobra.Command, o listOptions) error {
 		}
 		if showSetup {
 			row = append(row, orDefault(sandbox.SetupStatus, "-"))
+		}
+		if showAccess {
+			row = append(row, orDefault(sandbox.Visibility, "shared"))
 		}
 		rows = append(rows, append(row, formatAge(sandbox.CreatedAt)))
 	}
