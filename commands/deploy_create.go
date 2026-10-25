@@ -92,6 +92,9 @@ func bindDeploySourceFlags(cmd *cobra.Command, f *deployFlags, createOnly bool) 
 		fs.StringVar(&f.git, "git", "", "Deploy this git repository URL")
 		fs.StringVar(&f.dir, "dir", "", "With --from-sandbox: the app's path inside the sandbox. On its own: a local directory to upload")
 		fs.StringVar(&f.image, "image", "", "App Engine container image (not exposed by the public API; see --type docker_deploy)")
+		// Kept so old scripts get the explanation below instead of "unknown flag", but not
+		// advertised: there is no public image-deploy route.
+		_ = fs.MarkHidden("image")
 		fs.IntVar(&f.port, "port", 0, "The port the app serves on (--from-sandbox, or --dir with --run-command)")
 		fs.StringVar(&f.entrypoint, "entrypoint", "", "With --from-sandbox: the entry file for a static publish")
 		fs.StringVar(&f.deployType, "type", "", "Runtime to publish as: static, dynamic or docker_deploy (default: static, or dynamic with --run-command)")
@@ -929,7 +932,7 @@ func pollDeployment(ctx context.Context, c *client.Client, id string, timeout ti
 				if pub.Failed != nil {
 					reason, phase = pub.Failed.Reason, pub.Failed.Phase
 				}
-				return last.State, last.PublicURL, fmt.Errorf("publishing failed at %s: %s (run 'miosa deploy logs %s' for the build and app output)", phaseLabels[phase], reason, orDefault(last.Name, id))
+				return last.State, last.PublicURL, fmt.Errorf("publishing failed at %s: %s%s (run 'miosa deploy logs %s' for the build and app output)", phaseLabels[phase], reason, cloneHint(reason), orDefault(last.Name, id))
 			}
 		} else {
 			switch last.State {
@@ -1140,6 +1143,8 @@ func renderDeploy(p *output.Printer, out *deployOutcome) error {
 		p.Line("  URL:          https://api.miosa.ai%s", webhookPath)
 		p.Line("  Content type: application/json")
 		p.Line("  Secret:       %s", out.WebhookSecret)
+		p.Line("  Events:       Just the push event")
+		p.Line("GitHub signs each push with the secret; MIOSA builds pushes to the deployment's branch and ignores anything unsigned.")
 	}
 	return nil
 }
@@ -1688,4 +1693,14 @@ func serverManifest(dir string) string {
 		}
 	}
 	return ""
+}
+
+// cloneHint is the next step after a failed clone: the usual cause is a private repository
+// MIOSA cannot read, and connecting GitHub gives the build the person's token.
+func cloneHint(reason string) string {
+	if !strings.Contains(reason, "SOURCE_CLONE_FAILED") {
+		return ""
+	}
+	return ". If the repository is private, connect GitHub first ('miosa connections add apps github'), " +
+		"and check that the branch exists"
 }

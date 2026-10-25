@@ -3445,7 +3445,6 @@ Flags:
 - `--forge string` - Deploy this Forge repository (id, org/name or name); builds --branch and redeploys on every push.
 - `--from-sandbox string` - Publish this sandbox (name, id or 'current').
 - `--git string` - Deploy this git repository URL.
-- `--image string` - App Engine container image (not exposed by the public API; see --type docker_deploy).
 - `--name string` - Deployment name (default: the argument, the repo or the directory name).
 - `--no-auto` - With --forge: do not build automatically on pushes to the branch.
 - `--no-promote` - Upload the version without making it live; prints the version to promote later.
