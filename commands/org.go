@@ -45,6 +45,7 @@ func newOrgCmd() *cobra.Command {
   miosa org caps                  per-member spend and concurrency caps
   miosa org caps set dana --spend 25 --concurrent 3
   miosa org transfer dana@example.com   make dana the owner (the owner only)
+  miosa org create "Acme Labs"     create an organization you own
   miosa org default-visibility set private   new sandboxes start private
 
 A machine keeps billing the organization it was created under, even if you
@@ -70,6 +71,8 @@ one are locked to that organization and cannot bill another.`,
 		},
 		newOrgBillCmd(),
 		newOrgTransferCmd(),
+		newOrgCreateCmd(),
+		newOrgDeleteCmd(),
 		newOrgDefaultVisibilityCmd(),
 		newOrgUseCmd(),
 		newOrgSelectCmd(),

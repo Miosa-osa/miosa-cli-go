@@ -324,6 +324,7 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa notifications read` | POST | `/notifications/{0}/read` |
 | `miosa notifications read-all` | POST | `/notifications/read-all` |
 | `miosa notifications unread` | GET | `/notifications/unread-count` |
+| `miosa org create` | POST | `/tenants` |
 | `miosa org default-visibility set` | PUT | `/settings/sandbox-visibility` |
 | `miosa org default-visibility show` | GET | `/settings/sandbox-visibility` |
 | `miosa pause` | POST | `/sandboxes/{0}/pause` |
