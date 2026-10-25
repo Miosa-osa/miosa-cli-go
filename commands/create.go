@@ -25,6 +25,7 @@ type createOptions struct {
 	count       int
 	concurrency int
 	from        string
+	visibility  string
 }
 
 // sandboxSizes are the sizes the platform offers (see 'miosa catalog').
@@ -101,6 +102,7 @@ have settled and exits non-zero if any failed. 'miosa batch' manages the batch.
 	cmd.Flags().StringVar(&opts.from, "from", "", "Start from a snapshot: its id, or the name of a named snapshot")
 	cmd.Flags().IntVar(&opts.concurrency, "concurrency", 0, "With --count: how many to create at once (default: the server's)")
 	cmd.Flags().BoolVar(&failFast, "fail-fast", false, failFastUsage)
+	cmd.Flags().StringVar(&opts.visibility, "visibility", "", "Who in the organization may use it: shared or private (default: the organization's, see 'miosa org default-visibility')")
 	envFlags.bind(cmd, "sandbox")
 
 	return cmd
@@ -110,6 +112,14 @@ func runCreate(cmd *cobra.Command, args []string, size, template, workspace, run
 	p := printerFor(cmd)
 	if failFast && opts.count > 0 {
 		return usagef("--fail-fast starts one machine; it does not combine with --count")
+	}
+	if opts.visibility != "" {
+		if opts.visibility != "shared" && opts.visibility != "private" {
+			return usagef("--visibility must be shared or private (got %q)", opts.visibility)
+		}
+		if opts.count > 0 || opts.from != "" {
+			return usagef("--visibility applies to one new sandbox; share or unshare the others with 'miosa share' / 'miosa unshare'")
+		}
 	}
 	if opts.from != "" {
 		return createFromSnapshot(cmd, opts)
@@ -162,6 +172,7 @@ func runCreate(cmd *cobra.Command, args []string, size, template, workspace, run
 		NoEnv:       noEnv,
 		SetupFile:   setup,
 		Runtime:     runtime,
+		Visibility:  opts.visibility,
 	}
 	if workspace == "" {
 		workspace = defaultWorkspaceRef()
