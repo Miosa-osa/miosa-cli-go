@@ -10872,6 +10872,7 @@ Show and choose the organization that pays for new sandboxes and computers.
   miosa org caps                  per-member spend and concurrency caps
   miosa org caps set dana --spend 25 --concurrent 3
   miosa org transfer dana@example.com   make dana the owner (the owner only)
+  miosa org create "Acme Labs"     create an organization you own
   miosa org default-visibility set private   new sandboxes start private
 
 ```
@@ -10984,6 +10985,31 @@ miosa org caps set dana@example.com --spend 25 --concurrent 3
   miosa org caps set dana@example.com --no-spend-cap
 ```
 
+#### `miosa org create`
+
+Create an organization you own.
+
+```
+miosa org create <name> [flags]
+```
+
+Create a new organization with you as its owner.
+Its URL slug is made from the
+name.
+You can own one company organization (and have one personal organization).
+
+The key you signed in with stays in its own organization.
+To work in the new one,
+run 'miosa login' and pick it.
+
+```
+  miosa org create "Acme Labs"
+```
+
+Flags:
+
+- `--personal` - Create your personal organization instead of a company one.
+
 #### `miosa org default-visibility`
 
 Whether new sandboxes start shared or private.
@@ -11019,6 +11045,19 @@ Show the visibility new sandboxes start with.
 ```
 miosa org default-visibility show
 ```
+
+#### `miosa org delete`
+
+Organizations cannot be deleted from the CLI.
+
+```
+miosa org delete [org]
+```
+
+Deleting an organization removes every machine, database and key in it, so it is
+never done with an API key.
+Its owner can ask MIOSA support to delete it
+('miosa feedback' or the dashboard's Help menu).
 
 #### `miosa org diff`
 
