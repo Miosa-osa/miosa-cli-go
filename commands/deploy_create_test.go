@@ -218,6 +218,9 @@ func TestDeployCreateFromGit(t *testing.T) {
 	if !strings.Contains(out, "whsec_abc") {
 		t.Fatalf("the one-time webhook secret should be printed: %q", out)
 	}
+	if !strings.Contains(out, "Just the push event") || !strings.Contains(out, "GitHub signs each push with the secret") {
+		t.Fatalf("the webhook block should say which event and what the secret is for: %q", out)
+	}
 }
 
 // The server builds on connect and answers "building"; a redeploy on top of
@@ -533,5 +536,37 @@ func TestInvalidIDOnADeploymentPathNamesTheDeploymentList(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "sandbox") {
 		t.Fatalf("the hint must not mention sandboxes on a deployment path, got: %v", err)
+	}
+}
+
+func TestDeployCreateFromGitCloneFailureNamesTheNextStep(t *testing.T) {
+	newFakeAPI(t, func(c call) (int, string) {
+		switch {
+		case c.is("POST", "/deployments"):
+			return 201, gitCreateBody
+		case c.is("POST", "/deployments/d2/redeploy"):
+			return 202, `{"data":{"id":"b1","state":"queued"}}`
+		case c.is("GET", "/deployments/d2"):
+			return 200, `{"data":{"id":"d2","name":"app","state":"failed","publish":{"status":"failed","failed":{"phase":"build","reason":"The source could not be cloned (git exited 128). (SOURCE_CLONE_FAILED)"}}}}`
+		}
+		return 404, `{"error":{"code":"NOT_FOUND","message":"no route"}}`
+	})
+	out, err := run(t, "deploy", "create", "--git", "https://github.com/me/private-app", "--wait")
+	if err == nil {
+		t.Fatalf("a failed clone must fail (out=%q)", out)
+	}
+	if !strings.Contains(err.Error(), "miosa connections add apps github") {
+		t.Fatalf("a clone failure should name the GitHub connection: %v", err)
+	}
+}
+
+func TestDeployCreateImageFlagIsHiddenButExplained(t *testing.T) {
+	out, _ := run(t, "deploy", "create", "--help")
+	if strings.Contains(out, "--image") {
+		t.Fatalf("--image has no public route and must not be advertised:\n%s", out)
+	}
+	_, err := run(t, "deploy", "create", "--image", "nginx")
+	if err == nil || !strings.Contains(err.Error(), "--image is not available") {
+		t.Fatalf("--image should still explain itself: %v", err)
 	}
 }
