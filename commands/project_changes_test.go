@@ -11,6 +11,7 @@ func changesAPI(t *testing.T) *fakeAPI {
 	t.Helper()
 	routes := map[string]any{}
 	routes["GET /projects"] = serviceProjectJSON
+	routes["GET /projects/11111111-1111-1111-1111-111111111111/environments"] = `{"data":[{"id":"env-prod","name":"production","slug":"production","is_default":true},{"id":"env-stg","name":"Staging","slug":"staging"},{"id":"env-mz","name":"Maazin","slug":"maazin"}]}`
 	routes["GET "+changesPath] = `{"data":{"id":"set1","state":"open","stale":false,"changes":[{"id":"c1","seq":1,"op":"variable.set","summary":"Set API_BASE"},{"id":"c2","seq":2,"op":"service.create","summary":"Create worker"}]}}`
 	routes["POST "+changesPath+"/apply"] = `{"data":{"id":"set1","state":"applied","changes":[{"id":"c1"},{"id":"c2"}],"releases":[{"service_id":"s1"}]}}`
 	routes["POST "+changesPath+"/discard"] = resp{204, ``}
@@ -27,7 +28,8 @@ func TestProjectChangesListShowsTheStagedSet(t *testing.T) {
 	if !strings.Contains(out, "Set API_BASE") || !strings.Contains(out, "Create worker") {
 		t.Fatalf("out = %s", out)
 	}
-	if q := f.find("GET", changesPath)[0].Query; q != "env=staging" {
+	// The target is resolved to its id, whatever case it was typed in.
+	if q := f.find("GET", changesPath)[0].Query; q != "env=env-stg" {
 		t.Fatalf("query = %q", q)
 	}
 }
@@ -97,5 +99,22 @@ func TestDBCreateIntoAnUnknownProjectIsRefused(t *testing.T) {
 	}
 	if len(f.find("POST", "/databases")) != 0 {
 		t.Fatal("created without a project")
+	}
+}
+
+func TestDeployTargetMatchesAnyCaseAndListsTargetsOnAMiss(t *testing.T) {
+	for _, typed := range []string{"Maazin", "maazin", "MAAZIN", "env-mz"} {
+		f := changesAPI(t)
+		if _, err := run(t, "project", "changes", "list", "cliniciq", "--deploy-target", typed); err != nil {
+			t.Fatalf("--deploy-target %s: %v", typed, err)
+		}
+		if q := f.find("GET", changesPath)[0].Query; q != "env=env-mz" {
+			t.Fatalf("--deploy-target %s sent %q", typed, q)
+		}
+	}
+	changesAPI(t)
+	_, err := run(t, "project", "changes", "list", "cliniciq", "--deploy-target", "qa")
+	if err == nil || !strings.Contains(err.Error(), `no Deploy target "qa"; this project has: Maazin, Staging, production`) {
+		t.Fatalf("a miss must list the targets, got %v", err)
 	}
 }

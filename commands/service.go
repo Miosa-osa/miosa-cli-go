@@ -374,8 +374,12 @@ service. A web or static service gets a public address unless --no-public is giv
 			}
 
 			path := "/projects/" + url.PathEscape(projectID) + "/services"
-			if f.env != "" {
-				path += "?" + url.Values{"env": {f.env}}.Encode()
+			envID, err := deployTargetID(ctx, c.API, projectID, f.env)
+			if err != nil {
+				return err
+			}
+			if envID != "" {
+				path += "?" + url.Values{"env": {envID}}.Encode()
 			}
 			var created struct {
 				Data projectServiceRow `json:"data"`
@@ -1715,8 +1719,12 @@ one as ${{shared.NAME}}.
 				return err
 			}
 			q := url.Values{}
-			if listEnv != "" {
-				q.Set("env", listEnv)
+			envID, err := deployTargetID(ctx, c.API, projectID, listEnv)
+			if err != nil {
+				return err
+			}
+			if envID != "" {
+				q.Set("env", envID)
 			}
 			var out struct {
 				Data []serviceVariable `json:"data"`
@@ -1761,8 +1769,12 @@ one as ${{shared.NAME}}.
 				return err
 			}
 			body := map[string]any{"variables": vars}
-			if setEnv != "" {
-				body["env"] = setEnv
+			envID, err := deployTargetID(ctx, c.API, projectID, setEnv)
+			if err != nil {
+				return err
+			}
+			if envID != "" {
+				body["env"] = envID
 			}
 			if err := c.API.Put(ctx, "/projects/"+url.PathEscape(projectID)+"/shared-variables", body, nil); err != nil {
 				return die(err)
@@ -1793,8 +1805,12 @@ one as ${{shared.NAME}}.
 				return err
 			}
 			q := url.Values{}
-			if unsetEnv != "" {
-				q.Set("env", unsetEnv)
+			envID, err := deployTargetID(ctx, c.API, projectID, unsetEnv)
+			if err != nil {
+				return err
+			}
+			if envID != "" {
+				q.Set("env", envID)
 			}
 			path := "/projects/" + url.PathEscape(projectID) + "/shared-variables/" + url.PathEscape(args[1])
 			if err := c.API.Delete(ctx, path, q, nil); err != nil {
@@ -2006,6 +2022,20 @@ func listServiceEnvironments(ctx context.Context, c *api.Client, projectID strin
 	return out.Data, nil
 }
 
+// deployTargetID resolves a --deploy-target (name, slug or id, any case) to the
+// id the routes take, so "Maazin" and "maazin" are the same target and a miss
+// lists the targets there are. Empty is the project's default, "".
+func deployTargetID(ctx context.Context, c *api.Client, projectID, ref string) (string, error) {
+	if strings.TrimSpace(ref) == "" {
+		return "", nil
+	}
+	env, err := resolveServiceEnvironment(ctx, c, projectID, strings.TrimSpace(ref))
+	if err != nil {
+		return "", err
+	}
+	return env.ID, nil
+}
+
 // resolveServiceEnvironment turns an environment name, slug or id into the id
 // the update and delete routes need.
 func resolveServiceEnvironment(ctx context.Context, c *api.Client, projectID, ref string) (*serviceEnvironment, error) {
@@ -2028,7 +2058,7 @@ func resolveServiceEnvironment(ctx context.Context, c *api.Client, projectID, re
 			names = append(names, e.Name)
 		}
 		return nil, die(&api.Error{Status: 404, Code: "ENVIRONMENT_NOT_FOUND",
-			Message: fmt.Sprintf("no environment %q; environments: %s", ref, orDashList(names))})
+			Message: fmt.Sprintf("no Deploy target %q; this project has: %s", ref, orDashList(names))})
 	default:
 		return nil, die(&api.Error{Status: 409, Code: "ENVIRONMENT_AMBIGUOUS",
 			Message: fmt.Sprintf("%q matches more than one environment; use the environment id", ref)})
@@ -2355,8 +2385,12 @@ func serviceTemplatesCmd() *cobra.Command {
 				return err
 			}
 			q := url.Values{}
-			if env != "" {
-				q.Set("env", env)
+			envID, err := deployTargetID(ctx, c.API, projectID, env)
+			if err != nil {
+				return err
+			}
+			if envID != "" {
+				q.Set("env", envID)
 			}
 			if noDeploy {
 				q.Set("deploy", "false")
@@ -2466,8 +2500,12 @@ func openService(ctx context.Context, c *api.Client, projectRef, serviceRef, env
 
 func listServices(ctx context.Context, c *api.Client, projectID, env string) ([]projectServiceRow, error) {
 	q := url.Values{}
-	if env != "" {
-		q.Set("env", env)
+	envID, err := deployTargetID(ctx, c, projectID, env)
+	if err != nil {
+		return nil, err
+	}
+	if envID != "" {
+		q.Set("env", envID)
 	}
 	var out struct {
 		Data []projectServiceRow `json:"data"`

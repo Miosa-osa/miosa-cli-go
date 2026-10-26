@@ -552,3 +552,71 @@ func TestImportRailwayDeployFlagStartsOnlyWhenAsked(t *testing.T) {
 		t.Fatalf("apply output:\n%s", out)
 	}
 }
+
+func TestImportRailwayAddressLabelsFollowThePrimaryEnvironment(t *testing.T) {
+	plan, stdout, planPath := planFor(t, clinicIQSystem(), "--environment", "all")
+	if got := serviceAction(t, plan, "production", "clinic-iq-frontend").AddressLabel; got != "clinic-iq-frontend" {
+		t.Fatalf("production takes the plain label, got %q", got)
+	}
+	if got := serviceAction(t, plan, "development", "clinic-iq-frontend").AddressLabel; got != "clinic-iq-frontend-development" {
+		t.Fatalf("other environments take -<environment>, got %q", got)
+	}
+	if !strings.Contains(stdout, "address: clinic-iq-frontend-development.<org>.miosa.app") {
+		t.Fatalf("review:\n%s", stdout)
+	}
+
+	// The label is in the plan, so the order the targets are created in does
+	// not decide who gets the plain name.
+	miosa := newFakeMiosa()
+	f := newFakeAPI(t, miosa.reply)
+	if out, err := run(t, "import", "railway", "--apply", "--plan", planPath, "--state", filepath.Join(t.TempDir(), "s.json"),
+		"--allow-missing-values", "--region", "us-west"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	labels := map[string]bool{}
+	for _, c := range f.calls {
+		if c.Method == "PUT" && strings.HasSuffix(c.Path, "/public-address") {
+			label, _ := c.Body["label"].(string)
+			if labels[label] {
+				t.Fatalf("two services asked for the label %q", label)
+			}
+			labels[label] = true
+		}
+	}
+	if !labels["clinic-iq-frontend"] || !labels["clinic-iq-frontend-development"] || !labels["backend-cliniciq-development"] {
+		t.Fatalf("labels = %v", labels)
+	}
+
+	swapped, _, _ := planFor(t, clinicIQSystem(), "--environment", "all", "--primary-environment", "development")
+	if got := serviceAction(t, swapped, "development", "backend-cliniciq").AddressLabel; got != "backend-cliniciq" {
+		t.Fatalf("--primary-environment development takes the plain label, got %q", got)
+	}
+	if got := serviceAction(t, swapped, "production", "backend-cliniciq").AddressLabel; got != "backend-cliniciq-production" {
+		t.Fatalf("production is suffixed when it is not primary, got %q", got)
+	}
+}
+
+func TestImportRailwayResolvesTheWorkspaceSlugToItsID(t *testing.T) {
+	_, _, planPath := planFor(t, clinicIQFreeAccount(), "--workspace", "ClinicIQ-Platform")
+	miosa := newFakeMiosa()
+	f := newFakeAPI(t, miosa.reply)
+	if out, err := run(t, "import", "railway", "--apply", "--plan", planPath, "--state", filepath.Join(t.TempDir(), "s.json"), "--allow-missing-values"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	created := f.find("POST", "/projects")
+	if len(created) != 1 || created[0].Body["workspace_id"] != "9c0ffee0-0000-4000-8000-000000000001" {
+		t.Fatalf("the project must be created with the workspace id, got %+v", created)
+	}
+
+	_, _, badPlan := planFor(t, clinicIQFreeAccount(), "--workspace", "no-such-team")
+	g := newFakeAPI(t, newFakeMiosa().reply)
+	_, err := run(t, "import", "railway", "--apply", "--plan", badPlan, "--state", filepath.Join(t.TempDir(), "b.json"), "--allow-missing-values")
+	if err == nil || !strings.Contains(err.Error(), `no workspace "no-such-team"`) || !strings.Contains(err.Error(), "cliniciq-platform") {
+		t.Fatalf("want a refusal listing the workspaces, got %v", err)
+	}
+	for _, c := range g.calls {
+		if c.Method != "GET" {
+			t.Fatalf("nothing may be written before the refusal: %s %s", c.Method, c.Path)
+		}
+	}
+}

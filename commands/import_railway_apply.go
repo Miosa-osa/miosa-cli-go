@@ -110,6 +110,7 @@ type applier struct {
 	state          applyStateFile
 	created        map[string]string // op|env|name -> id
 	projectID      string
+	workspaceID    string
 	envIDs         map[string]string // lower env name -> id
 	services       map[string]string // env|name -> service id
 	repos          map[string]githubRepo
@@ -165,6 +166,11 @@ func railwayApply(ctx context.Context, cmd *cobra.Command, f *railwayImportFlags
 	// Nothing is created until every repository service can build here and
 	// every repository is readable through the user's GitHub connection.
 	if err := a.preflight(); err != nil {
+		return err
+	}
+	// The plan keeps --workspace as typed (a slug, a name or an id); the API
+	// takes only the id.
+	if a.workspaceID, err = importWorkspaceID(ctx, c.API, plan.Target.WorkspaceID); err != nil {
 		return err
 	}
 
@@ -249,6 +255,34 @@ func (a *applier) preflight() error {
 	return nil
 }
 
+// importWorkspaceID resolves --workspace (an id, a slug or a name, any case) to
+// the workspace id the API takes. Empty is no workspace.
+func importWorkspaceID(ctx context.Context, c *api.Client, ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" || uuidRE.MatchString(ref) {
+		return ref, nil
+	}
+	var out struct {
+		Data []struct {
+			ID   string `json:"id"`
+			Slug string `json:"slug"`
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	if err := c.Get(ctx, "/workspaces", nil, &out); err != nil {
+		return "", die(fmt.Errorf("resolving workspace %q: %w", ref, err))
+	}
+	var names []string
+	for _, w := range out.Data {
+		if strings.EqualFold(w.Slug, ref) || strings.EqualFold(w.Name, ref) || strings.EqualFold(w.ID, ref) {
+			return w.ID, nil
+		}
+		names = append(names, firstNonEmpty(w.Slug, w.Name))
+	}
+	sort.Strings(names)
+	return "", usagef("no workspace %q, so nothing was created; workspaces: %s", ref, orDashList(names))
+}
+
 // listGitHubRepos reads every repository the user's GitHub connection can
 // read, by lower-case full name.
 func listGitHubRepos(ctx context.Context, c *api.Client) (map[string]githubRepo, error) {
@@ -310,8 +344,8 @@ func (a *applier) applyProject() error {
 		}
 		if id == "" {
 			body := map[string]any{"name": act.Name}
-			if a.plan.Target.WorkspaceID != "" {
-				body["workspace_id"] = a.plan.Target.WorkspaceID
+			if a.workspaceID != "" {
+				body["workspace_id"] = a.workspaceID
 			}
 			var out struct {
 				Data struct {
@@ -523,8 +557,8 @@ func (a *applier) applyDatabases() error {
 		if act.Size != "" {
 			body["size"] = act.Size
 		}
-		if a.plan.Target.WorkspaceID != "" {
-			body["workspace_id"] = a.plan.Target.WorkspaceID
+		if a.workspaceID != "" {
+			body["workspace_id"] = a.workspaceID
 		}
 		var out struct {
 			Data struct {
@@ -608,7 +642,7 @@ func (a *applier) createService(act railway.Action) error {
 		return die(err)
 	}
 	if act.Address != nil && *act.Address {
-		if err := enableServiceAddress(a.ctx, a.api, a.projectID, out.Data.ID, ""); err != nil {
+		if err := enableServiceAddress(a.ctx, a.api, a.projectID, out.Data.ID, act.AddressLabel); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %s has no public address yet: %v\n", qualifiedName(act), err)
 		}
 	}

@@ -103,13 +103,17 @@ func resolveVarsTarget(ctx context.Context, c *api.Client, args []string, servic
 		return varsTarget{}, usagef("pass --service, --shared, or run `miosa link <project> --service <name>` first")
 	}
 
-	target := varsTarget{projectID: projectID, environment: env, shared: shared}
+	envID, err := deployTargetID(ctx, c, projectID, env)
+	if err != nil {
+		return varsTarget{}, err
+	}
+	target := varsTarget{projectID: projectID, environment: envID, shared: shared}
 	if shared {
 		target.label = "shared"
 		return target, nil
 	}
 
-	services, err := listServices(ctx, c, projectID, env)
+	services, err := listServices(ctx, c, projectID, envID)
 	if err != nil {
 		return varsTarget{}, err
 	}

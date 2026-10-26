@@ -76,6 +76,12 @@ type Action struct {
 	Build    *BuildSetting   `json:"build,omitempty"`
 	Settings *ServiceSetting `json:"settings,omitempty"`
 	Address  *bool           `json:"address,omitempty"`
+	// AddressLabel is the <label> of the service's <label>.<org>.miosa.app
+	// address. Labels are unique across the organization, so the primary
+	// environment's service takes its own slug and every other environment's
+	// takes the slug with -<environment>: which one gets the plain name never
+	// depends on which was created first.
+	AddressLabel string `json:"address_label,omitempty"`
 	// NeedsRegion is set when the Railway region has no MIOSA equivalent, so an
 	// apply must be given --region rather than guessing.
 	NeedsRegion bool `json:"needs_region,omitempty"`
@@ -148,6 +154,10 @@ type Options struct {
 	Only []string
 	// Exclude leaves these services out; it is applied after Only.
 	Exclude []string
+	// PrimaryEnvironment is the environment whose services get the plain
+	// address labels; every other environment's labels end in -<environment>.
+	// Empty means production.
+	PrimaryEnvironment string
 	// Suffix is appended to every service name, and inserted before the first
 	// dot of every custom domain, so a shadow import cannot collide with the
 	// project it mirrors.
@@ -234,7 +244,13 @@ func Build(src Source, opts Options) (Plan, error) {
 		if svc.Region != "" && mapRegion(svc.Region) == "" {
 			outsideUS[svc.Region]++
 		}
-		plan.Actions = append(plan.Actions, withEnv(serviceActions(svc), env)...)
+		actions := withEnv(serviceActions(svc), env)
+		for i := range actions {
+			if actions[i].Op == "service.create" && actions[i].Address != nil && *actions[i].Address {
+				actions[i].AddressLabel = AddressLabel(svc.Name, env, opts.PrimaryEnvironment)
+			}
+		}
+		plan.Actions = append(plan.Actions, actions...)
 		for _, v := range svc.Variables {
 			carried, reports := carryVariable(v, svc.Name, env, refs)
 			if strings.Contains(carried.Value, ".MIOSA_PRIVATE_DOMAIN}}") {
@@ -381,6 +397,19 @@ func serviceActions(svc Service) []Action {
 		})
 	}
 	return actions
+}
+
+// AddressLabel is a service's public address label: its slug in the primary
+// environment (production unless another is named), else its slug with
+// -<environment>, kept within the 40-character label rule.
+func AddressLabel(service, env, primary string) string {
+	if primary == "" {
+		primary = "production"
+	}
+	if env == "" || strings.EqualFold(env, primary) {
+		return ServiceSlug(service)
+	}
+	return ServiceSlug(service + "-" + env)
 }
 
 // buildSetting is the Dockerfile path and build command, as the builder reads
