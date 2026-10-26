@@ -12953,12 +12953,16 @@ miosa service delete <project> <service> [flags]
 Delete a service and stop its replicas.
 The service disappears from reads at once.
 
+Deleting a database service destroys its database and all of its data.
+It needs the service's exact name: typed at the prompt, or --confirm <name>. --yes is not enough, and a run with no terminal and no --confirm fails.
+
 Aliases: `rm`.
 
 Flags:
 
+- `--confirm string` - The service's exact name; required to delete a database service without a prompt.
 - `--deploy-target string` - Deploy target name or id (default: the project's default).
-- `--yes` - Do not ask for confirmation.
+- `--yes` - Do not ask for confirmation (not enough for a database service: use --confirm).
 
 #### `miosa service deploy`
 

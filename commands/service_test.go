@@ -280,6 +280,63 @@ func TestServiceDeleteConfirms(t *testing.T) {
 	}
 }
 
+// databaseServiceAPI is servicesAPI whose only service is a database service (Postgres).
+func databaseServiceAPI(t *testing.T) *fakeAPI {
+	return fakeRoutes(t, map[string]any{
+		"GET /project-capabilities": `{"data":{"services_api":true,"source_builds":true}}`,
+		"GET /projects":             serviceProjectJSON,
+		"GET /projects/11111111-1111-1111-1111-111111111111/services": `{"data":[{"id":"55555555-5555-5555-5555-555555555555",
+			"project_id":"11111111-1111-1111-1111-111111111111","environment_id":"e1","name":"Postgres","slug":"postgres",
+			"kind":"database","source":{},"build":{},"settings":{},"database":{"type":"sandbox_database","id":"d1","state":"running"}}]}`,
+		"DELETE /projects/11111111-1111-1111-1111-111111111111/services/55555555-5555-5555-5555-555555555555": resp{202, `{"data":{"id":"55555555-5555-5555-5555-555555555555","state":"deleting"}}`},
+	})
+}
+
+const dbServicePath = "/projects/11111111-1111-1111-1111-111111111111/services/55555555-5555-5555-5555-555555555555"
+
+func TestServiceDeleteOfADatabaseServiceFailsLoudlyWithoutConfirm(t *testing.T) {
+	f := databaseServiceAPI(t)
+	// --yes is not enough, and a run with no terminal must fail, never skip the delete quietly.
+	for _, args := range [][]string{
+		{"service", "delete", "cliniciq", "Postgres"},
+		{"service", "delete", "cliniciq", "Postgres", "--yes"},
+	} {
+		_, err := run(t, args...)
+		if err == nil || !strings.Contains(err.Error(), `--confirm "Postgres"`) || !strings.Contains(err.Error(), "all of its data") {
+			t.Fatalf("%v: want a loud refusal naming --confirm, got: %v", args, err)
+		}
+	}
+	if _, err := run(t, "service", "delete", "cliniciq", "Postgres", "--confirm", "postgres"); err == nil {
+		t.Fatal("a --confirm that is not the exact name must fail")
+	}
+	if n := len(f.find("DELETE", dbServicePath)); n != 0 {
+		t.Fatalf("nothing may be deleted without the exact name, got %d DELETE calls", n)
+	}
+}
+
+func TestServiceDeleteOfADatabaseServiceSendsTheConfirm(t *testing.T) {
+	f := databaseServiceAPI(t)
+	if _, err := run(t, "service", "delete", "cliniciq", "Postgres", "--confirm", "Postgres"); err != nil {
+		t.Fatalf("service delete --confirm: %v", err)
+	}
+	calls := f.find("DELETE", dbServicePath)
+	if len(calls) != 1 || calls[0].Query != "confirm=Postgres" {
+		t.Fatalf("want one DELETE with confirm=Postgres, got %+v", calls)
+	}
+}
+
+func TestServiceDeleteOfADatabaseServiceRefusesAMistypedName(t *testing.T) {
+	f := databaseServiceAPI(t)
+	// stdin is not a terminal here, so the prompt is not offered: the refusal names --confirm.
+	_, _, err := runSplitIn(t, "Postgres\n", "service", "delete", "cliniciq", "Postgres")
+	if err == nil {
+		t.Fatal("a piped name is not a confirmation; want a refusal")
+	}
+	if len(f.find("DELETE", dbServicePath)) != 0 {
+		t.Fatal("nothing may be deleted")
+	}
+}
+
 func TestServiceReleasesListsHistory(t *testing.T) {
 	servicesAPI(t)
 	out, err := run(t, "service", "releases", "cliniciq", "API")
