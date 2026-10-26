@@ -280,6 +280,7 @@ func readVariables(ctx context.Context, c *api.Client, target varsTarget) ([]var
 func variablesSetCmd() *cobra.Command {
 	var serviceFlag, envFlag string
 	var shared, skipDeploys bool
+	var build *buildVisibility
 	cmd := &cobra.Command{
 		Use:   "set KEY=VALUE [KEY=VALUE...]",
 		Short: "Set variables on the linked service or the shared set",
@@ -299,13 +300,16 @@ func variablesSetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := writeVariables(ctx, c.API, target, vars); err != nil {
+			if err := writeVariables(ctx, c.API, target, vars, build.value()); err != nil {
 				return err
 			}
 			if isJSON() {
 				return p.JSON(map[string]any{"target": target.label, "set": keysOfMap(vars)})
 			}
 			p.Success("Set %d variable(s) on %s", len(vars), target.label)
+			if note := buildNote(build.value()); note != "" {
+				p.Line("  %s", note)
+			}
 			if skipDeploys {
 				p.Line("  --skip-deploys: a variable write never redeploys here; the service shows a pending change.")
 			} else {
@@ -320,11 +324,16 @@ func variablesSetCmd() *cobra.Command {
 	fs.StringVar(&envFlag, "deploy-target", "", "Alias of --environment")
 	fs.BoolVar(&shared, "shared", false, "Write the Deploy target's shared variables")
 	fs.BoolVar(&skipDeploys, "skip-deploys", false, "Railway compatibility: do not redeploy (never does)")
+	build = addBuildFlags(cmd)
 	return cmd
 }
 
-func writeVariables(ctx context.Context, c *api.Client, target varsTarget, vars map[string]any) error {
-	body := map[string]any{"variables": vars}
+func writeVariables(ctx context.Context, c *api.Client, target varsTarget, vars map[string]any, build *bool) error {
+	payload, err := variablesBody(vars, build)
+	if err != nil {
+		return err
+	}
+	body := map[string]any{"variables": payload}
 	path := target.path()
 	if q := target.envQuery(); q != "" {
 		path += "?" + q
@@ -377,6 +386,7 @@ func variablesUnsetCmd() *cobra.Command {
 func variablesImportCmd() *cobra.Command {
 	var serviceFlag, envFlag string
 	var shared bool
+	var build *buildVisibility
 	cmd := &cobra.Command{
 		Use:   "import <file|->",
 		Short: "Set variables from a .env file (or stdin)",
@@ -385,7 +395,8 @@ leading "export " are ignored; quotes are stripped. "-" reads stdin, so a pasted
 block works:
 
   miosa variables import -
-  miosa variables import .env`,
+  miosa variables import .env
+  miosa variables import build.env --build    # every variable in the file build-visible`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p := printerFor(cmd)
@@ -416,13 +427,16 @@ block works:
 			if err != nil {
 				return err
 			}
-			if err := writeVariables(ctx, c.API, target, vars); err != nil {
+			if err := writeVariables(ctx, c.API, target, vars, build.value()); err != nil {
 				return err
 			}
 			if isJSON() {
 				return p.JSON(map[string]any{"target": target.label, "set": keysOfMap(vars)})
 			}
 			p.Success("Set %d variable(s) on %s", len(vars), target.label)
+			if note := buildNote(build.value()); note != "" {
+				p.Line("  %s", note)
+			}
 			return nil
 		},
 	}
@@ -431,6 +445,7 @@ block works:
 	fs.StringVar(&envFlag, "environment", "", "Deploy target (default: the linked one)")
 	fs.StringVar(&envFlag, "deploy-target", "", "Alias of --environment")
 	fs.BoolVar(&shared, "shared", false, "Write the Deploy target's shared variables")
+	build = addBuildFlags(cmd)
 	return cmd
 }
 

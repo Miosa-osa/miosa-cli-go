@@ -1534,15 +1534,25 @@ ${{secret(32)}} (a generated secret).
 	list.Flags().StringVar(&listEnv, "deploy-target", "", "Deploy target name or id (default: the project's default)")
 
 	var setEnv string
+	var setBuild *buildVisibility
 	set := &cobra.Command{
 		Use:   "set <project> <service> KEY=VALUE [KEY=VALUE...]",
 		Short: "Set variables",
-		Args:  cobra.MinimumNArgs(3),
+		Long: `Set variables on a service. A variable is runtime only unless --build makes it
+visible to the build too (a Dockerfile ARG, NEXT_PUBLIC_* baked at build).
+--no-build makes it runtime only again.
+
+  miosa service vars set cliniciq web NEXT_PUBLIC_API_URL=https://api.example.com --build`,
+		Args: cobra.MinimumNArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p := printerFor(cmd)
 			vars, err := serviceVars(args[2:])
 			if err != nil {
 				return usagef("%v", err)
+			}
+			body, err := variablesBody(vars, setBuild.value())
+			if err != nil {
+				return err
 			}
 			c, _, err := buildClient()
 			if err != nil {
@@ -1553,18 +1563,26 @@ ${{secret(32)}} (a generated secret).
 			if err != nil {
 				return err
 			}
-			if err := putServiceVariables(ctx, c.API, projectID, svc.ID, vars); err != nil {
+			if err := c.API.Put(ctx, servicePath(projectID, svc.ID)+"/variables", map[string]any{"variables": body}, nil); err != nil {
 				return die(err)
 			}
 			if isJSON() {
-				return p.JSON(map[string]any{"service": svc.Name, "variables": keys(vars)})
+				out := map[string]any{"service": svc.Name, "variables": keys(vars)}
+				if b := setBuild.value(); b != nil {
+					out["build"] = *b
+				}
+				return p.JSON(out)
 			}
 			p.Success("Set %s on %q", strings.Join(keys(vars), ", "), svc.Name)
+			if note := buildNote(setBuild.value()); note != "" {
+				p.Line("  %s", note)
+			}
 			p.Line("Deploy for the change to take effect: miosa service deploy %s %s", args[0], args[1])
 			return nil
 		},
 	}
 	set.Flags().StringVar(&setEnv, "deploy-target", "", "Deploy target name or id (default: the project's default)")
+	setBuild = addBuildFlags(set)
 
 	var unsetEnv string
 	unset := &cobra.Command{
@@ -1749,6 +1767,7 @@ one as ${{shared.NAME}}.
 	list.Flags().StringVar(&listEnv, "deploy-target", "", "Deploy target name or id (default: the project's default)")
 
 	var setEnv string
+	var sharedBuild *buildVisibility
 	set := &cobra.Command{
 		Use:   "set <project> KEY=VALUE [KEY=VALUE...]",
 		Short: "Set shared variables",
@@ -1759,6 +1778,10 @@ one as ${{shared.NAME}}.
 			if err != nil {
 				return usagef("%v", err)
 			}
+			payload, err := variablesBody(vars, sharedBuild.value())
+			if err != nil {
+				return err
+			}
 			c, _, err := buildClient()
 			if err != nil {
 				return die(err)
@@ -1768,7 +1791,7 @@ one as ${{shared.NAME}}.
 			if err != nil {
 				return err
 			}
-			body := map[string]any{"variables": vars}
+			body := map[string]any{"variables": payload}
 			envID, err := deployTargetID(ctx, c.API, projectID, setEnv)
 			if err != nil {
 				return err
@@ -1783,10 +1806,14 @@ one as ${{shared.NAME}}.
 				return p.JSON(map[string]any{"variables": keys(vars)})
 			}
 			p.Success("Set shared %s", strings.Join(keys(vars), ", "))
+			if note := buildNote(sharedBuild.value()); note != "" {
+				p.Line("  %s", note)
+			}
 			return nil
 		},
 	}
 	set.Flags().StringVar(&setEnv, "deploy-target", "", "Deploy target name or id (default: the project's default)")
+	sharedBuild = addBuildFlags(set)
 
 	var unsetEnv string
 	unset := &cobra.Command{
