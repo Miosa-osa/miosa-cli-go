@@ -57,7 +57,7 @@ const variablesJSON = `{"data":[{"id":"v1","name":"DATABASE_URL","kind":"referen
 "updated_at":"2026-10-21T10:00:00Z"}]}`
 
 const effectiveJSON = `{"data":{"variables":[{"name":"DATABASE_URL","source":"user","layer":"service","kind":"reference",
-"sealed":false,"build":true,"value_preview":"postgres://••••cdef","references":["Postgres.DATABASE_URL"],"overrides_platform":false,"overridden":false}],"problems":[]}}`
+"sealed":false,"build":true,"value_preview":"postgres://••••cdef","references":[{"service":"Postgres","name":"DATABASE_URL","resolved":true}],"overrides_platform":false,"overridden":false}],"problems":[]}}`
 
 const environmentsJSON = `{"data":[{"id":"e1","project_id":"11111111-1111-1111-1111-111111111111","name":"production","slug":"production",
 "kind":null,"is_default":true,"created_at":"2026-10-20T10:00:00Z"},

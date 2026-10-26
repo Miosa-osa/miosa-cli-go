@@ -9735,16 +9735,29 @@ miosa import railway [flags]
 ```
 
 Read one Railway project through Railway's public API with your own token and
-write a plan: the MIOSA project, Deploy targets, services, databases and variable
-names it would create, and everything it cannot carry (build commands, health
-checks, volumes, Railway domains, custom domains).
+write a plan: the MIOSA project, a Deploy target per Railway environment, and
+in each the services, databases, variable names and shared variables it would
+create, and everything it cannot carry (volumes' data, Railway domains, regions
+outside the US, references MIOSA has no equivalent for).
 
 ```
   miosa import railway --project acme-api                      # review the plan
-  miosa import railway --project acme-api --out plan.json      # keep it
-  miosa import railway --apply --plan plan.json                # create it
+  miosa import railway --project acme-api --environment all --out plan.json
+  miosa import railway --apply --plan plan.json                # create it, stopped
+  miosa import railway --apply --plan plan.json --deploy       # create and start it
 
 ```
+Settings come from the repository's railway.json or railway.toml when it has
+one (as on Railway, the file wins), else from the service settings, else from
+what the latest deployment ran; the plan records which for each setting.
+
+An apply creates every service stopped: nothing builds or runs until you deploy
+it, or pass --deploy.
+A GitHub repository, private or public, is linked through
+your GitHub connection (miosa connections add apps github): MIOSA copies it into
+Forge and builds from the copy.
+Running apply again creates only what is missing.
+
 The token is read from RAILWAY_TOKEN, --token-file, or a prompt.
 It is never
 stored.
@@ -9762,10 +9775,12 @@ Guide: https://miosa.ai/docs/migrate/railway
 Flags:
 
 - `--allow-missing-values` - Create variables with no value as empty strings.
-- `--apply` - Create what the plan says.
+- `--apply` - Create what the plan says, with every service stopped.
+- `--attach-domains` - With --apply: attach the custom domains (default: list them, attach nothing).
 - `--cleanup` - Delete exactly the ids recorded in --state.
 - `--copy-variables` - Copy variable values, not just names (prints a warning).
-- `--environment string` - Railway environment to import. (default `production`)
+- `--deploy` - With --apply: also start every service that has a source.
+- `--environment stringSlice` - Railway environments to import, comma separated, or all. (default `[production]`)
 - `--exclude stringSlice` - Leave these services out (comma separated).
 - `--from-file string` - Read railway.json or railway.toml instead of the API.
 - `--include-targets` - Also import other Railway environments as Deploy targets.
@@ -12906,12 +12921,14 @@ Flags:
 - `--branch string` - Git branch (default: the repository default).
 - `--build-command string` - Static services: build command (Railpack builds only).
 - `--deploy-target string` - Deploy target name or id (default: the project's default).
-- `--dockerfile string` - Dockerfile path (needs Services build cells).
+- `--dockerfile string` - Dockerfile path, relative to --root-dir (--repo only).
 - `--env stringArray` - Variable KEY=VALUE (repeatable); a value may be a ${{...}} reference.
+- `--healthcheck-path string` - HTTP path the health check requests, for example /healthz.
 - `--image string` - Container image reference.
 - `--no-public` - Do not give a web or static service a public address.
 - `--output-dir string` - Static services: directory to serve (default: detected).
-- `--port int` - Port the container listens on (--image only).
+- `--port int` - Port the service listens on; health checks and the public address use it.
+- `--pre-deploy string` - Command run once before each release starts (for example migrations).
 - `--region string` - Region: us-west, us-east or us-mia.
 - `--replicas int` - Replicas to run (1-50).
 - `--repo string` - Git repository URL.
@@ -13332,6 +13349,8 @@ pass change.
   miosa service update cliniciq API --spread single_host
   miosa service update cliniciq API --size dedicated-4
   miosa service update cliniciq site --build-command "npm run build" --output-dir dist
+  miosa service update cliniciq API --pre-deploy "alembic upgrade head" --healthcheck-path /readyz
+  miosa service update cliniciq API --root-dir apps/api --dockerfile Dockerfile --port 8000
 
 ```
 --spread is auto (replicas land on different hosts where the network allows) or
@@ -13343,12 +13362,17 @@ Flags:
 
 - `--build-command string` - Static services: build command (Railpack builds only).
 - `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--dockerfile string` - Dockerfile path, relative to the root directory; empty lets the build choose.
+- `--healthcheck-path string` - HTTP path the health check requests; empty removes it.
 - `--name string` - New name.
 - `--output-dir string` - Static services: directory to serve (default: detected).
+- `--port int` - Port the service listens on; health checks and the public address use it.
+- `--pre-deploy string` - Command run once before each release starts; empty removes it.
 - `--region string` - Region: us-west, us-east or us-mia.
 - `--replicas int` - Replicas to run (1-50).
 - `--rollout-step intSlice` - Traffic step in percent (repeatable, ascending, ends at 100).
 - `--rollout-step-s int` - Seconds to wait between steps (10-3600).
+- `--root-dir string` - Directory inside the repository to build; empty is the root.
 - `--size string` - Dedicated vCPU size: dedicated-2, dedicated-4, dedicated-8, dedicated-16.
 - `--spread string` - Replica placement: auto or single_host.
 - `--start-command string` - Command the service starts with.

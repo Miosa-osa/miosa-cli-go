@@ -77,10 +77,10 @@ func TestBuildMapsServicesDatabasesAndVariables(t *testing.T) {
 	if api.Name != "api" || api.Kind != "server" {
 		t.Fatalf("api = %+v", api)
 	}
-	if api.Source == nil || api.Source.Ref != "https://github.com/acme/api" || api.Source.Branch != "main" || api.Source.RootDir != "/app" {
+	if api.Source == nil || api.Source.Ref != "https://github.com/acme/api" || api.Source.Branch != "main" || api.Source.RootDir != "app" {
 		t.Fatalf("api source = %+v", api.Source)
 	}
-	if api.Build == nil || api.Build.Dockerfile != "Dockerfile.prod" {
+	if api.Build == nil || api.Build.Dockerfile != "Dockerfile.prod" || api.Build.BuildCommand != "npm run build" {
 		t.Fatalf("api build = %+v", api.Build)
 	}
 	if api.Settings.StartCommand != "npm start" || api.Settings.Replicas != 2 || api.Settings.Region != "us-east" {
@@ -139,7 +139,7 @@ func TestBuildReportsEverythingItCannotCarry(t *testing.T) {
 	for _, a := range actionsOf(plan, "unmapped") {
 		fields[a.Field] = a
 	}
-	for _, want := range []string{"buildCommand", "volume /data", "plugin mongodb"} {
+	for _, want := range []string{"volume /data", "plugin mongodb"} {
 		if _, ok := fields[want]; !ok {
 			t.Fatalf("no unmapped action for %q; got %v", want, keysOf(fields))
 		}
@@ -157,8 +157,10 @@ func TestBuildTargetsAndNames(t *testing.T) {
 	if len(actionsOf(plan, "project.create")) != 0 {
 		t.Fatal("--into must not create a project")
 	}
+	// The read environment is a target the services go into; --include-targets
+	// adds the others, empty.
 	targets := actionsOf(plan, "target.create")
-	if len(targets) != 1 || targets[0].Name != "staging" {
+	if len(targets) != 2 || targets[0].Name != "production" || targets[1].Name != "staging" {
 		t.Fatalf("targets = %+v", targets)
 	}
 	if plan.Target.ProjectName != "acme" || plan.Target.Into != "existing" {
@@ -226,7 +228,7 @@ func TestBuildFileCarriesConfigAndReportsTheRest(t *testing.T) {
 		t.Fatalf("services = %+v", services)
 	}
 	svc := services[0]
-	if svc.Build == nil || svc.Build.Dockerfile != "Dockerfile" {
+	if svc.Build == nil || svc.Build.Dockerfile != "Dockerfile" || svc.Build.BuildCommand != "npm run build" {
 		t.Fatalf("build = %+v", svc.Build)
 	}
 	if svc.Settings.HealthcheckPath != "/health" || svc.Settings.RestartPolicy != "on_failure" || svc.Settings.PreDeployCommand != "npm run migrate" {
@@ -246,7 +248,7 @@ func TestBuildFileCarriesConfigAndReportsTheRest(t *testing.T) {
 	for _, a := range actionsOf(plan, "unmapped") {
 		fields[a.Field] = true
 	}
-	for _, want := range []string{"build.builder", "build.buildCommand", "build.watchPatterns", "deploy.sleepApplication", "deploy.region"} {
+	for _, want := range []string{"build.builder", "build.watchPatterns", "deploy.sleepApplication", "deploy.region"} {
 		if !fields[want] {
 			t.Fatalf("no unmapped action for %q", want)
 		}

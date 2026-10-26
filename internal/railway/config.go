@@ -107,7 +107,7 @@ func BuildFile(cfg FileConfig, serviceName string, opts Options) Plan {
 		Name:    svc.Name,
 		Kind:    kindOf(svc),
 		Source:  nil,
-		Build:   dockerfileSetting(cfg.Build.DockerfilePath),
+		Build:   buildSetting(Service{DockerfilePath: cfg.Build.DockerfilePath, BuildCommand: cfg.Build.BuildCommand}),
 		Address: &address,
 		Settings: &ServiceSetting{
 			StartCommand:       svc.StartCommand,
@@ -131,13 +131,6 @@ func kindOf(svc Service) string {
 	return kind
 }
 
-func dockerfileSetting(path string) *BuildSetting {
-	if path == "" {
-		return nil
-	}
-	return &BuildSetting{Dockerfile: path}
-}
-
 func unmappedFileActions(cfg FileConfig, service string) []Action {
 	var actions []Action
 	add := func(field, why, next string) {
@@ -145,9 +138,6 @@ func unmappedFileActions(cfg FileConfig, service string) []Action {
 	}
 	if cfg.Build.Builder != "" {
 		add("build.builder", "MIOSA builds from the Dockerfile or detects the stack; there is no builder choice", "none")
-	}
-	if cfg.Build.BuildCommand != "" {
-		add("build.buildCommand", "MIOSA has no build command setting", "move it into the Dockerfile or a build script")
 	}
 	if len(cfg.Build.WatchPatterns) > 0 {
 		add("build.watchPatterns", "MIOSA builds on every push", "none")
