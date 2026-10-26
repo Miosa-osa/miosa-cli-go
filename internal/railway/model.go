@@ -161,6 +161,11 @@ type Variable struct {
 	// read unless --copy-variables was asked for.
 	Value    string `json:"value,omitempty"`
 	HasValue bool   `json:"has_value"`
+	// Build is whether the variable should be build-visible on MIOSA. Railway
+	// exposes every service variable to the build, so an import asks for it
+	// unless --runtime-only-vars. A variable is only made build-visible once it
+	// has a value (the API requires one).
+	Build bool `json:"build,omitempty"`
 }
 
 // VolumeRef is a Railway volume attached to a service.
