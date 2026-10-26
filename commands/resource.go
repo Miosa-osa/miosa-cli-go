@@ -624,6 +624,29 @@ func confirmDestructive(cmd *cobra.Command, what string) error {
 	return usagef("%s - pass --yes to confirm", what)
 }
 
+// confirmDatabaseDelete makes the caller name a database service before it and its data are destroyed: --confirm
+// with the exact name, or the name typed at a terminal. Without either it fails, so a script never deletes a
+// database by accident and never silently skips the delete either.
+func confirmDatabaseDelete(cmd *cobra.Command, name, confirm string) error {
+	warning := fmt.Sprintf("%q is a database service: deleting it destroys its database and all of its data. This cannot be undone.", name)
+	if confirm != "" {
+		if confirm != name {
+			return usagef("--confirm %q does not match the database service name %q", confirm, name)
+		}
+		return nil
+	}
+	in := cmd.InOrStdin()
+	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		fmt.Fprintf(cmd.ErrOrStderr(), "%s\nType the service name (%s) to confirm: ", warning, name)
+		line, _ := bufio.NewReader(in).ReadString('\n')
+		if strings.TrimSpace(line) == name {
+			return nil
+		}
+		return die(fmt.Errorf("canceled: the name did not match, nothing was deleted"))
+	}
+	return usagef("%s Pass --confirm %q to delete it", warning, name)
+}
+
 // confirmOnTerminal is confirmDestructive for code without a command at hand:
 // it asks on the process's terminal and otherwise asks for --yes.
 func confirmOnTerminal(what string) error {

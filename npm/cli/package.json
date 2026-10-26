@@ -1,16 +1,16 @@
 {
   "name": "@miosa/cli",
-  "version": "2.13.2",
+  "version": "2.13.3",
   "description": "The official MIOSA command-line tool (native binary, installed per platform)",
   "bin": {
     "miosa": "bin/miosa.js"
   },
   "optionalDependencies": {
-    "@miosa/cli-darwin-arm64": "2.13.2",
-    "@miosa/cli-darwin-x64": "2.13.2",
-    "@miosa/cli-linux-arm64": "2.13.2",
-    "@miosa/cli-linux-x64": "2.13.2",
-    "@miosa/cli-win32-x64": "2.13.2"
+    "@miosa/cli-darwin-arm64": "2.13.3",
+    "@miosa/cli-darwin-x64": "2.13.3",
+    "@miosa/cli-linux-arm64": "2.13.3",
+    "@miosa/cli-linux-x64": "2.13.3",
+    "@miosa/cli-win32-x64": "2.13.3"
   },
   "files": [
     "bin",

@@ -1182,21 +1182,19 @@ func serviceActionCmd(action, short string, confirm bool, long string) *cobra.Co
 // ── delete ───────────────────────────────────────────────────────────────────
 
 func serviceDeleteCmd() *cobra.Command {
-	var env string
+	var env, confirm string
 	var yes bool
 	cmd := &cobra.Command{
 		Use:     "delete <project> <service>",
 		Aliases: []string{"rm"},
 		Short:   "Delete a service",
-		Long:    "Delete a service and stop its replicas. The service disappears from reads at once.",
-		Args:    cobra.ExactArgs(2),
+		Long: "Delete a service and stop its replicas. The service disappears from reads at once.\n\n" +
+			"Deleting a database service destroys its database and all of its data. It needs the service's exact " +
+			"name: typed at the prompt, or --confirm <name>. --yes is not enough, and a run with no terminal and " +
+			"no --confirm fails.",
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p := printerFor(cmd)
-			if !yes {
-				if err := confirmDestructive(cmd, fmt.Sprintf("Permanently delete service %q?", args[1])); err != nil {
-					return err
-				}
-			}
 			c, _, err := buildClient()
 			if err != nil {
 				return die(err)
@@ -1206,7 +1204,22 @@ func serviceDeleteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := c.API.Delete(ctx, servicePath(projectID, svc.ID), nil, nil); err != nil {
+			path := servicePath(projectID, svc.ID)
+			if svc.Kind == "database" {
+				if err := confirmDatabaseDelete(cmd, svc.Name, confirm); err != nil {
+					return err
+				}
+				path += "?confirm=" + url.QueryEscape(svc.Name)
+			} else if confirm != "" {
+				if confirm != svc.Name {
+					return usagef("--confirm %q does not match the service name %q", confirm, svc.Name)
+				}
+			} else if !yes {
+				if err := confirmDestructive(cmd, fmt.Sprintf("Permanently delete service %q?", svc.Name)); err != nil {
+					return err
+				}
+			}
+			if err := c.API.Delete(ctx, path, nil, nil); err != nil {
 				return die(err)
 			}
 			if isJSON() {
@@ -1217,7 +1230,8 @@ func serviceDeleteCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&env, "deploy-target", "", "Deploy target name or id (default: the project's default)")
-	cmd.Flags().BoolVar(&yes, "yes", false, "Do not ask for confirmation")
+	cmd.Flags().BoolVar(&yes, "yes", false, "Do not ask for confirmation (not enough for a database service: use --confirm)")
+	cmd.Flags().StringVar(&confirm, "confirm", "", "The service's exact name; required to delete a database service without a prompt")
 	return cmd
 }
 
