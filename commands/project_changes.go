@@ -57,8 +57,12 @@ func changesTarget(ctx context.Context, c *api.Client, projectRef, env string) (
 		return "", nil, err
 	}
 	q := url.Values{}
-	if env != "" {
-		q.Set("env", env)
+	envID, err := deployTargetID(ctx, c, projectID, env)
+	if err != nil {
+		return "", nil, err
+	}
+	if envID != "" {
+		q.Set("env", envID)
 	}
 	return "/projects/" + url.PathEscape(projectID) + "/changes", q, nil
 }

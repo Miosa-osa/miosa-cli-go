@@ -9789,6 +9789,7 @@ Flags:
 - `--only stringSlice` - Import only these services (comma separated).
 - `--out string` - Write the plan JSON here.
 - `--plan string` - With --apply: the plan to apply.
+- `--primary-environment string` - The environment whose services get the plain <name>.<org>.miosa.app addresses; the others get -<environment>. (default `production`)
 - `--project string` - Railway project id or name.
 - `--region string` - With --apply: MIOSA region for services whose Railway region has no equivalent.
 - `--resume` - Continue an interrupted apply.

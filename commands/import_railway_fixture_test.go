@@ -411,6 +411,8 @@ func (m *fakeMiosa) reply(c call) (int, string) {
 	}
 	parts := strings.Split(strings.Trim(c.Path, "/"), "/")
 	switch {
+	case c.is("GET", "/workspaces"):
+		return 200, `{"data":[{"id":"9c0ffee0-0000-4000-8000-000000000001","slug":"cliniciq-platform","name":"ClinicIQ Platform"}]}`
 	case c.is("GET", "/project-capabilities"):
 		return 200, jsonOf(map[string]any{"data": map[string]any{"services_api": true, "source_builds": m.sourceBuilds}})
 	case c.is("GET", "/integrations/github/repos"):
