@@ -154,6 +154,9 @@ type Options struct {
 	Only []string
 	// Exclude leaves these services out; it is applied after Only.
 	Exclude []string
+	// RuntimeOnlyVars creates every variable runtime only. By default an
+	// import makes them build-visible, as on Railway.
+	RuntimeOnlyVars bool
 	// PrimaryEnvironment is the environment whose services get the plain
 	// address labels; every other environment's labels end in -<environment>.
 	// Empty means production.
@@ -228,7 +231,7 @@ func Build(src Source, opts Options) (Plan, error) {
 	}
 
 	refs := refContext{engines: databaseEngines(src), renames: renames}
-	needsValue, private := 0, 0
+	needsValue, private, buildVisible := 0, 0, 0
 	outsideUS := map[string]int{}
 	for _, svc := range src.Services {
 		env := svc.Environment
@@ -253,6 +256,10 @@ func Build(src Source, opts Options) (Plan, error) {
 		plan.Actions = append(plan.Actions, actions...)
 		for _, v := range svc.Variables {
 			carried, reports := carryVariable(v, svc.Name, env, refs)
+			carried.Build = wantsBuild(carried.Name, opts)
+			if carried.Build {
+				buildVisible++
+			}
 			if strings.Contains(carried.Value, ".MIOSA_PRIVATE_DOMAIN}}") {
 				private++
 			}
@@ -279,6 +286,10 @@ func Build(src Source, opts Options) (Plan, error) {
 	}
 	for _, shared := range src.Shared {
 		carried, reports := carryVariable(shared.Variable, "shared", shared.Environment, refs)
+		carried.Build = wantsBuild(carried.Name, opts)
+		if carried.Build {
+			buildVisible++
+		}
 		plan.Actions = append(plan.Actions, Action{Op: "shared.set", Env: shared.Environment, Variable: &carried})
 		if !carried.HasValue {
 			needsValue++
@@ -298,6 +309,14 @@ func Build(src Source, opts Options) (Plan, error) {
 			"%d service(s) ran outside the US on Railway (%s), and MIOSA runs in us-east, us-west and us-mia. "+
 				"Apply needs --region; latency to their users and data residency change.",
 			total, strings.Join(regions, ", ")))
+	}
+	if buildVisible > 0 {
+		plan.Warnings = append(plan.Warnings, fmt.Sprintf(
+			"%d variable(s) will be build-visible, because Railway exposes every service variable to the build "+
+				"(NEXT_PUBLIC_*, VITE_* and PUBLIC_* are inlined then). On MIOSA a build-visible variable reaches the build as a "+
+				"BuildKit secret, never stored in an image layer, unless the Dockerfile declares an ARG of that name, which gets it "+
+				"as a build argument. One without a value becomes build-visible when you set it with --build. "+
+				"Pass --runtime-only-vars to create them all runtime only.", buildVisible))
 	}
 	if private > 0 {
 		plan.Warnings = append(plan.Warnings, fmt.Sprintf(
@@ -397,6 +416,23 @@ func serviceActions(svc Service) []Action {
 		})
 	}
 	return actions
+}
+
+// buildReservedPrefixes are names the API refuses to make build-visible: the
+// platform's own build settings.
+var buildReservedPrefixes = []string{"MIOSA_", "RAILPACK_"}
+
+// wantsBuild is whether an imported variable asks to be build-visible.
+func wantsBuild(name string, opts Options) bool {
+	if opts.RuntimeOnlyVars {
+		return false
+	}
+	for _, prefix := range buildReservedPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return false
+		}
+	}
+	return true
 }
 
 // AddressLabel is a service's public address label: its slug in the primary

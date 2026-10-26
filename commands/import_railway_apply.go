@@ -838,9 +838,22 @@ func (a *applier) getService(serviceID string) (*projectServiceRow, error) {
 	return &out.Data, nil
 }
 
-// applyVariables writes each service's variables in one call per service.
+// variableEntry is one variable as the API's entry list takes it. A variable
+// is build-visible only when the plan asks for it and it has a value: the API
+// refuses an empty build-visible variable, and one created empty becomes
+// build-visible when its value is set with --build.
+func variableEntry(v *railway.Variable) map[string]any {
+	value := ""
+	if v.HasValue {
+		value = v.Value
+	}
+	return map[string]any{"name": v.Name, "value": value, "build": v.Build && strings.TrimSpace(value) != ""}
+}
+
+// applyVariables writes each service's variables in one call per service, as
+// the entry list, which is what carries each variable's build visibility.
 func (a *applier) applyVariables() error {
-	pending := map[string]map[string]any{}
+	pending := map[string][]map[string]any{}
 	var order []string
 	for _, act := range a.plan.Actions {
 		if act.Op != "variable.set" || act.Variable == nil {
@@ -848,46 +861,37 @@ func (a *applier) applyVariables() error {
 		}
 		key := serviceKey(act.Env, act.Service)
 		if pending[key] == nil {
-			pending[key] = map[string]any{}
 			order = append(order, key)
 		}
-		value := ""
-		if act.Variable.HasValue {
-			value = act.Variable.Value
-		}
-		pending[key][act.Variable.Name] = value
+		pending[key] = append(pending[key], variableEntry(act.Variable))
 	}
 	for _, key := range order {
 		serviceID := a.services[key]
 		if serviceID == "" {
 			continue
 		}
-		if err := putServiceVariables(a.ctx, a.api, a.projectID, serviceID, pending[key]); err != nil {
+		body := map[string]any{"variables": pending[key]}
+		if err := a.api.Put(a.ctx, servicePath(a.projectID, serviceID)+"/variables", body, nil); err != nil {
 			return a.failed(err)
 		}
 		env, name, _ := strings.Cut(key, "|")
-		a.p.Line("set %d variable(s) on %s%s", len(pending[key]), name, envSuffix(env))
+		a.p.Line("set %d variable(s) on %s%s%s", len(pending[key]), name, envSuffix(env), buildCount(pending[key]))
 	}
 	return nil
 }
 
 // applySharedVariables writes each Deploy target's shared variables.
 func (a *applier) applySharedVariables() error {
-	pending := map[string]map[string]any{}
+	pending := map[string][]map[string]any{}
 	var order []string
 	for _, act := range a.plan.Actions {
 		if act.Op != "shared.set" || act.Variable == nil {
 			continue
 		}
 		if pending[act.Env] == nil {
-			pending[act.Env] = map[string]any{}
 			order = append(order, act.Env)
 		}
-		value := ""
-		if act.Variable.HasValue {
-			value = act.Variable.Value
-		}
-		pending[act.Env][act.Variable.Name] = value
+		pending[act.Env] = append(pending[act.Env], variableEntry(act.Variable))
 	}
 	for _, env := range order {
 		body := map[string]any{"variables": pending[env]}
@@ -897,9 +901,23 @@ func (a *applier) applySharedVariables() error {
 		if err := a.api.Put(a.ctx, "/projects/"+url.PathEscape(a.projectID)+"/shared-variables", body, nil); err != nil {
 			return a.failed(err)
 		}
-		a.p.Line("set %d shared variable(s) in %s", len(pending[env]), envLabel(env))
+		a.p.Line("set %d shared variable(s) in %s%s", len(pending[env]), envLabel(env), buildCount(pending[env]))
 	}
 	return nil
+}
+
+// buildCount says how many of a write's variables are build-visible.
+func buildCount(entries []map[string]any) string {
+	n := 0
+	for _, e := range entries {
+		if e["build"] == true {
+			n++
+		}
+	}
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", %d build-visible", n)
 }
 
 // applyDomains attaches custom domains, only with --attach-domains: a live
@@ -1007,7 +1025,10 @@ var importPollInterval = 3 * time.Second
 // nothing was started, what still needs a value, and the exact next commands.
 func (a *applier) summary() {
 	var services, databases, targets, needs []string
-	type need struct{ env, service, name string }
+	type need struct {
+		env, service, name string
+		build              bool
+	}
 	var needList []need
 	for _, act := range a.plan.Actions {
 		switch act.Op {
@@ -1024,12 +1045,12 @@ func (a *applier) summary() {
 		case "variable.set":
 			if act.Variable != nil && !act.Variable.HasValue {
 				needs = append(needs, act.Service+envSuffix(act.Env)+"."+act.Variable.Name)
-				needList = append(needList, need{act.Env, act.Service, act.Variable.Name})
+				needList = append(needList, need{act.Env, act.Service, act.Variable.Name, act.Variable.Build})
 			}
 		case "shared.set":
 			if act.Variable != nil && !act.Variable.HasValue {
 				needs = append(needs, "shared"+envSuffix(act.Env)+"."+act.Variable.Name)
-				needList = append(needList, need{act.Env, "", act.Variable.Name})
+				needList = append(needList, need{act.Env, "", act.Variable.Name, act.Variable.Build})
 			}
 		}
 	}
@@ -1067,11 +1088,16 @@ func (a *applier) summary() {
 	if len(needList) > 0 {
 		p.Line("  set the new secrets (never reuse the Railway value):")
 		for _, n := range needList {
+			flags := targetFlag(n.env)
+			if n.build {
+				// As on Railway, the build sees it once it has a value.
+				flags += " --build"
+			}
 			if n.service == "" {
-				p.Line("    miosa project vars set %s %s=<new value>%s", project, n.name, targetFlag(n.env))
+				p.Line("    miosa project vars set %s %s=<new value>%s", project, n.name, flags)
 				continue
 			}
-			p.Line("    miosa service vars set %s %s %s=<new value>%s", project, shellArg(n.service), n.name, targetFlag(n.env))
+			p.Line("    miosa service vars set %s %s %s=<new value>%s", project, shellArg(n.service), n.name, flags)
 		}
 	}
 	for _, act := range a.plan.Actions {

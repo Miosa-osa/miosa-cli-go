@@ -37,6 +37,13 @@ Settings come from the repository's railway.json or railway.toml when it has
 one (as on Railway, the file wins), else from the service settings, else from
 what the latest deployment ran; the plan records which for each setting.
 
+Variables are created build-visible, as on Railway, which exposes every service
+variable to the build (so NEXT_PUBLIC_*, VITE_* and PUBLIC_* values are inlined).
+A build-visible variable reaches the build as a BuildKit secret and is never
+stored in an image layer, unless the Dockerfile declares an ARG of that name:
+then it is passed as a build argument, as on Railway, and a RUN that uses it is
+recorded in the image history. --runtime-only-vars creates them runtime only.
+
 An apply creates every service stopped: nothing builds or runs until you deploy
 it, or pass --deploy. A GitHub repository, private or public, is linked through
 your GitHub connection (miosa connections add apps github): MIOSA copies it into
@@ -81,6 +88,7 @@ Guide: https://miosa.ai/docs/migrate/railway`,
 	fs.StringVar(&f.tokenFile, "token-file", "", "File holding the Railway token")
 	fs.StringSliceVar(&f.only, "only", nil, "Import only these services (comma separated)")
 	fs.StringSliceVar(&f.exclude, "exclude", nil, "Leave these services out (comma separated)")
+	fs.BoolVar(&f.runtimeOnlyVars, "runtime-only-vars", false, "Create every variable runtime only (default: build-visible, as on Railway)")
 	fs.StringVar(&f.primaryEnv, "primary-environment", "production", "The environment whose services get the plain <name>.<org>.miosa.app addresses; the others get -<environment>")
 	fs.StringVar(&f.suffix, "suffix", "", "Append this to every service name and insert it before each custom domain's first dot")
 	fs.StringVar(&f.via, "via", "", "How to read Railway: token (default) or railway-cli (its logged-in session)")
@@ -92,34 +100,35 @@ Guide: https://miosa.ai/docs/migrate/railway`,
 }
 
 type railwayImportFlags struct {
-	project        string
-	environments   []string
-	fromFile       string
-	serviceName    string
-	workspace      string
-	name           string
-	into           string
-	includeTargets bool
-	copyVars       bool
-	out            string
-	planPath       string
-	apply          bool
-	deploy         bool
-	attachDomains  bool
-	state          string
-	resume         bool
-	cleanup        bool
-	allowMissing   bool
-	token          string
-	tokenFile      string
-	dumpDir        string
-	only           []string
-	exclude        []string
-	suffix         string
-	primaryEnv     string
-	via            string
-	region         string
-	yes            bool
+	project         string
+	environments    []string
+	fromFile        string
+	serviceName     string
+	workspace       string
+	name            string
+	into            string
+	includeTargets  bool
+	copyVars        bool
+	out             string
+	planPath        string
+	apply           bool
+	deploy          bool
+	attachDomains   bool
+	state           string
+	resume          bool
+	cleanup         bool
+	allowMissing    bool
+	token           string
+	tokenFile       string
+	dumpDir         string
+	only            []string
+	exclude         []string
+	suffix          string
+	primaryEnv      string
+	runtimeOnlyVars bool
+	via             string
+	region          string
+	yes             bool
 }
 
 func runRailwayImport(cmd *cobra.Command, f *railwayImportFlags) error {
@@ -173,6 +182,7 @@ func buildImportPlan(ctx context.Context, f *railwayImportFlags) (railway.Plan, 
 		Exclude:            f.exclude,
 		Suffix:             f.suffix,
 		PrimaryEnvironment: f.primaryEnv,
+		RuntimeOnlyVars:    f.runtimeOnlyVars,
 	}
 	if f.fromFile != "" {
 		cfg, err := railway.ReadFile(f.fromFile)

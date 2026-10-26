@@ -9751,6 +9751,13 @@ Settings come from the repository's railway.json or railway.toml when it has
 one (as on Railway, the file wins), else from the service settings, else from
 what the latest deployment ran; the plan records which for each setting.
 
+Variables are created build-visible, as on Railway, which exposes every service
+variable to the build (so NEXT_PUBLIC_*, VITE_* and PUBLIC_* values are inlined).
+A build-visible variable reaches the build as a BuildKit secret and is never
+stored in an image layer, unless the Dockerfile declares an ARG of that name:
+then it is passed as a build argument, as on Railway, and a RUN that uses it is
+recorded in the image history. --runtime-only-vars creates them runtime only.
+
 An apply creates every service stopped: nothing builds or runs until you deploy
 it, or pass --deploy.
 A GitHub repository, private or public, is linked through
@@ -9793,6 +9800,7 @@ Flags:
 - `--project string` - Railway project id or name.
 - `--region string` - With --apply: MIOSA region for services whose Railway region has no equivalent.
 - `--resume` - Continue an interrupted apply.
+- `--runtime-only-vars` - Create every variable runtime only (default: build-visible, as on Railway).
 - `--service-name string` - With --from-file: the service name.
 - `--state string` - Where created ids are recorded (default .miosa/import-railway-<project>.json).
 - `--suffix string` - Append this to every service name and insert it before each custom domain's first dot.

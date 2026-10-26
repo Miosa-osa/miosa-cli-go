@@ -620,3 +620,62 @@ func TestImportRailwayResolvesTheWorkspaceSlugToItsID(t *testing.T) {
 		}
 	}
 }
+
+func TestImportRailwayMakesVariablesBuildVisibleAsOnRailway(t *testing.T) {
+	plan, stdout, planPath := planFor(t, clinicIQBetaStaging(), "--environment", "staging", "--copy-variables")
+	if v := variableOf(t, plan, "staging", "clinic-iq-web", "NEXT_PUBLIC_SUPABASE_URL"); !v.Build || !v.HasValue {
+		t.Fatalf("a Railway variable is build-visible by default: %+v", v)
+	}
+	if v := variableOf(t, plan, "staging", "clinic-iq-web", "MIOSA_API_KEY"); v.Build {
+		t.Fatalf("MIOSA_* cannot be build-visible (the API refuses it): %+v", v)
+	}
+	if !strings.Contains(stdout, "will be build-visible, because Railway exposes every service variable to the build") ||
+		!strings.Contains(stdout, "BuildKit secret") || !strings.Contains(stdout, "--runtime-only-vars") {
+		t.Fatalf("the review must say how many are build-visible and why:\n%s", stdout)
+	}
+
+	miosa := newFakeMiosa()
+	f := newFakeAPI(t, miosa.reply)
+	out, err := run(t, "import", "railway", "--apply", "--plan", planPath, "--state", filepath.Join(t.TempDir(), "s.json"),
+		"--allow-missing-values", "--region", "us-east")
+	if err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	var web map[string]map[string]any
+	for _, c := range f.calls {
+		if c.Method != "PUT" || !strings.HasSuffix(c.Path, "/variables") {
+			continue
+		}
+		entries := entriesOf(t, c.Body)
+		if _, ok := entries["NEXT_PUBLIC_SUPABASE_URL"]; ok {
+			web = entries
+		}
+	}
+	if web == nil {
+		t.Fatal("the web service's variables were not written")
+	}
+	if web["NEXT_PUBLIC_SUPABASE_URL"]["build"] != true || web["MIOSA_API_KEY"]["build"] != false {
+		t.Fatalf("web entries = %#v", web)
+	}
+	// A variable created empty cannot be build-visible yet; the next step sets
+	// it with --build.
+	if web["NEXT_PUBLIC_APP_URL"]["build"] != false {
+		t.Fatalf("an empty variable must not be sent build-visible: %#v", web["NEXT_PUBLIC_APP_URL"])
+	}
+	if !strings.Contains(out, "miosa service vars set clinic-iq-beta-staging clinic-iq-web NEXT_PUBLIC_APP_URL=<new value> --deploy-target staging --build") ||
+		!strings.Contains(out, "build-visible") {
+		t.Fatalf("apply output:\n%s", out)
+	}
+}
+
+func TestImportRailwayRuntimeOnlyVarsOptsOut(t *testing.T) {
+	plan, stdout, _ := planFor(t, clinicIQBetaStaging(), "--environment", "staging", "--copy-variables", "--runtime-only-vars")
+	for _, a := range plan.Actions {
+		if a.Variable != nil && a.Variable.Build {
+			t.Fatalf("--runtime-only-vars must make none build-visible: %+v", a.Variable)
+		}
+	}
+	if strings.Contains(stdout, "will be build-visible") {
+		t.Fatalf("review:\n%s", stdout)
+	}
+}
