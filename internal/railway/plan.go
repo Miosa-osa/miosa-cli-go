@@ -10,8 +10,13 @@ import (
 )
 
 // PlanVersion is the plan schema version. A plan from another version is
-// refused rather than half-applied.
-const PlanVersion = 1
+// refused rather than half-applied. Version 2 added environments (Action.Env),
+// shared variables, provenance and the build command; a version 1 plan has no
+// environments and still applies, into the project's default one.
+const PlanVersion = 2
+
+// OldestPlanVersion is the oldest plan this CLI still applies.
+const OldestPlanVersion = 1
 
 // RotationWarning is printed on every plan, because it is the one thing a
 // Railway user must hear before trusting an import.
@@ -51,9 +56,19 @@ type PlanTarget struct {
 type Action struct {
 	Op string `json:"op"`
 
+	// Env is the Railway environment the action belongs to; the MIOSA Deploy
+	// target of the same name. Empty means the project's default.
+	Env string `json:"env,omitempty"`
+
 	// project.create, target.create, service.create, database.create, and the
 	// name inside variable.set and unmapped.
 	Name string `json:"name,omitempty"`
+
+	// service.create and database.service
+	// Slug is the service's MIOSA slug (a-z 0-9 -, at most 40 characters).
+	Slug string `json:"slug,omitempty"`
+	// RailwayName is the service's name on Railway when MIOSA's had to differ.
+	RailwayName string `json:"railway_name,omitempty"`
 
 	// service.create
 	Kind     string          `json:"kind,omitempty"`
@@ -64,13 +79,18 @@ type Action struct {
 	// NeedsRegion is set when the Railway region has no MIOSA equivalent, so an
 	// apply must be given --region rather than guessing.
 	NeedsRegion bool `json:"needs_region,omitempty"`
+	// RailwayRegion is the region the service ran in on Railway.
+	RailwayRegion string `json:"railway_region,omitempty"`
+	// Provenance names where each setting came from: the config file (its
+	// path), the service settings, or the latest deployment.
+	Provenance map[string]string `json:"provenance,omitempty"`
 
 	// database.create
 	Engine  string `json:"engine,omitempty"`
 	Version string `json:"version,omitempty"`
 	Size    string `json:"size,omitempty"`
 
-	// variable.set
+	// variable.set and shared.set
 	Service     string    `json:"service,omitempty"`
 	Variable    *Variable `json:"variable,omitempty"`
 	ValueTarget string    `json:"value_target,omitempty"` // the service whose value is needed
@@ -91,11 +111,17 @@ type ServiceSource struct {
 	Ref     string `json:"ref"`
 	Branch  string `json:"branch,omitempty"`
 	RootDir string `json:"root_dir,omitempty"`
+	// Port is the port the service listens on: health checks and the public
+	// address use it. Railway's target port.
+	Port int `json:"port,omitempty"`
 }
 
-// BuildSetting is the build half of a service.
+// BuildSetting is the build half of a service. The applier writes it onto the
+// service source, which is what the builder reads.
 type BuildSetting struct {
-	Dockerfile string `json:"dockerfile,omitempty"`
+	// Dockerfile is relative to the source's root directory.
+	Dockerfile   string `json:"dockerfile,omitempty"`
+	BuildCommand string `json:"build_command,omitempty"`
 }
 
 // ServiceSetting is the run half of a service.
@@ -138,6 +164,7 @@ func Build(src Source, opts Options) (Plan, error) {
 	src, skipped := filterServices(src, opts.Only)
 	src, excluded := excludeServices(src, opts.Exclude)
 	src = applySuffix(src, opts.Suffix)
+	src, renames := sanitizeNames(src)
 	digest, err := digestOf(src)
 	if err != nil {
 		return Plan{}, err
@@ -165,9 +192,13 @@ func Build(src Source, opts Options) (Plan, error) {
 	if opts.Into == "" {
 		plan.Actions = append(plan.Actions, Action{Op: "project.create", Name: name})
 	}
+	read := readEnvironments(src)
+	for _, env := range read {
+		plan.Actions = append(plan.Actions, Action{Op: "target.create", Name: env})
+	}
 	if opts.IncludeTargets {
 		for _, env := range src.Environments {
-			if !strings.EqualFold(env, src.Environment) {
+			if !containsFold(read, env) {
 				plan.Actions = append(plan.Actions, Action{Op: "target.create", Name: env})
 			}
 		}
@@ -186,42 +217,77 @@ func Build(src Source, opts Options) (Plan, error) {
 		})
 	}
 
-	needsValue := 0
+	refs := refContext{engines: databaseEngines(src), renames: renames}
+	needsValue, private := 0, 0
+	outsideUS := map[string]int{}
 	for _, svc := range src.Services {
+		env := svc.Environment
 		if engine := databaseEngine(svc); engine != "" {
 			// Railway runs databases as image services. MIOSA has a database
 			// service that binds a managed database and provides DATABASE_URL /
 			// REDIS_URL, which is what the incoming references expect.
-			plan.Actions = append(plan.Actions, Action{Op: "database.service", Name: svc.Name, Engine: engine})
-			plan.Actions = append(plan.Actions, unmappedDatabase(svc, engine)...)
+			plan.Actions = append(plan.Actions, Action{Op: "database.service", Env: env, Name: svc.Name,
+				Slug: ServiceSlug(svc.Name), RailwayName: svc.RailwayName, Engine: engine})
+			plan.Actions = append(plan.Actions, withEnv(unmappedDatabase(svc, engine), env)...)
 			continue
 		}
-		plan.Actions = append(plan.Actions, serviceActions(svc)...)
+		if svc.Region != "" && mapRegion(svc.Region) == "" {
+			outsideUS[svc.Region]++
+		}
+		plan.Actions = append(plan.Actions, withEnv(serviceActions(svc), env)...)
 		for _, v := range svc.Variables {
-			action := Action{
-				Op:       "variable.set",
-				Service:  svc.Name,
-				Variable: &Variable{Name: v.Name, Value: v.Value, HasValue: v.HasValue},
+			carried, reports := carryVariable(v, svc.Name, env, refs)
+			if strings.Contains(carried.Value, ".MIOSA_PRIVATE_DOMAIN}}") {
+				private++
 			}
-			if !v.HasValue {
+			action := Action{Op: "variable.set", Env: env, Service: svc.Name, Variable: &carried}
+			if !carried.HasValue {
 				needsValue++
 				action.ValueTarget = svc.Name
 			}
 			plan.Actions = append(plan.Actions, action)
+			plan.Actions = append(plan.Actions, reports...)
 		}
 		if len(svc.ServiceDomains) > 0 || len(svc.CustomDomains) > 0 {
 			plan.Actions = append(plan.Actions, Action{
 				Op:      "domain.report",
+				Env:     env,
 				Service: svc.Name,
 				Domains: svc.ServiceDomains,
 			})
 		}
 		for _, d := range svc.CustomDomains {
-			plan.Actions = append(plan.Actions, Action{Op: "domain.custom", Service: svc.Name, Domains: []string{d}})
+			plan.Actions = append(plan.Actions, Action{Op: "domain.custom", Env: env, Service: svc.Name, Domains: []string{d}})
 		}
-		plan.Actions = append(plan.Actions, unmappedServiceActions(svc)...)
+		plan.Actions = append(plan.Actions, withEnv(unmappedServiceActions(svc), env)...)
+	}
+	for _, shared := range src.Shared {
+		carried, reports := carryVariable(shared.Variable, "shared", shared.Environment, refs)
+		plan.Actions = append(plan.Actions, Action{Op: "shared.set", Env: shared.Environment, Variable: &carried})
+		if !carried.HasValue {
+			needsValue++
+		}
+		plan.Actions = append(plan.Actions, reports...)
 	}
 
+	if len(outsideUS) > 0 {
+		regions := make([]string, 0, len(outsideUS))
+		total := 0
+		for region, n := range outsideUS {
+			regions = append(regions, fmt.Sprintf("%s (%d)", region, n))
+			total += n
+		}
+		sort.Strings(regions)
+		plan.Warnings = append(plan.Warnings, fmt.Sprintf(
+			"%d service(s) ran outside the US on Railway (%s), and MIOSA runs in us-east, us-west and us-mia. "+
+				"Apply needs --region; latency to their users and data residency change.",
+			total, strings.Join(regions, ", ")))
+	}
+	if private > 0 {
+		plan.Warnings = append(plan.Warnings, fmt.Sprintf(
+			"%d variable(s) now reference another service's MIOSA_PRIVATE_DOMAIN (<service>.miosa.internal); "+
+				"they resolve only while private networking between services is on for the organization.", private))
+	}
 	if len(skipped) > 0 {
 		plan.Warnings = append(plan.Warnings, fmt.Sprintf(
 			"not imported (--only): %s", strings.Join(skipped, ", ")))
@@ -248,44 +314,52 @@ func serviceActions(svc Service) []Action {
 		HealthcheckTimeout: svc.HealthcheckTimeout,
 		RestartPolicy:      mapRestartPolicy(svc.RestartPolicy),
 		MaxRetries:         svc.RestartMaxRetries,
+		PreDeployCommand:   svc.PreDeployCommand,
 	}
 	setting.Replicas = svc.NumReplicas
 	if setting.Replicas > 50 {
 		setting.Replicas = 50
 	}
+	if kind == "worker" {
+		// A worker listens on no port, so it has no health check to run.
+		setting.HealthcheckPath, setting.HealthcheckTimeout = "", 0
+	}
 
 	var source *ServiceSource
 	switch {
 	case svc.Repo != "":
-		source = &ServiceSource{Type: "git", Ref: repoURL(svc.Repo), Branch: svc.Branch, RootDir: svc.RootDirectory}
+		source = &ServiceSource{Type: "git", Ref: repoURL(svc.Repo), Branch: svc.Branch, RootDir: rootDir(svc.RootDirectory), Port: svc.Port}
 	case svc.Image != "":
-		source = &ServiceSource{Type: "image", Ref: svc.Image}
+		source = &ServiceSource{Type: "image", Ref: svc.Image, Port: svc.Port}
 	}
 
 	address := len(svc.ServiceDomains) > 0
 	var actions []Action
+	action := Action{
+		Op:          "service.create",
+		Name:        svc.Name,
+		Slug:        ServiceSlug(svc.Name),
+		RailwayName: svc.RailwayName,
+		Kind:        kind,
+		Source:      source,
+		Settings:    setting,
+		Address:     &address,
+		Provenance:  svc.Provenance,
+	}
+	if build := buildSetting(svc); build != nil && source != nil && source.Type == "git" {
+		action.Build = build
+	}
+	actions = append(actions, action)
+
 	if source == nil {
 		actions = append(actions, Action{
 			Op:    "unmapped",
 			Name:  svc.Name,
 			Field: "source",
-			Why:   "Railway has no repository or image for this service (it was uploaded with the CLI)",
-			Next:  "put the code in a repository, then set --repo on the plan's service before applying",
+			Why:   "Railway has no repository or image for this service (it was uploaded with the Railway CLI)",
+			Next:  "it is created without a source; upload the code with miosa service deploy <project> " + svc.Name + " --dir <path>",
 		})
 	}
-	action := Action{
-		Op:       "service.create",
-		Name:     svc.Name,
-		Kind:     kind,
-		Source:   source,
-		Settings: setting,
-		Address:  &address,
-	}
-	if svc.DockerfilePath != "" {
-		action.Build = &BuildSetting{Dockerfile: svc.DockerfilePath}
-	}
-	actions = append(actions, action)
-
 	if svc.NumReplicas > 50 {
 		actions = append(actions, Action{
 			Op:    "unmapped",
@@ -297,6 +371,7 @@ func serviceActions(svc Service) []Action {
 	}
 	if svc.Region != "" && mapRegion(svc.Region) == "" {
 		actions[0].NeedsRegion = true
+		actions[0].RailwayRegion = svc.Region
 		actions = append(actions, Action{
 			Op:    "unmapped",
 			Name:  svc.Name,
@@ -308,22 +383,97 @@ func serviceActions(svc Service) []Action {
 	return actions
 }
 
+// buildSetting is the Dockerfile path and build command, as the builder reads
+// them: the Dockerfile relative to the root directory, without a leading slash
+// (Railway writes "/Dockerfile").
+func buildSetting(svc Service) *BuildSetting {
+	dockerfile := strings.TrimLeft(strings.TrimSpace(svc.DockerfilePath), "/")
+	if root := rootDir(svc.RootDirectory); root != "" {
+		dockerfile = strings.TrimPrefix(dockerfile, root+"/")
+	}
+	b := &BuildSetting{Dockerfile: dockerfile, BuildCommand: strings.TrimSpace(svc.BuildCommand)}
+	if b.Dockerfile == "" && b.BuildCommand == "" {
+		return nil
+	}
+	return b
+}
+
+// rootDir is Railway's root directory as a relative path; the repository root
+// is "".
+func rootDir(dir string) string {
+	return strings.Trim(strings.TrimSpace(dir), "/")
+}
+
+// withEnv tags actions with their environment.
+func withEnv(actions []Action, env string) []Action {
+	for i := range actions {
+		actions[i].Env = env
+	}
+	return actions
+}
+
+// readEnvironments lists the environments the services came from, in read
+// order. A source with no services still names the environments it read.
+func readEnvironments(src Source) []string {
+	var names []string
+	for _, name := range strings.Split(src.Environment, ",") {
+		if name = strings.TrimSpace(name); name != "" && !containsFold(names, name) {
+			names = append(names, name)
+		}
+	}
+	for _, svc := range src.Services {
+		if svc.Environment != "" && !containsFold(names, svc.Environment) {
+			names = append(names, svc.Environment)
+		}
+	}
+	return names
+}
+
+// databaseEngines maps each database service's name (lower case) to its
+// engine, for rewriting references to it.
+func databaseEngines(src Source) map[string]string {
+	engines := map[string]string{}
+	for _, svc := range src.Services {
+		if engine := databaseEngine(svc); engine != "" {
+			engines[strings.ToLower(svc.Name)] = engine
+		}
+	}
+	for _, plugin := range src.Plugins {
+		if action, ok := databaseAction(plugin); ok {
+			engines[strings.ToLower(plugin.FriendlyName)] = action.Engine
+		}
+	}
+	return engines
+}
+
+func containsFold(values []string, want string) bool {
+	for _, v := range values {
+		if strings.EqualFold(v, want) {
+			return true
+		}
+	}
+	return false
+}
+
 func unmappedServiceActions(svc Service) []Action {
 	var actions []Action
 	add := func(field, why, next string) {
 		actions = append(actions, Action{Op: "unmapped", Name: svc.Name, Field: field, Why: why, Next: next})
 	}
-	if svc.BuildCommand != "" {
-		add("buildCommand", "MIOSA builds from the Dockerfile or detects the stack; there is no build command setting",
-			"move it into the Dockerfile or a build script")
+	if strings.EqualFold(svc.Builder, "NIXPACKS") {
+		add("builder", "Railway built it with Nixpacks; MIOSA builds the Dockerfile if the repository has one, else detects the stack with Railpack",
+			"check the first build")
+	}
+	if svc.BuildCommand != "" && svc.Repo == "" {
+		add("buildCommand", "only a repository service builds on MIOSA", "none")
 	}
 	if svc.RestartPolicy != "" && mapRestartPolicy(svc.RestartPolicy) == "" {
 		add("restartPolicyType", fmt.Sprintf("Railway policy %q has no MIOSA equivalent", svc.RestartPolicy),
 			"set restart_policy to always, on_failure or never after the import")
 	}
 	for _, v := range svc.Volumes {
-		add("volume "+v.MountPath, fmt.Sprintf("the Services API has no service volumes; Railway mounted %d MB at %s", v.SizeMB, v.MountPath),
-			fmt.Sprintf("miosa volume create %s-data --size-gb %d, then attach it where the data is needed", svc.Name, volumeGB(v.SizeMB)))
+		add("volume "+v.MountPath, fmt.Sprintf("Railway mounted %d MB at %s; the data is not copied", v.SizeMB, v.MountPath),
+			fmt.Sprintf("miosa volume create %s-data --size-gb %d, then attach it to the service at %s", svc.Name, volumeGB(v.SizeMB), v.MountPath))
 	}
 	return actions
 }
@@ -457,18 +607,23 @@ func filterServices(src Source, only []string) (Source, []string) {
 		wanted[strings.ToLower(strings.TrimSpace(name))] = true
 	}
 	kept := make([]Service, 0, len(src.Services))
+	matched := map[string]bool{}
 	var skipped []string
 	for _, svc := range src.Services {
 		if wanted[strings.ToLower(svc.Name)] {
 			kept = append(kept, svc)
-			delete(wanted, strings.ToLower(svc.Name))
+			matched[strings.ToLower(svc.Name)] = true
 			continue
 		}
-		skipped = append(skipped, svc.Name)
+		if !containsFold(skipped, svc.Name) {
+			skipped = append(skipped, svc.Name)
+		}
 	}
 	src.Services = kept
-	for missing := range wanted {
-		skipped = append(skipped, missing+" (not in this project)")
+	for name := range wanted {
+		if !matched[name] {
+			skipped = append(skipped, name+" (not in this project)")
+		}
 	}
 	sort.Strings(skipped)
 	return src, skipped
@@ -512,18 +667,23 @@ func excludeServices(src Source, names []string) (Source, []string) {
 		drop[strings.ToLower(strings.TrimSpace(name))] = true
 	}
 	kept := make([]Service, 0, len(src.Services))
+	matched := map[string]bool{}
 	var removed []string
 	for _, svc := range src.Services {
 		if drop[strings.ToLower(svc.Name)] {
-			removed = append(removed, svc.Name)
-			delete(drop, strings.ToLower(svc.Name))
+			if !matched[strings.ToLower(svc.Name)] {
+				removed = append(removed, svc.Name)
+			}
+			matched[strings.ToLower(svc.Name)] = true
 			continue
 		}
 		kept = append(kept, svc)
 	}
 	src.Services = kept
-	for missing := range drop {
-		removed = append(removed, missing+" (not in this project)")
+	for name := range drop {
+		if !matched[name] {
+			removed = append(removed, name+" (not in this project)")
+		}
 	}
 	sort.Strings(removed)
 	return src, removed
@@ -554,7 +714,8 @@ func digestOf(src Source) (string, error) {
 		Environment string
 		Services    []Service
 		Plugins     []PluginRef
-	}{src.ProjectID, src.Environment, src.Services, src.Plugins}
+		Shared      []SharedVariable
+	}{src.ProjectID, src.Environment, src.Services, src.Plugins, src.Shared}
 	// Service and PluginRef hold only comparable/slice fields, but sort the
 	// variables and volumes so the digest does not depend on read order.
 	for i := range normalized.Services {
@@ -566,6 +727,13 @@ func digestOf(src Source) (string, error) {
 		normalized.Services[i] = s
 	}
 	sort.Slice(normalized.Plugins, func(i, j int) bool { return normalized.Plugins[i].FriendlyName < normalized.Plugins[j].FriendlyName })
+	sort.SliceStable(normalized.Shared, func(i, j int) bool {
+		a, b := normalized.Shared[i], normalized.Shared[j]
+		if a.Environment != b.Environment {
+			return a.Environment < b.Environment
+		}
+		return a.Variable.Name < b.Variable.Name
+	})
 
 	body, err := json.Marshal(normalized)
 	if err != nil {

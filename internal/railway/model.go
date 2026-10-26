@@ -1,6 +1,9 @@
 package railway
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // The wire types below mirror the GraphQL documents in queries.go field for
 // field. Nothing outside this package sees them.
@@ -47,7 +50,19 @@ type wireInstance struct {
 	NumReplicas             *int   `json:"numReplicas"`
 	Region                  string `json:"region"`
 	CronSchedule            string `json:"cronSchedule"`
-	LatestDeployment        *wireDeployment
+	// PreDeployCommand is a string or a list of strings.
+	PreDeployCommand   json.RawMessage `json:"preDeployCommand"`
+	RailwayConfigFile  string          `json:"railwayConfigFile"`
+	ResolvedFileConfig *wireFileConfig `json:"resolvedFileConfig"`
+	LatestDeployment   *wireDeployment `json:"latestDeployment"`
+}
+
+// wireFileConfig is the repository's railway.json or railway.toml as Railway
+// parsed it at the last deployment that read it. An empty manifest means the
+// repository has no config file.
+type wireFileConfig struct {
+	ConfigFile   string          `json:"configFile"`
+	FileManifest json.RawMessage `json:"fileManifest"`
 }
 
 type wireSource struct {
@@ -58,6 +73,9 @@ type wireSource struct {
 type wireDeployment struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
+	// Meta is a JSON object; only its serviceManifest is decoded (manifest), so
+	// nothing else Railway puts there is kept.
+	Meta json.RawMessage `json:"meta"`
 }
 
 type wireVolumeInstance struct {
@@ -97,9 +115,15 @@ type wirePlugin struct {
 	FriendlyName string `json:"friendlyName"`
 }
 
-// Service is one Railway service, normalized for the plan.
+// Service is one Railway service instance (a service in one environment),
+// normalized for the plan.
 type Service struct {
-	Name               string
+	Name string
+	// RailwayName is the name on Railway when the import had to change it.
+	RailwayName string
+	// Port is the port Railway routed the service's domains to (targetPort).
+	Port               int
+	Environment        string
 	Repo               string
 	Image              string
 	Branch             string
@@ -114,10 +138,18 @@ type Service struct {
 	NumReplicas        int
 	Region             string
 	CronSchedule       string
-	ServiceDomains     []string
-	CustomDomains      []string
-	Volumes            []VolumeRef
-	Variables          []Variable
+	PreDeployCommand   string
+	Builder            string
+	// ConfigFile is the railway.json or railway.toml the settings were read
+	// from, when the repository has one.
+	ConfigFile string
+	// Provenance says where each carried setting came from: the config file, the
+	// service settings, or the latest deployment's manifest.
+	Provenance     map[string]string
+	ServiceDomains []string
+	CustomDomains  []string
+	Volumes        []VolumeRef
+	Variables      []Variable
 }
 
 // Variable is one variable's name and, when it is not a secret, its value.
@@ -146,12 +178,22 @@ type PluginRef struct {
 // Source is everything read from Railway, normalized. It is the input to the
 // plan, and its digest guards an apply against a project that changed.
 type Source struct {
-	Kind         string
-	ProjectID    string
-	ProjectName  string
+	Kind        string
+	ProjectID   string
+	ProjectName string
+	// Environment names the environments that were read, comma separated.
 	Environment  string
 	Environments []string
 	Services     []Service
-	Plugins      []PluginRef
-	FetchedAt    time.Time
+	// Shared is each read environment's shared variables.
+	Shared    []SharedVariable
+	Plugins   []PluginRef
+	FetchedAt time.Time
+}
+
+// SharedVariable is one environment's shared variable (names only unless
+// --copy-variables).
+type SharedVariable struct {
+	Environment string
+	Variable    Variable
 }

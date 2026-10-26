@@ -11,6 +11,20 @@ const queryProjects = `query Projects {
   }
 }`
 
+// queryWorkspaces lists the workspaces the login belongs to. A workspace or
+// account login is not authorized for the top-level projects query, but it can
+// list each workspace's projects.
+const queryWorkspaces = `query Workspaces {
+  me { workspaces { id name } }
+}`
+
+// queryWorkspaceProjects lists one workspace's projects, for resolving a name.
+const queryWorkspaceProjects = `query WorkspaceProjects($id: String!) {
+  workspace(workspaceId: $id) {
+    projects { edges { node { id name } } }
+  }
+}`
+
 // queryProject reads one project and its environments.
 const queryProject = `query Project($id: String!) {
   project(id: $id) {
@@ -23,7 +37,10 @@ const queryProject = `query Project($id: String!) {
 
 // queryEnvironment reads every service instance and volume in one environment.
 // source tells a git service from an image one; the commands and settings are
-// what a service needs to build and run the same way.
+// what a service needs to build and run the same way. A setting can also live in
+// the repository's railway.json or railway.toml (resolvedFileConfig), or only in
+// what the latest deployment ran (latestDeployment.meta.serviceManifest, which
+// also holds the region and replicas of a multi-region service).
 const queryEnvironment = `query Environment($id: String!) {
   environment(id: $id) {
     id
@@ -43,7 +60,10 @@ const queryEnvironment = `query Environment($id: String!) {
       numReplicas
       region
       cronSchedule
-      latestDeployment { id status }
+      preDeployCommand
+      railwayConfigFile
+      resolvedFileConfig { configFile fileManifest }
+      latestDeployment { id status meta }
     } } }
     volumeInstances { edges { node {
       id

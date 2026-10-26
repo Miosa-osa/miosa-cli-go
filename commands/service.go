@@ -241,6 +241,8 @@ type serviceCreateFlags struct {
 	startCommand string
 	buildCommand string
 	outputDir    string
+	healthcheck  string
+	preDeploy    string
 	replicas     int
 	region       string
 	size         string
@@ -295,8 +297,8 @@ service. A web or static service gets a public address unless --no-public is giv
 			if f.dockerfile != "" && f.repo == "" {
 				return usagef("--dockerfile applies to a --repo source")
 			}
-			if f.port != 0 && f.image == "" {
-				return usagef("--port applies to an --image source")
+			if f.healthcheck != "" && !strings.HasPrefix(f.healthcheck, "/") {
+				return usagef("--healthcheck-path must start with /")
 			}
 
 			c, _, err := buildClient()
@@ -326,20 +328,28 @@ service. A web or static service gets a public address unless --no-public is giv
 				if f.rootDir != "" {
 					source["root_dir"] = f.rootDir
 				}
+				// The builder reads the Dockerfile path from the source,
+				// relative to the root directory.
+				if f.dockerfile != "" {
+					source["dockerfile"] = strings.TrimLeft(f.dockerfile, "/")
+				}
 			} else {
 				source["type"] = "image"
 				source["ref"] = f.image
-				if f.port != 0 {
-					source["port"] = f.port
-				}
+			}
+			if f.port != 0 {
+				source["port"] = f.port
 			}
 			body["source"] = source
-			if f.dockerfile != "" {
-				body["build"] = map[string]any{"dockerfile": f.dockerfile}
-			}
 			settings := map[string]any{}
 			if f.startCommand != "" {
 				settings["start_command"] = f.startCommand
+			}
+			if f.preDeploy != "" {
+				settings["pre_deploy_command"] = f.preDeploy
+			}
+			if f.healthcheck != "" {
+				settings["healthcheck_path"] = f.healthcheck
 			}
 			if f.buildCommand != "" {
 				settings["build_command"] = f.buildCommand
@@ -408,9 +418,11 @@ service. A web or static service gets a public address unless --no-public is giv
 	fs.StringVar(&f.branch, "branch", "", "Git branch (default: the repository default)")
 	fs.StringVar(&f.rootDir, "root-dir", "", "Directory inside the repository to build")
 	fs.StringVar(&f.image, "image", "", "Container image reference")
-	fs.StringVar(&f.dockerfile, "dockerfile", "", "Dockerfile path (needs Services build cells)")
-	fs.IntVar(&f.port, "port", 0, "Port the container listens on (--image only)")
+	fs.StringVar(&f.dockerfile, "dockerfile", "", "Dockerfile path, relative to --root-dir (--repo only)")
+	fs.IntVar(&f.port, "port", 0, "Port the service listens on; health checks and the public address use it")
 	fs.StringVar(&f.startCommand, "start-command", "", "Command the service starts with")
+	fs.StringVar(&f.preDeploy, "pre-deploy", "", "Command run once before each release starts (for example migrations)")
+	fs.StringVar(&f.healthcheck, "healthcheck-path", "", "HTTP path the health check requests, for example /healthz")
 	fs.StringVar(&f.buildCommand, "build-command", "", "Static services: build command (Railpack builds only)")
 	fs.StringVar(&f.outputDir, "output-dir", "", "Static services: directory to serve (default: detected)")
 	fs.IntVar(&f.replicas, "replicas", 0, "Replicas to run (1-50)")
@@ -496,7 +508,8 @@ func serviceGetCmd() *cobra.Command {
 func serviceUpdateCmd() *cobra.Command {
 	var env, name, startCommand, region, spread, strategy, size string
 	var replicas, rolloutStepS, terminateGrace int
-	var buildCommand, outputDir string
+	var buildCommand, outputDir, preDeploy, healthcheck, rootDir, dockerfile string
+	var port int
 	var rolloutSteps []int
 	cmd := &cobra.Command{
 		Use:   "update <project> <service>",
@@ -510,6 +523,8 @@ pass change.
   miosa service update cliniciq API --spread single_host
   miosa service update cliniciq API --size dedicated-4
   miosa service update cliniciq site --build-command "npm run build" --output-dir dist
+  miosa service update cliniciq API --pre-deploy "alembic upgrade head" --healthcheck-path /readyz
+  miosa service update cliniciq API --root-dir apps/api --dockerfile Dockerfile --port 8000
 
 --spread is auto (replicas land on different hosts where the network allows) or
 single_host. --strategy is replace or rolling; rolling starts the new version
@@ -536,6 +551,28 @@ new replica is unhealthy. --rollout-step must ascend and end at 100.`,
 			}
 			if cmd.Flags().Changed("output-dir") {
 				settings["output_dir"] = outputDir
+			}
+			if cmd.Flags().Changed("pre-deploy") {
+				settings["pre_deploy_command"] = nullIfEmpty(preDeploy)
+			}
+			if cmd.Flags().Changed("healthcheck-path") {
+				if healthcheck != "" && !strings.HasPrefix(healthcheck, "/") {
+					return usagef("--healthcheck-path must start with /")
+				}
+				settings["healthcheck_path"] = nullIfEmpty(healthcheck)
+			}
+			sourceChanges := map[string]any{}
+			if cmd.Flags().Changed("root-dir") {
+				sourceChanges["root_dir"] = strings.Trim(rootDir, "/")
+			}
+			if cmd.Flags().Changed("dockerfile") {
+				sourceChanges["dockerfile"] = strings.TrimLeft(dockerfile, "/")
+			}
+			if cmd.Flags().Changed("port") {
+				if port < 1 || port > 65535 {
+					return usagef("--port must be 1 to 65535")
+				}
+				sourceChanges["port"] = port
 			}
 			if cmd.Flags().Changed("spread") {
 				settings["spread"] = spread
@@ -569,8 +606,8 @@ new replica is unhealthy. --rollout-step must ascend and end at 100.`,
 				}
 				settings["shape"] = size
 			}
-			if !cmd.Flags().Changed("name") && len(settings) == 0 {
-				return usagef("nothing to change: pass --name, --start-command, --replicas, --region, --spread, --strategy, --size or a rollout flag")
+			if !cmd.Flags().Changed("name") && len(settings) == 0 && len(sourceChanges) == 0 {
+				return usagef("nothing to change: pass --name, --start-command, --pre-deploy, --healthcheck-path, --replicas, --region, --root-dir, --dockerfile, --port, --spread, --strategy, --size or a rollout flag")
 			}
 			c, _, err := buildClient()
 			if err != nil {
@@ -587,6 +624,22 @@ new replica is unhealthy. --rollout-step must ascend and end at 100.`,
 			}
 			if len(settings) > 0 {
 				body["settings"] = settings
+			}
+			if len(sourceChanges) > 0 {
+				// A source is replaced whole, so the change is merged into the
+				// one the service has.
+				source := map[string]any{}
+				for k, v := range svc.Source {
+					source[k] = v
+				}
+				for k, v := range sourceChanges {
+					if v == "" {
+						delete(source, k)
+						continue
+					}
+					source[k] = v
+				}
+				body["source"] = source
 			}
 			var updated struct {
 				Data projectServiceRow `json:"data"`
@@ -609,6 +662,11 @@ new replica is unhealthy. --rollout-step must ascend and end at 100.`,
 	fs.IntVar(&replicas, "replicas", 0, "Replicas to run (1-50)")
 	fs.StringVar(&buildCommand, "build-command", "", "Static services: build command (Railpack builds only)")
 	fs.StringVar(&outputDir, "output-dir", "", "Static services: directory to serve (default: detected)")
+	fs.StringVar(&preDeploy, "pre-deploy", "", "Command run once before each release starts; empty removes it")
+	fs.StringVar(&healthcheck, "healthcheck-path", "", "HTTP path the health check requests; empty removes it")
+	fs.StringVar(&rootDir, "root-dir", "", "Directory inside the repository to build; empty is the root")
+	fs.StringVar(&dockerfile, "dockerfile", "", "Dockerfile path, relative to the root directory; empty lets the build choose")
+	fs.IntVar(&port, "port", 0, "Port the service listens on; health checks and the public address use it")
 	fs.StringVar(&region, "region", "", "Region: us-west, us-east or us-mia")
 	fs.StringVar(&spread, "spread", "", "Replica placement: auto or single_host")
 	fs.StringVar(&strategy, "strategy", "", "Release strategy: replace or rolling")
@@ -1552,13 +1610,13 @@ ${{secret(32)}} (a generated secret).
 			var out struct {
 				Data struct {
 					Variables []struct {
-						Name         string   `json:"name"`
-						Source       string   `json:"source"`
-						Layer        string   `json:"layer"`
-						Sealed       bool     `json:"sealed"`
-						Build        bool     `json:"build"`
-						ValuePreview *string  `json:"value_preview"`
-						References   []string `json:"references"`
+						Name         string  `json:"name"`
+						Source       string  `json:"source"`
+						Layer        string  `json:"layer"`
+						Sealed       bool    `json:"sealed"`
+						Build        bool    `json:"build"`
+						ValuePreview *string `json:"value_preview"`
+						References   []any   `json:"references"`
 					} `json:"variables"`
 					Problems []any `json:"problems"`
 				} `json:"data"`
@@ -2858,4 +2916,13 @@ func stringOf(v any) string {
 		return s
 	}
 	return fmt.Sprintf("%v", v)
+}
+
+// nullIfEmpty is a settings value for a PATCH: an empty flag removes the
+// setting (the API merges settings and null removes one).
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }

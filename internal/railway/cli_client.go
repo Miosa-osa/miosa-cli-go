@@ -42,6 +42,12 @@ func (c *CLIClient) Query(ctx context.Context, query string, variables map[strin
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		// `railway api` exits non-zero on a GraphQL error and prints only a
+		// count on stderr; Railway's own message is in the answer on stdout.
+		var answer graphQLResponse
+		if json.Unmarshal(stdout.Bytes(), &answer) == nil && len(answer.Errors) > 0 {
+			return fmt.Errorf("railway: %s", joinErrors(answer.Errors))
+		}
 		message := strings.TrimSpace(stderr.String())
 		if message == "" {
 			message = strings.TrimSpace(stdout.String())

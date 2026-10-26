@@ -34,6 +34,10 @@ func fakeGraphQL(t *testing.T) (*httptest.Server, *map[string]any, *string) {
 		}
 		w.Header().Set("content-type", "application/json")
 		switch {
+		case strings.Contains(body.Query, "query Workspaces"):
+			// A project token cannot list workspaces; the reader falls back to
+			// the top-level projects query.
+			_, _ = w.Write([]byte(`{"errors":[{"message":"Not Authorized"}]}`))
 		case strings.Contains(body.Query, "query Projects"):
 			_, _ = w.Write([]byte(`{"data":{"projects":{"edges":[{"node":{"id":"11111111-1111-1111-1111-111111111111","name":"acme-api"}}]}}}`))
 		case strings.Contains(body.Query, "query Project("):
@@ -49,6 +53,10 @@ func fakeGraphQL(t *testing.T) (*httptest.Server, *map[string]any, *string) {
 					"numReplicas":2,"region":"us-east4","cronSchedule":null
 				}}]},
 				"volumeInstances":{"edges":[{"node":{"id":"v1","mountPath":"/data","sizeMB":5000,"serviceId":"s1","volume":{"id":"vol1","name":"data"}}}]}}}}`))
+		case strings.Contains(body.Query, "query Variables") && body.Variables["serviceId"] == nil:
+			// The environment's shared variables, plus a Railway built-in that
+			// must not be imported.
+			_, _ = w.Write([]byte(`{"data":{"variables":{"FEATURE_FLAGS":"beta","RAILWAY_ENVIRONMENT":"production"}}}`))
 		case strings.Contains(body.Query, "query Variables"):
 			lastVars = body.Variables
 			rendered = body.Query
@@ -203,5 +211,49 @@ preDeployCommand = ["npm run migrate"]
 
 	if _, err := ReadFile(filepath.Join(dir, "railway.yaml")); err == nil {
 		t.Fatal("a name that is neither json nor toml must be refused")
+	}
+}
+
+// fakeNames answers name resolution only: workspaces and their projects, and
+// optionally refuses the top-level projects query the way a workspace login
+// is refused.
+func fakeNames(t *testing.T, workspaces bool) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("content-type", "application/json")
+		switch {
+		case strings.Contains(body.Query, "query Workspaces") && workspaces:
+			_, _ = w.Write([]byte(`{"data":{"me":{"workspaces":[{"id":"ws1","name":"ClinicIQ"}]}}}`))
+		case strings.Contains(body.Query, "query WorkspaceProjects"):
+			_, _ = w.Write([]byte(`{"data":{"workspace":{"projects":{"edges":[{"node":{"id":"e7314324-b726-4ff7-aab6-6bab5a7b320d","name":"clinic-iq-system"}}]}}}}`))
+		case strings.Contains(body.Query, "query Project("):
+			_, _ = w.Write([]byte(`{"data":{"project":{"id":"e7314324-b726-4ff7-aab6-6bab5a7b320d","name":"clinic-iq-system","environments":{"edges":[]}}}}`))
+		default:
+			_, _ = w.Write([]byte(`{"errors":[{"message":"Not Authorized"}]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestAProjectNameResolvesThroughTheLoginsWorkspaces(t *testing.T) {
+	client := NewClient("rail_test")
+	client.Endpoint = fakeNames(t, true).URL
+	project, err := (Reader{Client: client}).project(context.Background(), "clinic-iq-system")
+	if err != nil || project.ID != "e7314324-b726-4ff7-aab6-6bab5a7b320d" {
+		t.Fatalf("project = %+v, %v", project, err)
+	}
+}
+
+func TestAnUnresolvableNameSaysWhatRailwaySaidAndAsksForTheID(t *testing.T) {
+	client := NewClient("rail_test")
+	client.Endpoint = fakeNames(t, false).URL
+	_, err := (Reader{Client: client}).project(context.Background(), "clinic-iq-system")
+	if err == nil || !strings.Contains(err.Error(), "Not Authorized") || !strings.Contains(err.Error(), "pass the project id") {
+		t.Fatalf("want Railway's message and the id hint, got %v", err)
 	}
 }

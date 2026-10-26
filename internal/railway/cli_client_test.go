@@ -78,3 +78,20 @@ func TestCLIClientNamesASignedOutSession(t *testing.T) {
 		t.Fatalf("want a sign-in hint, got %v", err)
 	}
 }
+
+// `railway api` exits 1 on a GraphQL error and prints only a count on stderr;
+// Railway's message is in the answer on stdout and must reach the user.
+func TestCLIClientPrintsRailwaysMessageWhenTheCLIExitsNonZero(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "railway")
+	script := "#!/bin/sh\n" +
+		"echo '{\"data\":null,\"errors\":[{\"message\":\"Not Authorized\",\"path\":[\"projects\"]}]}'\n" +
+		"echo 'Railway API returned 1 GraphQL error(s)' >&2\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := (&CLIClient{Binary: bin}).Query(context.Background(), queryProjects, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "Not Authorized") || strings.Contains(err.Error(), "GraphQL error(s)") {
+		t.Fatalf("want Railway's own message, got %v", err)
+	}
+}

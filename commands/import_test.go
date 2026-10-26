@@ -24,7 +24,8 @@ func railwayFixture(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Query string `json:"query"`
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		w.Header().Set("content-type", "application/json")
@@ -38,6 +39,8 @@ func railwayFixture(t *testing.T) *httptest.Server {
 				"serviceInstances":{"edges":[{"node":{"serviceId":"s1","serviceName":"api","source":{"repo":"acme/api"},
 				"buildCommand":"npm run build","startCommand":"npm start","numReplicas":2,"region":"us-east4"}}]},
 				"volumeInstances":{"edges":[]}}}}`))
+		case strings.Contains(body.Query, "query Variables") && body.Variables["serviceId"] == nil:
+			_, _ = w.Write([]byte(`{"data":{"variables":{}}}`))
 		case strings.Contains(body.Query, "query Variables"):
 			_, _ = w.Write([]byte(`{"data":{"variables":{"DATABASE_URL":"${{Postgres.DATABASE_URL}}","LOG_LEVEL":"info"}}}`))
 		case strings.Contains(body.Query, "query Domains"):
@@ -68,11 +71,11 @@ func TestImportRailwayDryRunWritesAReviewablePlan(t *testing.T) {
 		"create project acme-api",
 		"create server api from https://github.com/acme/api (main)",
 		"create database Postgres (postgres)",
-		"api.DATABASE_URL (reference, kept)",
-		"api.LOG_LEVEL",
+		"production/api.DATABASE_URL (reference ${{Postgres.DATABASE_URL}})",
+		"production/api.LOG_LEVEL",
 		"Variables that need a value (1)",
 		"Finish by hand:",
-		"buildCommand",
+		"build_command: npm run build",
 		"Rotate every secret",
 		"Nothing was created",
 	} {
@@ -163,6 +166,9 @@ func TestImportRailwayApplyCreatesInOrderAndRecordsState(t *testing.T) {
 	var created []string
 	f := newFakeAPI(t, func(c call) (int, string) {
 		created = append(created, c.Method+" "+c.Path)
+		if status, body, ok := githubRoutes(c); ok {
+			return status, body
+		}
 		switch {
 		case c.is("GET", "/project-capabilities"):
 			return 200, `{"data":{"source_builds":true}}`
@@ -243,6 +249,22 @@ func TestImportRailwayApplyRefusesMissingValues(t *testing.T) {
 	}
 }
 
+// githubRoutes answers the GitHub connection and link calls of an apply whose
+// plan builds from github.com/acme/api.
+func githubRoutes(c call) (int, string, bool) {
+	switch {
+	case c.is("GET", "/integrations/github/repos"):
+		return 200, `{"data":[{"id":42,"full_name":"acme/api","private":true}]}`, true
+	case c.Method == "GET" && strings.HasSuffix(c.Path, "/environments"):
+		return 200, `{"data":[{"id":"env-default","name":"production","is_default":true}]}`, true
+	case c.Method == "PUT" && strings.HasSuffix(c.Path, "/source/github"):
+		return 202, `{"data":{"service":{"id":"s1","source":{"type":"forge","repository_id":"r1","branch":"main"}},"import":{"id":"i1","status":"queued"}}}`, true
+	case c.is("GET", "/projects/p1/services/s1"):
+		return 200, `{"data":{"id":"s1","name":"api","source":{}}}`, true
+	}
+	return 0, "", false
+}
+
 func indexOf(values []string, want string) int {
 	for i, v := range values {
 		if v == want {
@@ -297,6 +319,9 @@ func TestImportRailwayApplyEndsWithTheNextCommands(t *testing.T) {
 	}
 
 	f := newFakeAPI(t, func(c call) (int, string) {
+		if status, body, ok := githubRoutes(c); ok {
+			return status, body
+		}
 		switch {
 		case c.is("GET", "/project-capabilities"):
 			return 200, `{"data":{"source_builds":true}}`
@@ -329,6 +354,7 @@ func TestImportRailwayApplyEndsWithTheNextCommands(t *testing.T) {
 		"miosa service vars set acme-api api STRIPE_KEY=<new value>",
 		"miosa service deploy acme-api api",
 		"miosa service domain enable acme-api api --domain api.acme.com",
+		"nothing was started",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("summary is missing %q:\n%s", want, out)
