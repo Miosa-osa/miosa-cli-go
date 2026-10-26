@@ -11830,7 +11830,9 @@ miosa project vars set <project> KEY=VALUE [KEY=VALUE...] [flags]
 
 Flags:
 
+- `--build` - Make the variables visible to the build too (Dockerfile ARG, build-time framework variables).
 - `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--no-build` - Make the variables runtime only again.
 
 ##### `miosa project vars unset`
 
@@ -13449,9 +13451,20 @@ Set variables.
 miosa service vars set <project> <service> KEY=VALUE [KEY=VALUE...] [flags]
 ```
 
+Set variables on a service.
+A variable is runtime only unless --build makes it
+visible to the build too (a Dockerfile ARG, NEXT_PUBLIC_* baked at build).
+--no-build makes it runtime only again.
+
+```
+  miosa service vars set cliniciq web NEXT_PUBLIC_API_URL=https://api.example.com --build
+```
+
 Flags:
 
+- `--build` - Make the variables visible to the build too (Dockerfile ARG, build-time framework variables).
 - `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--no-build` - Make the variables runtime only again.
 
 ##### `miosa service vars unset`
 
@@ -14672,12 +14685,15 @@ block works:
 ```
   miosa variables import -
   miosa variables import .env
+  miosa variables import build.env --build    # every variable in the file build-visible
 ```
 
 Flags:
 
+- `--build` - Make the variables visible to the build too (Dockerfile ARG, build-time framework variables).
 - `--deploy-target string` - Alias of --environment.
 - `--environment string` - Deploy target (default: the linked one).
+- `--no-build` - Make the variables runtime only again.
 - `--service string` - Service (default: the linked one).
 - `--shared` - Write the Deploy target's shared variables.
 
@@ -14707,8 +14723,10 @@ miosa variables set KEY=VALUE [KEY=VALUE...] [flags]
 
 Flags:
 
+- `--build` - Make the variables visible to the build too (Dockerfile ARG, build-time framework variables).
 - `--deploy-target string` - Alias of --environment.
 - `--environment string` - Deploy target (default: the linked one).
+- `--no-build` - Make the variables runtime only again.
 - `--service string` - Service (default: the linked one).
 - `--shared` - Write the Deploy target's shared variables.
 - `--skip-deploys` - Railway compatibility: do not redeploy (never does).
