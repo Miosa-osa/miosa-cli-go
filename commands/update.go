@@ -436,23 +436,22 @@ func updateCachePath() (string, error) {
 	return filepath.Join(dir, "cli-update-check.json"), nil
 }
 
-// maybeNotifyUpdate prints one line to w when a newer release exists. It is
-// silent for dev builds, JSON output, non-terminals, CI, and when disabled by
-// --no-update-check or MIOSA_NO_UPDATE_CHECK. The network is touched at most
-// once per day and never for longer than two seconds.
-func maybeNotifyUpdate(w io.Writer) {
-	if cliVersion == "dev" || globalFlags.NoUpdateCheck || isJSON() || globalFlags.Quiet {
-		return
+// updateChecksEnabled is false for dev builds, --no-update-notice, --quiet,
+// CI and the MIOSA_NO_UPDATE_* variables.
+func updateChecksEnabled() bool {
+	if cliVersion == "dev" || globalFlags.NoUpdateCheck || globalFlags.Quiet {
+		return false
 	}
-	if (os.Getenv("MIOSA_NO_UPDATE_NOTICE") != "" || os.Getenv("MIOSA_NO_UPDATE_CHECK") != "") || os.Getenv("CI") != "" {
-		return
-	}
-	if f, ok := w.(*os.File); !ok || !term.IsTerminal(int(f.Fd())) {
-		return
-	}
+	return os.Getenv("MIOSA_NO_UPDATE_NOTICE") == "" && os.Getenv("MIOSA_NO_UPDATE_CHECK") == "" && os.Getenv("CI") == ""
+}
+
+// latestKnownVersion is the newest release as of the last check. The network is
+// touched at most once per day and never for longer than two seconds; a failed
+// check backs off a day too. It returns "" when nothing is known.
+func latestKnownVersion() string {
 	path, err := updateCachePath()
 	if err != nil {
-		return
+		return ""
 	}
 	var c updateCache
 	if data, err := os.ReadFile(path); err == nil {
@@ -463,7 +462,7 @@ func maybeNotifyUpdate(w io.Writer) {
 		defer cancel()
 		rel, err := fetchRelease(ctx, releasesURL())
 		if err != nil {
-			c.CheckedAt = time.Now() // back off a day on failure too
+			c.CheckedAt = time.Now()
 		} else {
 			c = updateCache{CheckedAt: time.Now(), Latest: rel.Version()}
 		}
@@ -472,14 +471,67 @@ func maybeNotifyUpdate(w io.Writer) {
 			_ = os.WriteFile(path, data, 0o600)
 		}
 	}
-	if c.Latest != "" && compareVersions(c.Latest, cliVersion) > 0 {
-		upgrade := "miosa update"
-		if p, err := selfPath(); err == nil {
-			if _, hint, ok := packageManaged(p); ok {
-				upgrade = hint
-			}
+	return c.Latest
+}
+
+// farBehind reports a CLI at least two minor versions (or a major) behind.
+func farBehind(latest, current string) bool {
+	l, c := versionParts(latest), versionParts(current)
+	for len(l) < 2 {
+		l = append(l, 0)
+	}
+	for len(c) < 2 {
+		c = append(c, 0)
+	}
+	return l[0] > c[0] || (l[0] == c[0] && l[1]-c[1] >= 2)
+}
+
+func upgradeHint() string {
+	if p, err := selfPath(); err == nil {
+		if _, hint, ok := packageManaged(p); ok {
+			return hint
 		}
-		fmt.Fprintf(w, "\nA new miosa release is available: %s -> %s (run '%s')\n", cliVersion, c.Latest, upgrade)
+	}
+	return "miosa update"
+}
+
+// maybeWarnOutdated warns on w when this CLI is far behind the latest release,
+// and reports whether it did. Unlike the ordinary notice it also speaks to a
+// pipe and after a failed command, because scripts and agents run the CLI that
+// way and an old CLI is a likely reason for a failure. In JSON mode the warning
+// is one {"warning":{...}} line, so a parser of stderr still gets JSON.
+func maybeWarnOutdated(w io.Writer) bool {
+	if !updateChecksEnabled() {
+		return false
+	}
+	latest := latestKnownVersion()
+	if latest == "" || !farBehind(latest, cliVersion) {
+		return false
+	}
+	msg := fmt.Sprintf("this miosa (%s) is far behind the latest release (%s) and may lack fixes; run '%s'", cliVersion, latest, upgradeHint())
+	if isJSON() {
+		line, _ := json.Marshal(map[string]any{"warning": map[string]string{
+			"code": "CLI_OUTDATED", "message": msg, "current": cliVersion, "latest": latest,
+		}})
+		_, _ = fmt.Fprintf(w, "%s\n", line)
+		return true
+	}
+	_, _ = fmt.Fprintf(w, "\nwarning: %s\n", msg)
+	return true
+}
+
+// maybeNotifyUpdate prints one line to w when a newer release exists. It is
+// silent for dev builds, JSON output, non-terminals, CI, and when disabled by
+// --no-update-check or MIOSA_NO_UPDATE_CHECK.
+func maybeNotifyUpdate(w io.Writer) {
+	if !updateChecksEnabled() || isJSON() {
+		return
+	}
+	if f, ok := w.(*os.File); !ok || !term.IsTerminal(int(f.Fd())) {
+		return
+	}
+	if latest := latestKnownVersion(); latest != "" && compareVersions(latest, cliVersion) > 0 {
+		_, _ = fmt.Fprintf(w, "\nA new miosa release is available: %s -> %s (run '%s')\n", cliVersion, latest, upgradeHint())
 	}
 }
 
@@ -596,6 +648,6 @@ func maybeAutoUpdate(w io.Writer) {
 		return
 	}
 	if !isJSON() && !globalFlags.Quiet {
-		fmt.Fprintf(w, "miosa updated itself: %s -> %s\n", cliVersion, rel.Version())
+		_, _ = fmt.Fprintf(w, "miosa updated itself: %s -> %s\n", cliVersion, rel.Version())
 	}
 }

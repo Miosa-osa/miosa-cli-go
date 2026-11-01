@@ -387,3 +387,67 @@ func TestConfigAutoUpdateKey(t *testing.T) {
 		t.Fatalf("%q %v", out, err)
 	}
 }
+
+// A CLI two or more minor versions behind warns on stderr even when nothing is
+// a terminal, which is how scripts and agents run it.
+func TestOutdatedWarningReachesAPipeWhenFarBehind(t *testing.T) {
+	commands.ResetForTest()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CI", "")
+	releaseServer(t, "v2.13.4", []byte("x"), false)
+	defer commands.EnableUpdateCheckForTest()()
+
+	defer commands.SetVersionForTest("2.4.0")()
+	var buf bytes.Buffer
+	if !commands.MaybeWarnOutdatedForTest(&buf) {
+		t.Fatal("no warning for 2.4.0 against 2.13.4")
+	}
+	for _, want := range []string{"2.4.0", "2.13.4", "miosa update"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("warning lacks %q: %q", want, buf.String())
+		}
+	}
+}
+
+func TestOutdatedWarningIsJSONWhenOutputIsJSON(t *testing.T) {
+	commands.ResetForTest()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CI", "")
+	releaseServer(t, "v2.13.4", []byte("x"), false)
+	defer commands.EnableUpdateCheckForTest()()
+	defer commands.SetVersionForTest("2.4.0")()
+	commands.SetOutputForTest("json")
+
+	var buf bytes.Buffer
+	commands.MaybeWarnOutdatedForTest(&buf)
+	var w struct {
+		Warning struct{ Code, Current, Latest string } `json:"warning"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &w); err != nil || w.Warning.Code != "CLI_OUTDATED" || w.Warning.Latest != "2.13.4" {
+		t.Fatalf("warning = %q (%v)", buf.String(), err)
+	}
+}
+
+func TestOutdatedWarningStaysQuietForOneMinorOrOptOut(t *testing.T) {
+	commands.ResetForTest()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CI", "")
+	releaseServer(t, "v2.13.4", []byte("x"), false)
+	defer commands.EnableUpdateCheckForTest()()
+
+	for name, version := range map[string]string{"one minor behind": "2.12.9", "current": "2.13.4", "dev": "dev"} {
+		restore := commands.SetVersionForTest(version)
+		var buf bytes.Buffer
+		if commands.MaybeWarnOutdatedForTest(&buf) || buf.Len() != 0 {
+			t.Errorf("%s: unexpected warning %q", name, buf.String())
+		}
+		restore()
+	}
+
+	defer commands.SetVersionForTest("2.4.0")()
+	t.Setenv("MIOSA_NO_UPDATE_CHECK", "1")
+	var buf bytes.Buffer
+	if commands.MaybeWarnOutdatedForTest(&buf) {
+		t.Error("MIOSA_NO_UPDATE_CHECK must silence the warning")
+	}
+}

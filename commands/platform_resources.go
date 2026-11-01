@@ -323,7 +323,7 @@ func dbCmd() *cobra.Command {
 			ResolveQuery: resolveWorkspaceQuery},
 		Op{
 			Use: "get <database>", Aliases: []string{"show"}, Short: "Show a database", Method: "GET", Path: "/databases/{0}", Args: []Arg{d},
-			Detail: []Col{{Head: "Name", Path: "name"}, {Head: "Id", Path: "id"}, {Head: "Engine", Path: "engine"}, {Head: "State", Path: "state"}, {Head: "Host", Path: "host"}, {Head: "Port", Path: "port"}, {Head: "Memory (MB)", Path: "memory_mb"}, {Head: "Version", Path: "engine_version"}, {Head: "Extensions", Path: "extensions"}, {Head: "Workspace", Path: "workspace_id"}, {Head: "Error", Path: "error.reason"}, {Head: "Failed at", Path: "error.at"}},
+			Detail: []Col{{Head: "Name", Path: "name"}, {Head: "Id", Path: "id"}, {Head: "Engine", Path: "engine"}, {Head: "State", Path: "state"}, {Head: "Host", Path: "host"}, {Head: "Port", Path: "port"}, {Head: "Memory (MB)", Path: "memory_mb"}, {Head: "Version", Path: "engine_version"}, {Head: "Extensions", Path: "extensions"}, {Head: "Owner privileges", Compute: ownerPrivilegesCell}, {Head: "Workspace", Path: "workspace_id"}, {Head: "Error", Path: "error.reason"}, {Head: "Failed at", Path: "error.at"}},
 		},
 		Op{
 			Use: "create <name>", Short: "Create a database", Method: "POST", Path: "/databases", Args: []Arg{idArg("name")},
@@ -332,6 +332,7 @@ func dbCmd() *cobra.Command {
   miosa db create app-db --engine postgres --version 16 --size small
   miosa db create app-db --extensions vector,pg_trgm,pgcrypto --workspace tz
   miosa db create app-db --project shop
+  miosa db create app-db --version 16 --owner-privileges elevated
 
 --extensions applies to PostgreSQL only; allowed: vector, pg_trgm, pgcrypto, uuid-ossp,
 pg_stat_statements, citext, hstore, btree_gin, btree_gist. --version is a version with an
@@ -341,7 +342,9 @@ image (postgres 16, mysql 8, redis 7, mongodb 7). --size is one of tiny, xs, sma
 created in the project's workspace unless --workspace says otherwise.
 
 --engine optimal creates an Optimal Engine; 'miosa engine create' is the same call with
-the Engine-specific flags and an idempotent name.`,
+the Engine-specific flags and an idempotent name.
+
+` + ownerPrivilegesHelp,
 			Flags: []Flag{
 				{Name: "engine", Usage: "Engine: postgres, mysql, redis, mongodb, qdrant or optimal", Default: "postgres", Enum: []string{"postgres", "postgresql", "mysql", "redis", "mongodb", "qdrant", "optimal"}},
 				{Name: "version", Usage: "Engine version (default: the engine's current one)", Field: "engine_version"},
@@ -352,12 +355,18 @@ the Engine-specific flags and an idempotent name.`,
 				{Name: "region", Usage: "Pin to a region"},
 				{Name: "class", Usage: "Data classification: public, internal, confidential or restricted", Field: "classification", Enum: []string{"public", "internal", "confidential", "restricted"}},
 				{Name: "project", Usage: "Add it to this project (name, slug or id), in the project's workspace", Field: "project_id"},
+				ownerPrivilegesFlag,
 			},
 			Before: settleDBProject,
 			After:  reportWorkspaceLanding,
-			Body:   func(a []string, body map[string]any) (map[string]any, error) { body["name"] = a[0]; return body, nil },
-			Detail: []Col{{Head: "Name", Path: "name"}, {Head: "Id", Path: "id"}, {Head: "Engine", Path: "engine"}, {Head: "Version", Path: "engine_version"}, {Head: "State", Path: "state"}, {Head: "Memory (MB)", Path: "memory_mb"}, {Head: "Workspace", Path: "workspace_id"}},
+			Body: func(a []string, body map[string]any) (map[string]any, error) {
+				body["name"] = a[0]
+				return ownerPrivilegesBody(body), nil
+			},
+			Detail:  dbChangeDetail,
+			OnError: explainOwnerPrivilegesRefusal,
 		},
+		dbUpdateOp(d),
 		Op{Use: "start <database>", Short: "Start a stopped database", Method: "POST", Path: "/databases/{0}/start", Args: []Arg{d}, Done: "Starting {0}"},
 		Op{Use: "stop <database>", Short: "Stop a database", Method: "POST", Path: "/databases/{0}/stop", Args: []Arg{d}, Confirm: "Stop database {0}?", Done: "Stopping {0}"},
 		Op{Use: "restart <database>", Short: "Restart a database", Method: "POST", Path: "/databases/{0}/restart", Args: []Arg{d}, Done: "Restarting {0}"},
@@ -843,10 +852,13 @@ finishes on its own as soon as it has stopped.`,
 
 func billingCmd() *cobra.Command {
 	cmd := group("billing", "Credits, spend, invoices and plan",
-		`What you have and what you spent. Credits are cents. 'billing add-credits' adds credits
-(a Stripe checkout in your browser) and waits for the payment; 'billing portal'
-opens the Stripe portal for cards and invoices; plans change in the console
-('miosa open billing').`, nil,
+		`What you have, what you spent and what you pay. Credits are cents: 1 credit is
+1 cent. 'billing add-credits' adds credits (a Stripe checkout in your browser) and
+waits for the payment; 'auto-reload' adds credits when the balance runs low, 'cap'
+sets a spending limit and 'payment-methods' picks the card; those need an API key
+with billing:write. 'billing portal' opens the Stripe portal for cards and invoices.
+Plans change in the console ('miosa open billing'); 'plans' lists them with their
+prices.`, nil,
 		Op{
 			Use: "balance", Short: "Show the credit balance", Method: "GET", Path: "/credits/balance",
 			Detail: []Col{{Head: "Balance (credits)", Path: "balance_credits"}, {Head: "Lifetime earned", Path: "lifetime_earned"}, {Head: "Lifetime spent", Path: "lifetime_spent"}, {Head: "Expires", Path: "credit_expiry_at"}},
@@ -890,6 +902,7 @@ opens the Stripe portal for cards and invoices; plans change in the console
 	cmd.AddCommand(autoReloadCmd())
 	cmd.AddCommand(paymentMethodsCmd())
 	cmd.AddCommand(billingTopupCmd(), billingPortalCmd())
+	cmd.AddCommand(plansCmd())
 	return cmd
 }
 

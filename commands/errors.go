@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -68,12 +69,18 @@ func withHints(err error, hints ...string) error {
 	return &hintError{err: err, hints: hints}
 }
 
+// errorHints are the commands a caller attached to err, then the next step
+// the API itself named (the "hint" of its error body).
 func errorHints(err error) []string {
+	var hints []string
 	var h *hintError
 	if errors.As(err, &h) {
-		return h.hints
+		hints = append(hints, h.hints...)
 	}
-	return nil
+	if ae, ok := asAPIError(err); ok && ae.Hint != "" && !slices.Contains(hints, ae.Hint) {
+		hints = append(hints, ae.Hint)
+	}
+	return hints
 }
 
 // usageErr marks an error as a usage mistake (exit code 2).
@@ -194,6 +201,10 @@ func friendlyMessage(err error) string {
 		case 401:
 			return msg + " - sign in with 'miosa login' or check MIOSA_API_KEY"
 		case 402:
+			// A plan limit is lifted by a bigger plan; credits do not change it.
+			if strings.EqualFold(ae.Code, "PLAN_LIMIT_EXCEEDED") {
+				return msg + " - upgrade your plan at https://miosa.ai/billing"
+			}
 			return msg + " - add credits at https://miosa.ai/billing"
 		case 403:
 			// A sensitive change (members, billing) needs two-factor on the account:
@@ -365,6 +376,7 @@ type errorBody struct {
 		Retryable bool     `json:"retryable,omitempty"`
 		ExitCode  int      `json:"exit_code"`
 		Hints     []string `json:"hints,omitempty"`
+		Hint      string   `json:"hint,omitempty"`
 	} `json:"error"`
 }
 
@@ -381,10 +393,7 @@ func writeError(w io.Writer, err error, asJSON bool) {
 		return
 	}
 	if !asJSON {
-		fmt.Fprintf(w, "miosa: %s\n", friendlyMessage(err))
-		for _, h := range errorHints(err) {
-			fmt.Fprintf(w, "  %s\n", h)
-		}
+		writeTypedOrPlainError(w, err)
 		return
 	}
 	var b errorBody
@@ -393,10 +402,35 @@ func writeError(w io.Writer, err error, asJSON bool) {
 	b.Error.ExitCode = ExitCode(err)
 	if ae, ok := asAPIError(err); ok {
 		b.Error.Code, b.Error.Status, b.Error.RequestID = ae.Code, ae.Status, ae.RequestID
+		b.Error.Hint = ae.Hint
 		b.Error.Retryable = ae.Retryable || ae.Status == 429 || ae.Status == 503
 	}
 	enc := json.NewEncoder(w)
 	_ = enc.Encode(b)
+}
+
+// writeTypedOrPlainError prints an error whose API body carried a code as
+// "Error <code>: <message>", then the API's hint as "Next: <hint>". Any other
+// error keeps "miosa: <message>" with its hints indented beneath.
+func writeTypedOrPlainError(w io.Writer, err error) {
+	ae, ok := asAPIError(err)
+	if !ok || ae.Code == "" {
+		_, _ = fmt.Fprintf(w, "miosa: %s\n", friendlyMessage(err))
+		for _, h := range errorHints(err) {
+			_, _ = fmt.Fprintf(w, "  %s\n", h)
+		}
+		return
+	}
+	// The code leads the line, so drop the " [CODE]" the message also carries.
+	msg := strings.Replace(friendlyMessage(err), " ["+ae.Code+"]", "", 1)
+	_, _ = fmt.Fprintf(w, "Error %s: %s\n", ae.Code, msg)
+	for _, h := range errorHints(err) {
+		if h == ae.Hint {
+			_, _ = fmt.Fprintf(w, "Next: %s\n", h)
+			continue
+		}
+		_, _ = fmt.Fprintf(w, "  %s\n", h)
+	}
 }
 
 // listCommands maps the first path segment of a refused request to the

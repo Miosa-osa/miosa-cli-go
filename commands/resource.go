@@ -117,6 +117,9 @@ type Op struct {
 	Done string
 	// Confirm, when set, asks for confirmation (or --yes) before sending.
 	Confirm string
+	// Warn asks like Confirm on a terminal, but off a terminal it prints the
+	// text to stderr and proceeds, so scripts never hang or fail on it.
+	Warn string
 	// Rows may filter or reorder the rows of a table before it is printed.
 	Rows func(cmd *cobra.Command, rows []any) []any
 	// Lines is a dotted path to an array printed one element per line in text
@@ -186,7 +189,7 @@ func group(use, short, long string, aliases []string, ops ...Op) *cobra.Command 
 	return parent
 }
 
-func (o Op) command(groupName string) *cobra.Command {
+func (o Op) command(_ string) *cobra.Command {
 	cmdName := strings.Fields(o.Use)[0]
 	cmd := &cobra.Command{
 		Annotations: map[string]string{routeAnnotation: o.Method + " " + o.Path},
@@ -220,7 +223,7 @@ func (o Op) command(groupName string) *cobra.Command {
 	for _, f := range o.Flags {
 		bindFlag(cmd, f)
 	}
-	if o.Confirm != "" {
+	if o.Confirm != "" || o.Warn != "" {
 		flags.BoolVarP(&yes, "yes", "y", false, "Do not ask for confirmation")
 	}
 	if o.Idempotent {
@@ -555,6 +558,11 @@ func (o Op) run(cmd *cobra.Command, args []string, yes bool) error {
 			return err
 		}
 	}
+	if o.Warn != "" && !yes {
+		if err := warnOrConfirm(cmd, expand(o.Warn, display)); err != nil {
+			return err
+		}
+	}
 	if all, _ := cmd.Flags().GetBool("all-orgs"); o.AllOrgs && all {
 		return o.renderAllOrgs(cmd, c, req)
 	}
@@ -622,6 +630,16 @@ func confirmDestructive(cmd *cobra.Command, what string) error {
 		return die(fmt.Errorf("canceled"))
 	}
 	return usagef("%s - pass --yes to confirm", what)
+}
+
+// warnOrConfirm asks at a terminal; anywhere else it prints what and carries
+// on, because the action is reversible and a script must not hang on it.
+func warnOrConfirm(cmd *cobra.Command, what string) error {
+	if f, ok := cmd.InOrStdin().(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		return confirmDestructive(cmd, what)
+	}
+	fmt.Fprintln(cmd.ErrOrStderr(), what)
+	return nil
 }
 
 // confirmDatabaseDelete makes the caller name a database service before it and its data are destroyed: --confirm

@@ -19,27 +19,27 @@ func TestRewritePath(t *testing.T) {
 		atomic.AddInt32(&lookups, 1)
 		switch r.URL.Path {
 		case "/sandboxes/by-name/my-box":
-			w.Write([]byte(`{"id":"` + id1 + `"}`))
+			_, _ = w.Write([]byte(`{"id":"` + id1 + `"}`))
 		case "/computers":
-			w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"desk"},{"id":"22222222-2222-2222-2222-222222222222","name":"other"}]}`))
+			_, _ = w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"desk"},{"id":"22222222-2222-2222-2222-222222222222","name":"other"}]}`))
 		case "/deployments":
-			w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"My App","slug":"my-app"},` +
+			_, _ = w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"My App","slug":"my-app"},` +
 				`{"id":"22222222-2222-2222-2222-222222222222","name":"Dup App","slug":"dup-app"},` +
 				`{"id":"33333333-3333-3333-3333-333333333333","name":"Dup App","slug":"dup-app"}]}`))
 		case "/deployments/8ba07e95", "/deployments/www.example.com":
 			// The single lookup accepts a short id and a hostname.
-			w.Write([]byte(`{"data":{"id":"` + id1 + `","name":"My App"}}`))
+			_, _ = w.Write([]byte(`{"data":{"id":"` + id1 + `","name":"My App"}}`))
 		case "/workspaces":
-			w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"Acme","slug":"acme"}]}`))
+			_, _ = w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"Acme","slug":"acme"}]}`))
 		case "/agents":
-			w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"reviewer"}]}`))
+			_, _ = w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"reviewer"}]}`))
 		case "/storage/buckets":
-			w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"photos"}],"meta":{}}`))
+			_, _ = w.Write([]byte(`{"data":[{"id":"` + id1 + `","name":"photos"}],"meta":{}}`))
 		case "/sandboxes/by-name/enveloped":
-			w.Write([]byte(`{"data":{"id":"` + id1 + `"}}`))
+			_, _ = w.Write([]byte(`{"data":{"id":"` + id1 + `"}}`))
 		default:
 			w.WriteHeader(404)
-			w.Write([]byte(`{"error":{"code":"NOT_FOUND"}}`))
+			_, _ = w.Write([]byte(`{"error":{"code":"NOT_FOUND"}}`))
 		}
 	}))
 	defer srv.Close()
@@ -125,7 +125,7 @@ func TestRewritePath(t *testing.T) {
 }
 
 func TestUnknownAgentNameIsNotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"data":[]}`)) }))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"data":[]}`)) }))
 	defer srv.Close()
 	c := New(srv.URL, "k")
 	_, err := c.RewritePath(context.Background(), "/agents/ghost")
@@ -139,11 +139,11 @@ func TestUnknownAgentNameIsNotFound(t *testing.T) {
 func TestResolveComputerByNameAndShortID(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/computers") {
-			w.Write([]byte(`{"total":1,"computers":[{"id":"78aa09c5-d7a4-450f-b765-7b4b4ce96c8a","name":"my-desktop"}]}`))
+			_, _ = w.Write([]byte(`{"total":1,"computers":[{"id":"78aa09c5-d7a4-450f-b765-7b4b4ce96c8a","name":"my-desktop"}]}`))
 			return
 		}
 		w.WriteHeader(404)
-		w.Write([]byte(`{"error":{"code":"NOT_FOUND"}}`))
+		_, _ = w.Write([]byte(`{"error":{"code":"NOT_FOUND"}}`))
 	}))
 	defer srv.Close()
 	c := New(srv.URL, "k")
@@ -162,5 +162,79 @@ func TestResolveComputerByNameAndShortID(t *testing.T) {
 	// A reference that names nothing is left for the server to judge.
 	if id, _ := c.ResolveComputer(ctx, "nope"); id != "nope" {
 		t.Errorf("unknown ref should pass through, got %q", id)
+	}
+}
+
+// machineServer behaves like the real API: /sandboxes/<name> that is no id is a
+// 400 INVALID_ID (not a 404), by-name knows sandboxes only, and the computer
+// list carries name and slug.
+func machineServer(t *testing.T) *Client {
+	t.Helper()
+	const computerID = "78aa09c5-d7a4-450f-b765-7b4b4ce96c8a"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/computers":
+			_, _ = w.Write([]byte(`{"computers":[{"id":"` + computerID + `","name":"Social Ops","slug":"social-ops"}]}`))
+		case r.URL.Path == "/computers/"+computerID:
+			_, _ = w.Write([]byte(`{"data":{"id":"` + computerID + `"}}`))
+		case strings.HasPrefix(r.URL.Path, "/sandboxes/by-name/"):
+			w.WriteHeader(404)
+			_, _ = w.Write([]byte(`{"error":{"code":"NOT_FOUND"}}`))
+		default:
+			w.WriteHeader(400)
+			_, _ = w.Write([]byte(`{"error":{"code":"INVALID_ID","message":"not an id"}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return New(srv.URL, "k")
+}
+
+func TestResolveMachineFindsAComputerByNameSlugShortIDAndID(t *testing.T) {
+	c := machineServer(t)
+	const want = "78aa09c5-d7a4-450f-b765-7b4b4ce96c8a"
+	for _, ref := range []string{"Social Ops", "social-ops", "78aa09c5", want} {
+		kind, id, err := c.ResolveMachine(context.Background(), ref, false)
+		if err != nil || kind != "computer" || id != want {
+			t.Errorf("ResolveMachine(%q) = %q, %q, %v", ref, kind, id, err)
+		}
+	}
+}
+
+func TestResolveMachineUnknownIsNotFound(t *testing.T) {
+	c := machineServer(t)
+	_, _, err := c.ResolveMachine(context.Background(), "ghost", false)
+	if !IsStatus(err, 404) || !strings.Contains(err.Error(), `"ghost"`) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// A computer id must never be sent to a sandbox route: the computer list tells
+// which family owns it, so the lookup makes no failing request.
+func TestResolveMachineNeverCallsASandboxRouteForAComputerID(t *testing.T) {
+	const computerID = "78aa09c5-d7a4-450f-b765-7b4b4ce96c8a"
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		if r.URL.Path == "/computers" {
+			_, _ = w.Write([]byte(`{"computers":[{"id":"` + computerID + `","name":"my-desktop"}]}`))
+			return
+		}
+		w.WriteHeader(404)
+		_, _ = w.Write([]byte(`{"error":{"code":"NOT_FOUND"}}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "k")
+
+	for _, computerOnly := range []bool{false, true} {
+		paths = nil
+		kind, id, err := c.ResolveMachine(context.Background(), computerID, computerOnly)
+		if err != nil || kind != "computer" || id != computerID {
+			t.Fatalf("ResolveMachine = %q, %q, %v", kind, id, err)
+		}
+		for _, p := range paths {
+			if strings.Contains(p, "/sandboxes") {
+				t.Errorf("computerOnly=%v: sandbox route called: %v", computerOnly, paths)
+			}
+		}
 	}
 }

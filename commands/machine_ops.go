@@ -362,6 +362,10 @@ var computerDetail = []Col{
 
 // computerOps are the lifecycle and access commands of 'miosa computer'.
 // A computer is a full desktop VM; <computer> is a name or an id.
+// computerStopNote is shown in the help, in the prompt and, off a terminal,
+// on stderr: stop hibernates a computer, and it is the only way to pause one.
+const computerStopNote = "Stop saves this computer and frees its resources. Its disk and files are always kept. Starting it again usually resumes exactly where it left off; if the saved state can't be restored, it starts fresh from its disk and open apps are closed. Computers have no separate pause: stop is how you pause one."
+
 func computerOps() []*cobra.Command {
 	ops := []Op{
 		{
@@ -377,8 +381,10 @@ func computerOps() []*cobra.Command {
 			Method: "POST", Path: "/computers/{0}/start", Args: []Arg{cptr}, Done: "Starting {0}",
 		},
 		{
-			Use: "stop <computer>", Short: "Stop a computer (it keeps its disk)",
-			Method: "POST", Path: "/computers/{0}/stop", Args: []Arg{cptr}, Done: "Stopping {0}",
+			Use: "stop <computer>", Short: "Stop a computer: save it and free its resources (the pause for computers)",
+			Long:   computerStopNote + "\n\nAt a terminal it asks first; --yes skips the question.",
+			Warn:   computerStopNote,
+			Method: "POST", Path: "/computers/{0}/stop", Args: []Arg{cptr}, Done: "Stopping {0} (saved; start resumes it)",
 		},
 		{
 			Use: "restart <computer>", Short: "Restart a computer",

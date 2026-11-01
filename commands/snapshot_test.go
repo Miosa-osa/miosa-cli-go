@@ -579,3 +579,45 @@ func TestSnapshotSaveIsNotRetriedBlindly(t *testing.T) {
 		t.Errorf("a save creates a name, so a 502 must not be replayed (calls = %d)", calls)
 	}
 }
+
+// The sandbox route answers 400 INVALID_ID for a name that is no id; a computer
+// name must still resolve, not stop at that answer.
+func TestSnapshotList_ComputerNameResolvesPastTheSandboxRoute(t *testing.T) {
+	const computerID = "78aa09c5-d7a4-450f-b765-7b4b4ce96c8a"
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/computers":
+			jsonReply(w, 200, map[string]interface{}{"computers": []map[string]interface{}{{"id": computerID, "name": "social-ops"}}})
+		case r.URL.Path == "/computers/"+computerID:
+			jsonReply(w, 200, map[string]interface{}{"data": map[string]interface{}{"id": computerID}})
+		case r.URL.Path == "/snapshots":
+			gotQuery = r.URL.RawQuery
+			jsonReply(w, 200, map[string]interface{}{"data": []interface{}{}})
+		case strings.HasPrefix(r.URL.Path, "/sandboxes/by-name/"):
+			apiError(w, 404, "NOT_FOUND", "not found", nil)
+		default:
+			apiError(w, 400, "INVALID_ID", "not an id", nil)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(setupEnv(t, srv))
+	for _, args := range [][]string{
+		{"snapshot", "list", "social-ops"},
+		{"snapshot", "list", "--computer", "social-ops"},
+		{"snapshot", "latest", "social-ops"},
+	} {
+		gotQuery = ""
+		_, err := run(t, args...)
+		if args[1] == "latest" {
+			if err == nil || !strings.Contains(err.Error(), "no snapshots") {
+				t.Errorf("%v: err = %v", args, err)
+			}
+		} else if err != nil {
+			t.Errorf("%v: %v", args, err)
+		}
+		if !strings.Contains(gotQuery, "resource_id="+computerID) {
+			t.Errorf("%v: query = %q", args, gotQuery)
+		}
+	}
+}

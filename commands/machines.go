@@ -19,7 +19,9 @@ func init() {
 		sandboxVerb(Op{
 			Use: "pause [sandbox]", Short: "Pause a sandbox (it keeps its disk and memory state)",
 			Long: `Pause a running sandbox. Compute billing stops; storage keeps billing at the paused rate.
-Resume it with 'miosa resume'. Memory is checkpointed, so processes continue where they were.`,
+Resume it with 'miosa resume'. Memory is checkpointed, so processes continue where they were.
+
+Pause keeps the disk and memory; processes continue where they were on resume.`,
 			Method: "POST", Path: "/sandboxes/{0}/pause", Detail: stateRows, Done: "Paused {0}",
 		}),
 		sandboxVerb(Op{
@@ -35,7 +37,9 @@ until it accepts commands.
 		}),
 		sandboxVerb(Op{
 			Use: "stop [sandbox]", Short: "Stop a sandbox, keeping its disk",
-			Long:   "Stop a sandbox. The disk persists and the sandbox can be resumed; use 'destroy' to delete it.",
+			Long: `Stop a sandbox. The disk persists and the sandbox can be resumed; use 'destroy' to delete it.
+
+Stop keeps the disk; unlike 'miosa pause', it does not promise to keep memory or running processes.`,
 			Method: "POST", Path: "/sandboxes/{0}/stop", Detail: stateRows, Done: "Stopped {0}",
 		}),
 		sandboxVerb(Op{

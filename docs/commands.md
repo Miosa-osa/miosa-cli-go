@@ -32,6 +32,7 @@ Regenerate with `make docs`.
 - [`miosa catalog`](#miosa-catalog) - Show canonical compute products, templates, sizes, and readiness
 - [`miosa chat`](#miosa-chat) - Chats with an agent that remembers
 - [`miosa checkpoint`](#miosa-checkpoint) - Manage sandbox checkpoints
+- [`miosa ci`](#miosa-ci) - Run GitHub Actions jobs on MIOSA machines
 - [`miosa cloud`](#miosa-cloud) - Your own cloud accounts, regions and host pools (bring your own cloud)
 - [`miosa computer`](#miosa-computer) - Manage computers
 - [`miosa config`](#miosa-config) - Read and change CLI settings
@@ -1203,11 +1204,14 @@ Credits, spend, invoices and plan.
 miosa billing
 ```
 
-What you have and what you spent.
-Credits are cents. 'billing add-credits' adds credits
-(a Stripe checkout in your browser) and waits for the payment; 'billing portal'
-opens the Stripe portal for cards and invoices; plans change in the console
-('miosa open billing').
+What you have, what you spent and what you pay.
+Credits are cents: 1 credit is
+1 cent. 'billing add-credits' adds credits (a Stripe checkout in your browser) and
+waits for the payment; 'auto-reload' adds credits when the balance runs low, 'cap'
+sets a spending limit and 'payment-methods' picks the card; those need an API key
+with billing:write. 'billing portal' opens the Stripe portal for cards and invoices.
+Plans change in the console ('miosa open billing'); 'plans' lists them with their
+prices.
 
 #### `miosa billing add-credits`
 
@@ -1251,13 +1255,18 @@ Auto-reload adds credits when the balance falls below a threshold.
   miosa billing auto-reload off
 
 ```
-Numbers are credits (cents). 'off' keeps the amounts and turns the request off;
-the API reports 'enabled' as true only when the request is on, a card is ready
-and the amounts make sense, so read the answer rather than the flag.
+Numbers are credits; 1 credit is 1 cent, so --amount 5000 adds $50.
+A reload is
+500 to 500000 credits ($5 to $5,000) at a threshold of 100 credits ($1) or more.
+'off' keeps the amounts and turns the request off.
+The card is saved once, in the
+auto-reload setup checkout in the console; until then 'enabled' stays false and
+the reasons say what is missing.
+Changing it needs an API key with billing:write.
 
 ##### `miosa billing auto-reload get`
 
-Show the current settings.
+Show the current settings and whether a charge can run.
 
 ```
 miosa billing auto-reload get
@@ -1281,9 +1290,9 @@ miosa billing auto-reload set [flags]
 
 Flags:
 
-- `--amount int` - Credits to add each time.
-- `--monthly-cap int` - Most credits to add in a month.
-- `--threshold int` - Balance that triggers an add, in credits.
+- `--amount int` - Credits to add each time (500 to 500000, i.e. $5 to $5,000).
+- `--monthly-cap int` - Most credits to add in a month (at least --amount).
+- `--threshold int` - Balance that triggers a reload, in credits (1 credit = 1 cent; at least 100).
 
 #### `miosa billing balance`
 
@@ -1401,6 +1410,19 @@ Show your plan and current usage against its limits.
 ```
 miosa billing plan
 ```
+
+#### `miosa billing plans`
+
+List the plans and credit packs with their prices.
+
+```
+miosa billing plans
+```
+
+The plans and credit packs as miosa.ai/pricing lists them.
+A paid plan's monthly
+fee is credited to your usage, so you pay the fee or your usage, whichever is
+higher. 'miosa billing plan' shows the plan you are on.
 
 #### `miosa billing portal`
 
@@ -1870,6 +1892,83 @@ miosa checkpoint list [name|id]
 
 Aliases: `ls`.
 
+### `miosa ci`
+
+Run GitHub Actions jobs on MIOSA machines.
+
+```
+miosa ci
+```
+
+Run GitHub Actions jobs on MIOSA machines.
+Connect the MIOSA GitHub App, then
+change runs-on: ubuntu-latest to runs-on: miosa in a workflow and push: each
+job runs in a fresh sandbox, billed per second, destroyed when the job ends.
+
+```
+  miosa ci connect
+  miosa ci status
+  miosa ci jobs
+```
+
+#### `miosa ci connect`
+
+Connect a GitHub account to run its Actions jobs on MIOSA.
+
+```
+miosa ci connect [flags]
+```
+
+Print the link that installs the MIOSA GitHub App, open it in the browser, and
+wait until GitHub reports the installation (up to 10 minutes).
+
+```
+  miosa ci connect
+  miosa ci connect --no-wait       # print the link and return
+```
+
+Flags:
+
+- `--no-wait` - Print the install link and return without waiting.
+
+#### `miosa ci disconnect`
+
+Disconnect a GitHub installation from this organization.
+
+```
+miosa ci disconnect <installation_id> [flags]
+```
+
+Disconnect a GitHub App installation.
+Jobs already running finish; new jobs
+with runs-on: miosa from that account no longer run on MIOSA.
+The installation
+ids are in 'miosa ci status'.
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
+
+#### `miosa ci jobs`
+
+List recent GitHub Actions jobs that ran on MIOSA.
+
+```
+miosa ci jobs [flags]
+```
+
+Flags:
+
+- `--limit int` - Number of jobs to show. (default `20`)
+
+#### `miosa ci status`
+
+Show the CI on MIOSA setup steps and connected GitHub accounts.
+
+```
+miosa ci status
+```
+
 ### `miosa cloud`
 
 Your own cloud accounts, regions and host pools (bring your own cloud).
@@ -2260,11 +2359,22 @@ miosa computer start <computer>
 
 #### `miosa computer stop`
 
-Stop a computer (it keeps its disk).
+Stop a computer: save it and free its resources (the pause for computers).
 
 ```
-miosa computer stop <computer>
+miosa computer stop <computer> [flags]
 ```
+
+Stop saves this computer and frees its resources.
+Its disk and files are always kept.
+Starting it again usually resumes exactly where it left off; if the saved state can't be restored, it starts fresh from its disk and open apps are closed.
+Computers have no separate pause: stop is how you pause one.
+
+At a terminal it asks first; --yes skips the question.
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
 
 #### `miosa computer urls`
 
@@ -3155,6 +3265,7 @@ Create a managed database.
   miosa db create app-db --engine postgres --version 16 --size small
   miosa db create app-db --extensions vector,pg_trgm,pgcrypto --workspace tz
   miosa db create app-db --project shop
+  miosa db create app-db --version 16 --owner-privileges elevated
 
 ```
 --extensions applies to PostgreSQL only; allowed: vector, pg_trgm, pgcrypto, uuid-ossp,
@@ -3167,11 +3278,23 @@ created in the project's workspace unless --workspace says otherwise.
 --engine optimal creates an Optimal Engine; 'miosa engine create' is the same call with
 the Engine-specific flags and an idempotent name.
 
+--owner-privileges elevated (PostgreSQL 16+, paid plans) gives the owner role CREATEROLE,
+CREATEDB and BYPASSRLS, and a NOLOGIN role named postgres it is a member of.
+It is not a
+superuser.
+Use it for Supabase or Railway migrations that create roles, grant to postgres or
+rely on row-level security being bypassed.
+Anyone with the owner's connection string can
+then create roles that can sign in and read past row-level security in this database;
+standard takes the attributes away again but does not drop the roles or databases created
+meanwhile.
+
 Flags:
 
 - `--class string` - Data classification: public, internal, confidential or restricted (public|internal|confidential|restricted).
 - `--engine string` - Engine: postgres, mysql, redis, mongodb, qdrant or optimal (postgres|postgresql|mysql|redis|mongodb|qdrant|optimal). (default `postgres`)
 - `--extensions stringArray` - PostgreSQL extensions to enable at create, comma separated.
+- `--owner-privileges string` - Owner role privileges: standard, or elevated for CREATEROLE, CREATEDB and BYPASSRLS (PostgreSQL 16+, paid plans) (standard|elevated).
 - `--project string` - Add it to this project (name, slug or id), in the project's workspace.
 - `--region string` - Pin to a region.
 - `--size string` - Size: tiny, xs, small, medium or large (tiny|xs|small|medium|large).
@@ -3327,6 +3450,39 @@ miosa db stop <database> [flags]
 Flags:
 
 - `-y, --yes` - Do not ask for confirmation.
+
+#### `miosa db update`
+
+Change a database's owner privileges.
+
+```
+miosa db update <database> [flags]
+```
+
+Change a PostgreSQL database's owner privileges.
+
+```
+  miosa db update app-db --owner-privileges elevated
+  miosa db update app-db --owner-privileges standard
+
+```
+On a running database the host applies the change before the command returns; on a stopped
+one it is saved and applied when the database next starts.
+
+--owner-privileges elevated (PostgreSQL 16+, paid plans) gives the owner role CREATEROLE,
+CREATEDB and BYPASSRLS, and a NOLOGIN role named postgres it is a member of.
+It is not a
+superuser.
+Use it for Supabase or Railway migrations that create roles, grant to postgres or
+rely on row-level security being bypassed.
+Anyone with the owner's connection string can
+then create roles that can sign in and read past row-level security in this database;
+standard takes the attributes away again but does not drop the roles or databases created
+meanwhile.
+
+Flags:
+
+- `--owner-privileges string` - Owner role privileges: standard, or elevated for CREATEROLE, CREATEDB and BYPASSRLS (PostgreSQL 16+, paid plans) (standard|elevated).
 
 #### `miosa db wake`
 
@@ -5103,6 +5259,48 @@ Flags:
 
 - `--all-orgs` - List every organization your sign-in covers, with an ORG column.
 
+#### `miosa engine maintain`
+
+Run an Engine maintenance task: embed_backfill, corpus_organization or reindex.
+
+```
+miosa engine maintain <engine> <task> [flags]
+```
+
+Runs one of the Engine's own maintenance tasks through the control plane, which
+attaches the Engine's admin key server-side.
+The Engine must be running.
+embed_backfill and corpus_organization answer with their result; reindex is
+queued on the Engine and prints its status and job id.
+
+Tasks:
+```
+  embed_backfill       Embed stored text that has no vector yet.
+                       --limit caps how many (the Engine clamps 1..1000, default 100).
+  corpus_organization  Organize the corpus. Exactly one mode:
+                       --apply, --queue-remaining or --deduplicate-exact.
+  reindex              Rebuild the search index for a workspace.
+
+```
+--workspace is the ENGINE workspace id (default:<slug>), not the MIOSA
+workspace id. 'miosa engine get <engine> --json' shows the attached workspaces.
+
+```
+  miosa engine maintain qa-brain embed_backfill --limit 200
+  miosa engine maintain qa-brain corpus_organization --deduplicate-exact
+  miosa engine maintain qa-brain reindex --workspace default:team-a
+
+```
+The key needs the engine:write scope.
+
+Flags:
+
+- `--apply` - Apply the corpus organization plan.
+- `--deduplicate-exact` - Remove exact duplicates from the corpus.
+- `--limit int` - How many items to embed (embed_backfill, 1..1000).
+- `--queue-remaining` - Queue the remaining corpus work.
+- `--workspace string` - Engine workspace id (default:<slug>).
+
 #### `miosa engine recover`
 
 Restore a backup into the Engine, or into a new one.
@@ -6097,13 +6295,13 @@ Flags:
 Steer a Work Order: accept.
 
 ```
-miosa forge accept WO-12 [text]
+miosa forge accept MIO-12 [text]
 ```
 
 Examples:
 
 ```
-miosa forge accept WO-12
+miosa forge accept MIO-12
 ```
 
 #### `miosa forge add`
@@ -6134,13 +6332,13 @@ miosa forge add "Retry failed webhooks" --milestone phase-1 --owner backend --pr
 Steer a Work Order: answer.
 
 ```
-miosa forge answer WO-12 [text]
+miosa forge answer MIO-12 [text]
 ```
 
 Examples:
 
 ```
-miosa forge answer WO-12 "Keep it one more release"
+miosa forge answer MIO-12 "Keep it one more release"
 ```
 
 #### `miosa forge approve`
@@ -6148,13 +6346,13 @@ miosa forge answer WO-12 "Keep it one more release"
 Steer a Work Order: approve.
 
 ```
-miosa forge approve WO-12 [text]
+miosa forge approve MIO-12 [text]
 ```
 
 Examples:
 
 ```
-miosa forge approve WO-12
+miosa forge approve MIO-12
 ```
 
 #### `miosa forge approve-spec`
@@ -6162,17 +6360,19 @@ miosa forge approve WO-12
 Approve draft specs (agents can't start without one).
 
 ```
-miosa forge approve-spec WO-12 | --milestone id [flags]
+miosa forge approve-spec MIO-12 | --milestone id [flags]
 ```
 
 Flags:
 
+- `--as string` - Who is approving (a person; agents are refused).
 - `--milestone string` - Approve every draft spec in this phase.
+- `--owner string` - The person who owns it (default: you, the approver).
 
 Examples:
 
 ```
-miosa forge approve-spec WO-12
+miosa forge approve-spec MIO-12
   miosa forge approve-spec --milestone phase-1
 ```
 
@@ -6181,7 +6381,7 @@ miosa forge approve-spec WO-12
 Ask the person, going ahead with your own call unless they steer.
 
 ```
-miosa forge ask WO-12 "question" [flags]
+miosa forge ask MIO-12 "question" [flags]
 ```
 
 Flags:
@@ -6194,7 +6394,7 @@ Flags:
 Examples:
 
 ```
-miosa forge ask WO-12 "Drop the old endpoint?" --default "Keep it one release" --option "Drop it :: remove now" --option "Keep it :: one more release" --recommend 2
+miosa forge ask MIO-12 "Drop the old endpoint?" --default "Keep it one release" --option "Drop it :: remove now" --option "Keep it :: one more release" --recommend 2
 ```
 
 #### `miosa forge assign`
@@ -6222,7 +6422,7 @@ miosa forge assign backend-2 --mission client-issues --why "P0 from a customer"
 Work one step of a Work Order another agent holds.
 
 ```
-miosa forge assist WO-12 [flags]
+miosa forge assist MIO-12 [flags]
 ```
 
 Flags:
@@ -6234,7 +6434,7 @@ Flags:
 Examples:
 
 ```
-miosa forge assist WO-12 --step 3
+miosa forge assist MIO-12 --step 3
 ```
 
 #### `miosa forge auth`
@@ -6299,13 +6499,13 @@ miosa forge autonomy 60
 Steer a Work Order: backlog.
 
 ```
-miosa forge backlog WO-12 [text]
+miosa forge backlog MIO-12 [text]
 ```
 
 Examples:
 
 ```
-miosa forge backlog WO-12
+miosa forge backlog MIO-12
 ```
 
 #### `miosa forge brief`
@@ -6336,13 +6536,13 @@ miosa forge brief
 Steer a Work Order: cancel.
 
 ```
-miosa forge cancel WO-12 [text]
+miosa forge cancel MIO-12 [text]
 ```
 
 Examples:
 
 ```
-miosa forge cancel WO-12
+miosa forge cancel MIO-12
 ```
 
 #### `miosa forge charter`
@@ -6456,14 +6656,14 @@ miosa forge check report platform --commit <sha> --name unit-tests --conclusion 
 Run a real Check on a Work Order and record the result.
 
 ```
-miosa forge check run WO-12 -- <command…>
+miosa forge check run MIO-12 -- <command…>
 ```
 
 Examples:
 
 ```
-miosa forge check run WO-12 -- mix test
-  miosa forge check run WO-12 -- pnpm test
+miosa forge check run MIO-12 -- mix test
+  miosa forge check run MIO-12 -- pnpm test
 ```
 
 ##### `miosa forge check show`
@@ -6501,7 +6701,7 @@ miosa forge check suite platform <commit>
 What to read before working: Mission, phase, Work Order [--full].
 
 ```
-miosa forge context WO-12 [flags]
+miosa forge context MIO-12 [flags]
 ```
 
 Flags:
@@ -6511,8 +6711,8 @@ Flags:
 Examples:
 
 ```
-miosa forge context WO-12
-  miosa forge context WO-12 --full
+miosa forge context MIO-12
+  miosa forge context MIO-12 --full
 ```
 
 #### `miosa forge decide`
@@ -6545,7 +6745,7 @@ Flags:
 Examples:
 
 ```
-miosa forge discover "Billing retries are not idempotent" --from WO-12
+miosa forge discover "Billing retries are not idempotent" --from MIO-12
 ```
 
 #### `miosa forge discoveries`
@@ -6572,13 +6772,13 @@ miosa forge discoveries
 Steer a Work Order: dismiss.
 
 ```
-miosa forge dismiss WO-12 [text]
+miosa forge dismiss MIO-12 [text]
 ```
 
 Examples:
 
 ```
-miosa forge dismiss WO-12
+miosa forge dismiss MIO-12
 ```
 
 #### `miosa forge done`
@@ -6586,7 +6786,7 @@ miosa forge dismiss WO-12
 Hand over with a completion report.
 
 ```
-miosa forge done WO-12 [flags]
+miosa forge done MIO-12 [flags]
 ```
 
 Flags:
@@ -6596,8 +6796,8 @@ Flags:
 Examples:
 
 ```
-miosa forge done WO-12 --report report.json
-  cat report.json | miosa forge done WO-12 --report -
+miosa forge done MIO-12 --report report.json
+  cat report.json | miosa forge done MIO-12 --report -
 ```
 
 #### `miosa forge edit`
@@ -6605,7 +6805,7 @@ miosa forge done WO-12 --report report.json
 Edit a Work Order.
 
 ```
-miosa forge edit WO-12 [flags]
+miosa forge edit MIO-12 [flags]
 ```
 
 Flags:
@@ -6620,7 +6820,7 @@ Flags:
 Examples:
 
 ```
-miosa forge edit WO-12 --title "Retry webhooks twice" --owner backend
+miosa forge edit MIO-12 --title "Retry webhooks twice" --owner backend
 ```
 
 #### `miosa forge end`
@@ -6628,13 +6828,13 @@ miosa forge edit WO-12 --title "Retry webhooks twice" --owner backend
 Steer a Work Order: end.
 
 ```
-miosa forge end WO-12 [text]
+miosa forge end MIO-12 [text]
 ```
 
 Examples:
 
 ```
-miosa forge end WO-12
+miosa forge end MIO-12
 ```
 
 #### `miosa forge fork`
@@ -6715,6 +6915,28 @@ Examples:
 miosa forge inbox
 ```
 
+#### `miosa forge initiative`
+
+Initiatives: Missions under one strategy; new, add a Mission, show the roll-up.
+
+```
+miosa forge initiative new|add|show [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+- `--goal string` - Why the Initiative exists.
+- `--missions string` - Mission ids it starts with, comma-separated.
+
+Examples:
+
+```
+miosa forge initiative new "One delivery system" --goal "One trunk, one board, one pipeline" --missions move-the-code-onto-forge,forge-delivery-v1
+  miosa forge initiative add one-delivery-system release-pipeline-v1
+  miosa forge initiative show one-delivery-system
+```
+
 #### `miosa forge intake`
 
 Notes left in Forge waiting to be planned.
@@ -6782,7 +7004,7 @@ miosa forge leave
 A line in its activity.
 
 ```
-miosa forge log WO-12 "text" [flags]
+miosa forge log MIO-12 "text" [flags]
 ```
 
 Flags:
@@ -6792,7 +7014,7 @@ Flags:
 Examples:
 
 ```
-miosa forge log WO-12 "Found the cause: the retry ignored 429"
+miosa forge log MIO-12 "Found the cause: the retry ignored 429"
 ```
 
 #### `miosa forge ls`
@@ -6823,7 +7045,7 @@ miosa forge ls
 Record a real merge.
 
 ```
-miosa forge merged WO-12 <sha|PR> [flags]
+miosa forge merged MIO-12 <sha|PR> [flags]
 ```
 
 Flags:
@@ -6834,7 +7056,7 @@ Flags:
 Examples:
 
 ```
-miosa forge merged WO-12 https://github.com/acme/app/pull/88
+miosa forge merged MIO-12 https://github.com/acme/app/pull/88
 ```
 
 #### `miosa forge milestone`
@@ -6894,13 +7116,13 @@ miosa forge mission new "Release pipeline v2" --goal "Ship without restarts" --d
 Steer a Work Order: next.
 
 ```
-miosa forge next WO-12 [text]
+miosa forge next MIO-12 [text]
 ```
 
 Examples:
 
 ```
-miosa forge next WO-12
+miosa forge next MIO-12
 ```
 
 #### `miosa forge note`
@@ -6908,13 +7130,13 @@ miosa forge next WO-12
 Steer a Work Order: note.
 
 ```
-miosa forge note WO-12 [text]
+miosa forge note MIO-12 [text]
 ```
 
 Examples:
 
 ```
-miosa forge note WO-12 "Customer confirmed the fix"
+miosa forge note MIO-12 "Customer confirmed the fix"
 ```
 
 #### `miosa forge p0`
@@ -6922,13 +7144,13 @@ miosa forge note WO-12 "Customer confirmed the fix"
 Set the priority to P0.
 
 ```
-miosa forge p0 WO-12
+miosa forge p0 MIO-12
 ```
 
 Examples:
 
 ```
-miosa forge p0 WO-12
+miosa forge p0 MIO-12
 ```
 
 #### `miosa forge p1`
@@ -6936,13 +7158,13 @@ miosa forge p0 WO-12
 Set the priority to P1.
 
 ```
-miosa forge p1 WO-12
+miosa forge p1 MIO-12
 ```
 
 Examples:
 
 ```
-miosa forge p1 WO-12
+miosa forge p1 MIO-12
 ```
 
 #### `miosa forge p2`
@@ -6950,13 +7172,13 @@ miosa forge p1 WO-12
 Set the priority to P2.
 
 ```
-miosa forge p2 WO-12
+miosa forge p2 MIO-12
 ```
 
 Examples:
 
 ```
-miosa forge p2 WO-12
+miosa forge p2 MIO-12
 ```
 
 #### `miosa forge p3`
@@ -6964,13 +7186,13 @@ miosa forge p2 WO-12
 Set the priority to P3.
 
 ```
-miosa forge p3 WO-12
+miosa forge p3 MIO-12
 ```
 
 Examples:
 
 ```
-miosa forge p3 WO-12
+miosa forge p3 MIO-12
 ```
 
 #### `miosa forge pause`
@@ -6992,7 +7214,7 @@ miosa forge pause backend
 Place a discovery in a Mission and phase.
 
 ```
-miosa forge place WO-51 [flags]
+miosa forge place MIO-51 [flags]
 ```
 
 Flags:
@@ -7015,7 +7237,7 @@ miosa forge place WO-51 --milestone phase-1 --owner backend --priority P1 --why 
 Link a note to the Work Orders it became (or --reason "why none").
 
 ```
-miosa forge planned <note> WO-12… [flags]
+miosa forge planned <note> MIO-12… [flags]
 ```
 
 Flags:
@@ -7026,7 +7248,7 @@ Flags:
 Examples:
 
 ```
-miosa forge planned note-3 WO-12 WO-13
+miosa forge planned note-3 MIO-12 MIO-13
   miosa forge planned note-4 --reason "Already shipped"
 ```
 
@@ -7082,6 +7304,7 @@ Flags:
 - `--dismiss-stale` - New commits dismiss earlier approvals. (default `true`)
 - `--idempotency-key string` - Replay-safe key: repeating the same key returns the first result (default: generated).
 - `--independent` - Require an approver other than the author. (default `true`)
+- `--up-to-date` - Merge only a head that contains the branch's tip, so its checks ran on what lands.
 
 Examples:
 
@@ -7126,6 +7349,7 @@ than the author.
   miosa forge pr new platform --head fix-redirect --title "Fix redirect loop"
   miosa forge pr list platform
   miosa forge pr show platform 12
+  miosa forge pr status platform 12 --failures
   miosa forge pr review platform 12 --decision approved
   miosa forge pr diff platform 12
   miosa forge pr checkout platform 12
@@ -7224,13 +7448,27 @@ miosa forge pr comment platform 12 --body "Looks good once CI passes"
 List the comments on a pull request.
 
 ```
-miosa forge pr comments <repo> <number>
+miosa forge pr comments <repo> <number> [flags]
 ```
+
+Lists the comments on a pull request, oldest first.
+
+--unresolved lists only what still needs the author: comments people and
+service accounts wrote (Forge's own system comments, such as the preview
+comment, are hidden) and the reviews on the current head that request changes
+or comment.
+Approvals, dismissed reviews and reviews of an older head count as
+resolved.
+
+Flags:
+
+- `--unresolved` - Only what still needs the author: no system comments, only open reviews on the head.
 
 Examples:
 
 ```
 miosa forge pr comments platform 12
+  miosa forge pr comments platform 12 --unresolved --json
 ```
 
 ##### `miosa forge pr diff`
@@ -7386,16 +7624,27 @@ miosa forge pr review platform 12 --decision approved
 Show a pull request with its reviews, checks and merge readiness.
 
 ```
-miosa forge pr show <repo> <number>
+miosa forge pr show <repo> <number> [flags]
 ```
 
+Shows the pull request with its reviews, checks and merge readiness.
+
+--failures lists each failing CI check on the head commit instead: its failing
+step, the last 20 lines of that step's output, and whether the failure is new
+(the same workflow passed on the base branch's latest run) or already on the
+base branch (it failed there too).
+
 Aliases: `get`, `status`.
+
+Flags:
+
+- `--failures` - List the failing checks of the head commit, each marked new or already on the base branch.
 
 Examples:
 
 ```
-miosa forge pr show platform 12
-  miosa forge pr show platform 12 --json
+miosa forge pr status platform 12
+  miosa forge pr status platform 12 --failures --json
 ```
 
 #### `miosa forge prime`
@@ -7478,7 +7727,7 @@ miosa forge propose "Adopt automatic version numbers?" --options "Adopt|Keep man
 Record the branch and commit you just pushed (read from git).
 
 ```
-miosa forge push WO-12 [flags]
+miosa forge push MIO-12 [flags]
 ```
 
 Flags:
@@ -7488,7 +7737,7 @@ Flags:
 Examples:
 
 ```
-miosa forge push WO-12
+miosa forge push MIO-12
 ```
 
 #### `miosa forge release`
@@ -7776,13 +8025,13 @@ miosa forge resume backend
 Steer a Work Order: retry.
 
 ```
-miosa forge retry WO-12 [text]
+miosa forge retry MIO-12 [text]
 ```
 
 Examples:
 
 ```
-miosa forge retry WO-12
+miosa forge retry MIO-12
 ```
 
 #### `miosa forge seats`
@@ -7803,18 +8052,92 @@ Examples:
 miosa forge seats release-pipeline-v1 backend 2
 ```
 
-#### `miosa forge show`
+#### `miosa forge secret`
 
-One Work Order: spec, steps, activity.
+Repository secrets for Forge Automations and deployments.
 
 ```
-miosa forge show WO-12
+miosa forge secret
+```
+
+A secret is written once and never shown again.
+A Forge Automation receives the
+ones it names in .miosa/automations.yml (secrets: [NPM_TOKEN]) on a tag or the
+default branch only.
+Setting a secret needs the admin role on the repository.
+
+```
+  miosa forge secret set miosa NPM_TOKEN          (paste the value; input hidden)
+  printf '%s' "$TOKEN" | miosa forge secret set miosa NPM_TOKEN
+  miosa forge secret list miosa
+  miosa forge secret delete miosa NPM_TOKEN
+```
+
+Aliases: `secrets`.
+
+##### `miosa forge secret delete`
+
+Delete a secret.
+
+```
+miosa forge secret delete <repo> <name> [flags]
+```
+
+Aliases: `rm`.
+
+Flags:
+
+- `-y, --yes` - Do not ask for confirmation.
+
+Examples:
+
+```
+miosa forge secret delete platform NPM_TOKEN
+```
+
+##### `miosa forge secret list`
+
+List a repository's secret names.
+
+```
+miosa forge secret list <repo>
+```
+
+Aliases: `ls`.
+
+Examples:
+
+```
+miosa forge secret list platform
+```
+
+##### `miosa forge secret set`
+
+Create or replace a secret; the value is read from stdin.
+
+```
+miosa forge secret set <repo> <name>
 ```
 
 Examples:
 
 ```
-miosa forge show WO-12
+miosa forge secret set platform NPM_TOKEN
+  printf '%s' "$TOKEN" | miosa forge secret set platform NPM_TOKEN
+```
+
+#### `miosa forge show`
+
+One Work Order: spec, steps, activity.
+
+```
+miosa forge show MIO-12
+```
+
+Examples:
+
+```
+miosa forge show MIO-12
 ```
 
 #### `miosa forge spec`
@@ -7822,7 +8145,7 @@ miosa forge show WO-12
 Write a Work Order's spec, a draft for the person to approve.
 
 ```
-miosa forge spec WO-12 [flags]
+miosa forge spec MIO-12 [flags]
 ```
 
 Flags:
@@ -7833,8 +8156,8 @@ Flags:
 Examples:
 
 ```
-miosa forge spec WO-12 --json spec.json
-  cat spec.json | miosa forge spec WO-12 --json -
+miosa forge spec MIO-12 --json spec.json
+  cat spec.json | miosa forge spec MIO-12 --json -
 ```
 
 #### `miosa forge status`
@@ -7856,7 +8179,7 @@ miosa forge status
 Mark a step done, or in progress, by title or number.
 
 ```
-miosa forge step WO-12 "a" | 2 | 2 start [flags]
+miosa forge step MIO-12 "a" | 2 | 2 start [flags]
 ```
 
 Flags:
@@ -7866,8 +8189,8 @@ Flags:
 Examples:
 
 ```
-miosa forge step WO-12 1
-  miosa forge step WO-12 2 start
+miosa forge step MIO-12 1
+  miosa forge step MIO-12 2 start
 ```
 
 #### `miosa forge steps`
@@ -7875,13 +8198,13 @@ miosa forge step WO-12 1
 Plan its steps.
 
 ```
-miosa forge steps WO-12 "a" "b"…
+miosa forge steps MIO-12 "a" "b"…
 ```
 
 Examples:
 
 ```
-miosa forge steps WO-12 "Write the failing test" "Fix the retry" "Run the suite"
+miosa forge steps MIO-12 "Write the failing test" "Fix the retry" "Run the suite"
 ```
 
 #### `miosa forge stop`
@@ -7903,7 +8226,7 @@ miosa forge stop backend
 Hold a Work Order (the next in your queue if omitted).
 
 ```
-miosa forge take [WO-12] [flags]
+miosa forge take [MIO-12] [flags]
 ```
 
 Flags:
@@ -7917,7 +8240,7 @@ Examples:
 
 ```
 miosa forge take
-  miosa forge take WO-12
+  miosa forge take MIO-12
 ```
 
 #### `miosa forge verify`
@@ -7943,13 +8266,13 @@ miosa forge verify phase-1 "CI run 4821 green on every repo"
 Block until the person answers (or your own call applies), then print it.
 
 ```
-miosa forge wait WO-12
+miosa forge wait MIO-12
 ```
 
 Examples:
 
 ```
-miosa forge wait WO-12
+miosa forge wait MIO-12
 ```
 
 #### `miosa forge watch`
@@ -11235,6 +11558,8 @@ Compute billing stops; storage keeps billing at the paused rate.
 Resume it with 'miosa resume'.
 Memory is checkpointed, so processes continue where they were.
 
+Pause keeps the disk and memory; processes continue where they were on resume.
+
 ### `miosa policy`
 
 Show or change a computer's network policy.
@@ -12872,6 +13197,7 @@ resolves services by id, so the CLI looks the name up first.
   miosa service create cliniciq API --type web --repo https://github.com/acme/api
   miosa service deploy cliniciq API --wait
   miosa service logs cliniciq API
+  miosa service exec cliniciq API -- pnpm db:migrate
   miosa service scale cliniciq API --replicas 4
   miosa service vars set cliniciq API DATABASE_URL='${{Postgres.DATABASE_URL}}'
   miosa service domains cliniciq API
@@ -13051,6 +13377,54 @@ Flags:
 - `--deploy-target string` - Deploy target name or id (default: the project's default).
 - `--label string` - Host label (default: the service slug).
 
+#### `miosa service exec`
+
+Run a one-off command in a running replica of a service.
+
+```
+miosa service exec <project> <service> -- <cmd> [args...] [flags]
+```
+
+Run a command in one running replica of the service, the way its start command
+runs (the image's user and working directory, the service's variables), and
+print its output. miosa exits with the command's exit code, so a migration or a
+seed drops straight into a script.
+
+The -- separator is required before the command.
+Several words run as they are,
+each one argument; a single word runs in the shell, so quote it to use pipes,
+&& or variables:
+
+```
+  miosa service exec shop api -- pnpm db:migrate
+  miosa service exec shop api -- 'pnpm db:migrate && pnpm db:seed'
+
+```
+--replica runs it in that replica (an id from 'miosa service get'); otherwise a
+healthy replica of the active release is used. --timeout bounds the command in
+seconds, 1-300 (default 60).
+A stopped or sleeping service has no replica to run
+in.
+
+Every exec is recorded in the organization's audit log (who ran it, in which
+service, and a hash of the command; never the output).
+Output that contains one
+of the service's variable values shows *** in its place.
+
+Flags:
+
+- `--deploy-target string` - Deploy target name or id (default: the project's default).
+- `--replica string` - Run it in this replica (its id).
+
+Examples:
+
+```
+miosa service exec shop api -- pnpm db:migrate
+  miosa service exec shop api --timeout 300 -- python manage.py migrate
+  miosa service exec shop api -- 'ls -la /app | head'
+  miosa service exec shop api --replica 6f1c... -- cat /tmp/debug.log
+```
+
 #### `miosa service get`
 
 Show one service.
@@ -13081,7 +13455,7 @@ Flags:
 
 #### `miosa service logs`
 
-Show a service's output, a release's events, or a build's log.
+Show a service's output, a release's events, a build's log or a pre-deploy log.
 
 ```
 miosa service logs <project> <service> [flags]
@@ -13102,6 +13476,11 @@ named by --build-id. --follow keeps reading until the build finishes.
 A service
 built from an image has no build log.
 
+With --pre-deploy this shows what the release's pre-deploy command printed
+(stdout, then stderr), for a success as for a failure: the newest release with a
+pre-deploy command, or the one --release names. --follow keeps reading until the
+command has run.
+
 --tail is the number of lines from the end of the log (runtime 1-1000, build
 1-2000).
 
@@ -13112,7 +13491,8 @@ Flags:
 - `--deploy-target string` - Deploy target name or id (default: the project's default).
 - `--events` - Show a release's events instead of the service's output.
 - `-f, --follow` - Keep printing new lines (with --build: until the build finishes).
-- `--release string` - With --events: release number or id (default: the newest).
+- `--pre-deploy` - Show what the release's pre-deploy command printed.
+- `--release string` - With --events or --pre-deploy: release number or id (default: the newest).
 - `--replica string` - Read one replica's log (its id).
 - `-n, --tail int` - Lines from the end of the log (runtime 1-1000, build 1-2000). (default `200`)
 
@@ -13123,6 +13503,7 @@ miosa service logs shop api
   miosa service logs shop api --follow
   miosa service logs shop api --events
   miosa service logs shop api --build --follow
+  miosa service logs shop api --pre-deploy --release 12
 ```
 
 #### `miosa service metrics`
@@ -13959,6 +14340,8 @@ miosa stop [sandbox]
 
 Stop a sandbox.
 The disk persists and the sandbox can be resumed; use 'destroy' to delete it.
+
+Stop keeps the disk; unlike 'miosa pause', it does not promise to keep memory or running processes.
 
 ### `miosa storage`
 

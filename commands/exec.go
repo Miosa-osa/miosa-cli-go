@@ -13,7 +13,6 @@ import (
 
 	miosa "github.com/Miosa-osa/miosa-go"
 
-	"github.com/Miosa-osa/miosa-cli-go/internal/api"
 	"github.com/Miosa-osa/miosa-cli-go/internal/client"
 )
 
@@ -99,6 +98,9 @@ func runExecLong(cmd *cobra.Command, args []string, cwd string, ef execFlags) er
 	}
 	id, err := c.API.ResolveSandbox(cmd.Context(), ref)
 	if err != nil {
+		return die(err)
+	}
+	if command, err = stageLargeCommand(cmd.Context(), c.API, "sandbox", id, command); err != nil {
 		return die(err)
 	}
 	if ef.detach {
@@ -202,6 +204,12 @@ func runInSandbox(cmd *cobra.Command, nameOrID string, in miosa.CommandInput, ti
 	var stdout, stderr string
 	var exitCode int
 
+	staged, err := stageLargeCommand(cmd.Context(), c.API, kind, target, in.Command)
+	if err != nil {
+		return die(err)
+	}
+	in.Command = staged
+
 	if isComputer {
 		// A computer runs commands at its own route; the sandbox route answers
 		// 404 for a computer id.
@@ -275,20 +283,11 @@ func isTimeoutErr(err error) bool {
 // computer's full id. A reference neither knows is left to the sandbox route,
 // which answers for it as it always did.
 func resolveExecTarget(cmd *cobra.Command, c *client.Client, ref string) (string, bool) {
-	if api.IsUUID(ref) {
-		if c.API.Get(cmd.Context(), "/computers/"+url.PathEscape(ref), nil, nil) == nil {
-			return ref, true
-		}
+	kind, id, err := c.API.ResolveMachine(cmd.Context(), ref, false)
+	if err != nil {
 		return ref, false
 	}
-
-	if id, err := c.API.ResolveSandbox(cmd.Context(), ref); err == nil && id != ref {
-		return id, false
-	}
-	if id, err := c.API.ResolveComputer(cmd.Context(), ref); err == nil && id != ref {
-		return id, true
-	}
-	return ref, false
+	return id, kind == "computer"
 }
 
 // execRequestTimeout is the HTTP timeout for a command: the command's own

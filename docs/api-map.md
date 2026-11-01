@@ -120,6 +120,7 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa db rm` | DELETE | `/databases/{0}` |
 | `miosa db start` | POST | `/databases/{0}/start` |
 | `miosa db stop` | POST | `/databases/{0}/stop` |
+| `miosa db update` | PATCH | `/databases/{0}` |
 | `miosa db wake` | POST | `/databases/{0}/wake` |
 | `miosa deploy builds` | GET | `/deployments/{0}/builds` |
 | `miosa deploy domain-add` | POST | `/deployments/{0}/domains` |
@@ -201,6 +202,8 @@ Paths are relative to the API base URL (`/api/v1`); `{N}` is the Nth argument.
 | `miosa forge release new` | POST | `/forge/repositories/{0}/releases` |
 | `miosa forge release show` | GET | `/forge/repositories/{0}/releases/{1}` |
 | `miosa forge release tag` | POST | `/forge/repositories/{0}/tags` |
+| `miosa forge secret delete` | DELETE | `/forge/repositories/{0}/secrets/{1}` |
+| `miosa forge secret list` | GET | `/forge/repositories/{0}/secrets` |
 | `miosa fork` | POST | `/sandboxes/{0}/fork` |
 | `miosa function build-log` | GET | `/functions/{0}` |
 | `miosa function create` | POST | `/functions` |

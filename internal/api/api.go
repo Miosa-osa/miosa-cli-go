@@ -83,7 +83,10 @@ type Error struct {
 	Message   string
 	RequestID string
 	// Field is the request field a 4xx refused, when the API named one.
-	Field     string
+	Field string
+	// Hint is the next step the API suggests ("hint", or "next_step"), shown
+	// after the error line.
+	Hint      string
 	Retryable bool
 	// RetryAfter is the server-suggested delay, if any.
 	RetryAfter time.Duration
@@ -195,6 +198,7 @@ func ParseError(resp *http.Response) *Error {
 			e.Code, _ = v["code"].(string)
 			e.Message, _ = v["message"].(string)
 			e.Field, _ = v["field"].(string)
+			e.Hint = firstString(v["hint"], v["next_step"])
 			if m, ok := v["details"].(map[string]any); ok {
 				e.Details = m
 			}
@@ -220,6 +224,9 @@ func ParseError(resp *http.Response) *Error {
 			}
 		}
 		e.EnrollPath, _ = raw["enroll_path"].(string)
+		if e.Hint == "" {
+			e.Hint = firstString(raw["hint"], raw["next_step"])
+		}
 		if e.Message == "" {
 			if m, ok := raw["message"].(string); ok {
 				e.Message = m
@@ -246,6 +253,16 @@ func ParseError(resp *http.Response) *Error {
 		}
 	}
 	return e
+}
+
+// firstString returns the first of vs that is a non-empty string.
+func firstString(vs ...any) string {
+	for _, v := range vs {
+		if s, ok := v.(string); ok && s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func clip(b []byte, n int) []byte {

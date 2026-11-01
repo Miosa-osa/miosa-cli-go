@@ -106,9 +106,12 @@ func Execute() error {
 	err := rootCmd.Execute()
 	if err != nil {
 		writeError(os.Stderr, err, isJSON())
+		maybeWarnOutdated(os.Stderr)
 		return err
 	}
-	maybeNotifyUpdate(os.Stderr)
+	if !maybeWarnOutdated(os.Stderr) {
+		maybeNotifyUpdate(os.Stderr)
+	}
 	maybeAutoUpdate(os.Stderr)
 	return nil
 }
@@ -242,6 +245,7 @@ func init() {
 		newDrainsCmd(),
 		newProtectionCmd(),
 		newWAFCmd(),
+		newCICmd(),
 	)
 }
 
@@ -320,7 +324,7 @@ var helpGroups = []struct {
 	{"machines", "Sandboxes and computers:", []string{"create", "list", "info", "use", "destroy", "pause", "resume", "restart", "stop", "recover", "fork", "extend", "tag", "share", "unshare",
 		"exec", "ssh", "console", "files", "push", "logs", "events", "usage", "wait", "ports", "preview", "process", "desktop", "computer", "daemon", "services", "policy", "proxy", "url", "env", "snapshot", "checkpoint", "restore", "catalog", "runtimes", "device", "sandbox"}},
 	{"agents", "Agents:", []string{"prompt", "steer", "interrupt", "conversations", "run", "chat", "agent", "connections"}},
-	{"platform", "Platform:", []string{"api-key", "webhook", "deploy", "template", "workspace", "move", "billing", "audit", "forge", "api", "mcp"}},
+	{"platform", "Platform:", []string{"api-key", "webhook", "deploy", "template", "workspace", "move", "billing", "audit", "forge", "ci", "api", "mcp"}},
 }
 
 // sandboxArgCommands take a sandbox as their first argument.

@@ -84,6 +84,7 @@ can read and sync one workspace and nothing else.`,
 	cmd.AddCommand(newEngineCreateCmd())
 	cmd.AddCommand(newEngineGetCmd())
 	cmd.AddCommand(newEngineListCmd())
+	cmd.AddCommand(newEngineMaintainCmd())
 	cmd.AddCommand(newEngineUpgradeCmd())
 	cmd.AddCommand(newEngineRollbackCmd())
 	cmd.AddCommand(newEngineBackupCmd())

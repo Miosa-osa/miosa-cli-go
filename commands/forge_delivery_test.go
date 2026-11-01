@@ -69,7 +69,7 @@ func TestForgeDeliveryAddSendsFlagsInAnyOrderAndSignsWithTheActor(t *testing.T) 
 	if err != nil {
 		t.Fatalf("add: %v %s", err, out)
 	}
-	if !strings.Contains(out, "WO-81 → Platform · P1") {
+	if !strings.Contains(out, "MIO-81 → Platform · P1") {
 		t.Fatalf("add printed %q", out)
 	}
 	call := (*calls)[0]
@@ -88,7 +88,7 @@ func TestForgeDeliveryEditLeavesOutWhatIsNotChanged(t *testing.T) {
 	calls, stop := fakeDelivery(t, nil)
 	defer stop()
 
-	out, err := runDelivery(t, "", "forge", "edit", "WO-12", "--title", "New title")
+	out, err := runDelivery(t, "", "forge", "edit", "MIO-12", "--title", "New title")
 	if err != nil || strings.TrimSpace(out) != "✓" {
 		t.Fatalf("edit: %v %q", err, out)
 	}
@@ -234,7 +234,7 @@ func TestForgeDeliveryInboxListsWhatNeedsYou(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inbox: %v", err)
 	}
-	for _, want := range []string{"decision trains: Keep the trains?", "0) Yes (recommended)", "question WO-4 backend: Merge now?", "miosa forge answer WO-4"} {
+	for _, want := range []string{"decision trains: Keep the trains?", "0) Yes (recommended)", "question MIO-4 backend: Merge now?", "miosa forge answer MIO-4"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("inbox missing %q:\n%s", want, out)
 		}
@@ -343,5 +343,72 @@ func TestForgeDeliveryNeverSendsAMiosaKeyToTheService(t *testing.T) {
 	joined := strings.Join(seen, "\n")
 	if strings.Contains(joined, "sk-test-secret-key") || strings.Contains(strings.ToLower(joined), "authorization") {
 		t.Fatalf("a MIOSA credential reached the Delivery service:\n%s", joined)
+	}
+}
+
+func TestForgeDeliveryApproveSpecSignsWithTheActorAndNamesTheOwner(t *testing.T) {
+	calls, stop := fakeDelivery(t, map[string]any{"approveSpec": map[string]any{"approved": []any{12}}})
+	defer stop()
+
+	if out, err := runDelivery(t, "", "forge", "approve-spec", "WO-12", "--owner", "Roberto"); err != nil {
+		t.Fatalf("approve-spec: %v %s", err, out)
+	}
+	body := (*calls)[0].body
+	if body["id"] != float64(12) || body["by"] != "claude-code" || body["owner"] != "Roberto" {
+		t.Fatalf("approve-spec payload %#v: the service refuses agents only if it is told who approves", body)
+	}
+}
+
+func TestForgeDeliveryContextShowsThePrimaryOwnerAndTheDelegate(t *testing.T) {
+	state := map[string]any{
+		"orders": []any{map[string]any{"id": 4, "title": "Fix it", "owner": "backend", "humanOwner": "Roberto", "priority": "P2", "specState": "approved", "inMission": true}},
+	}
+	_, stop := fakeDelivery(t, map[string]any{"state": state})
+	defer stop()
+
+	for _, args := range [][]string{{"forge", "context", "WO-4"}, {"forge", "show", "WO-4"}} {
+		out, err := runDelivery(t, "", args...)
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if !strings.Contains(out, "Primary owner: Roberto") || !strings.Contains(out, "delegate backend") {
+			t.Fatalf("%v missing the primary owner and delegate:\n%s", args, out)
+		}
+	}
+}
+
+func TestForgeDeliveryInitiativeNewAddShow(t *testing.T) {
+	state := map[string]any{
+		"missions":    []map[string]any{{"id": "m1", "title": "Move the code onto Forge", "status": "active"}, {"id": "m2", "title": "Forge Delivery v1", "status": "planned"}},
+		"initiatives": []map[string]any{{"id": "one-delivery-system", "title": "One delivery system", "goal": "One pipeline", "missions": []string{"m1", "m2"}, "counts": map[string]int{"planned": 120, "plannedShipped": 60, "added": 7, "discovered": 3}}},
+	}
+	calls, stop := fakeDelivery(t, map[string]any{"state": state, "createInitiative": map[string]any{"id": "one-delivery-system"}, "initiativeAdd": map[string]any{"ok": true}})
+	defer stop()
+
+	out, err := runDelivery(t, "", "forge", "initiative", "new", "One", "delivery", "system", "--goal", "One pipeline", "--missions", "m1,m2")
+	if err != nil || !strings.Contains(out, "Initiative one-delivery-system") {
+		t.Fatalf("new: %v %q", err, out)
+	}
+	body := (*calls)[0].body
+	if body["title"] != "One delivery system" || body["goal"] != "One pipeline" || body["by"] != "claude-code" {
+		t.Fatalf("new payload %#v", body)
+	}
+	if _, err := runDelivery(t, "", "forge", "initiative", "add", "one-delivery-system", "m2"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if (*calls)[1].action != "initiativeAdd" || (*calls)[1].body["mission"] != "m2" {
+		t.Fatalf("add payload %#v", (*calls)[1])
+	}
+	out, err = runDelivery(t, "", "forge", "initiative", "show", "one-delivery-system")
+	if err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	for _, want := range []string{"One delivery system", "50% · 60 of 120 planned shipped · added 7 · discovered 3", "- m1 (active) Move the code onto Forge", "- m2 (planned) Forge Delivery v1"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("show missing %q:\n%s", want, out)
+		}
+	}
+	if _, err := runDelivery(t, "", "forge", "initiative", "show", "nope"); err == nil || !strings.Contains(err.Error(), "no Initiative nope") {
+		t.Fatalf("show unknown: %v", err)
 	}
 }

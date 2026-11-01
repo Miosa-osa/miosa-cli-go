@@ -115,6 +115,7 @@ func (c *Client) ResolveComputer(ctx context.Context, ref string) (string, error
 	type row struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
+		Slug string `json:"slug"`
 	}
 	var out struct {
 		Data      []row `json:"data"`
@@ -130,9 +131,9 @@ func (c *Client) ResolveComputer(ctx context.Context, ref string) (string, error
 
 	computers := append(out.Data, out.Computers...)
 
-	// A name first: it is what a person types.
+	// A name or slug first: it is what a person types.
 	for _, comp := range computers {
-		if comp.Name == ref {
+		if comp.Name == ref || (comp.Slug != "" && comp.Slug == ref) {
 			return c.rememberComputer(r, key, comp.ID), nil
 		}
 	}
@@ -151,6 +152,78 @@ func (c *Client) ResolveComputer(ctx context.Context, ref string) (string, error
 	}
 
 	return ref, nil // unknown: let the server answer
+}
+
+// ResolveMachine says which machine a reference names: "sandbox" or "computer",
+// and its id. It is the one resolver behind every command that takes either
+// kind. A sandbox wins where both exist (sandboxes came first); computerOnly
+// skips them. A UUID that matches no row stays a sandbox id, because the row
+// may be gone while its history remains. Anything else unknown is a 404.
+func (c *Client) ResolveMachine(ctx context.Context, ref string, computerOnly bool) (kind, id string, err error) {
+	ref = strings.TrimSpace(ref)
+	if IsUUID(ref) {
+		// The computer list says whether the id is a computer without a failing
+		// request; a sandbox route is never asked about a computer's id.
+		if c.isListedComputer(ctx, ref) {
+			return "computer", ref, nil
+		}
+		for _, k := range []string{"sandbox", "computer"} {
+			if computerOnly && k == "sandbox" {
+				continue
+			}
+			err := c.Get(ctx, "/"+k+"s/"+ref, nil, nil)
+			if err == nil {
+				return k, ref, nil
+			}
+			// 400 is a route that does not know the id; only other failures are real.
+			if !IsStatus(err, http.StatusNotFound) && !IsStatus(err, http.StatusBadRequest) {
+				return "", "", err
+			}
+		}
+		if !computerOnly {
+			return "sandbox", ref, nil
+		}
+	} else {
+		if !computerOnly {
+			sid, err := c.ResolveSandbox(ctx, ref)
+			if err != nil {
+				return "", "", err
+			}
+			if sid != ref {
+				return "sandbox", sid, nil
+			}
+		}
+		cid, err := c.ResolveComputer(ctx, ref)
+		if err != nil {
+			return "", "", err
+		}
+		if cid != ref {
+			return "computer", cid, nil
+		}
+	}
+	return "", "", &Error{
+		Status:  http.StatusNotFound,
+		Code:    "NOT_FOUND",
+		Message: fmt.Sprintf("no sandbox or computer named %q", ref),
+	}
+}
+
+// isListedComputer reports whether the computer list holds id. An unavailable
+// list answers false, and the caller falls back to probing the routes.
+func (c *Client) isListedComputer(ctx context.Context, id string) bool {
+	var out struct {
+		Data      []struct{ ID string } `json:"data"`
+		Computers []struct{ ID string } `json:"computers"`
+	}
+	if err := c.JSON(ctx, Request{Method: http.MethodGet, Path: "/computers"}, &out); err != nil {
+		return false
+	}
+	for _, row := range append(out.Data, out.Computers...) {
+		if strings.EqualFold(row.ID, id) {
+			return true
+		}
+	}
+	return false
 }
 
 // rememberComputer caches a resolved id and returns it.

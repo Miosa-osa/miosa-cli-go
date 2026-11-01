@@ -1,0 +1,206 @@
+{
+ "currency": "usd",
+ "price_version": "launch-2026-10-20",
+ "plans": [
+  {
+   "id": "free",
+   "name": "Free",
+   "description": "Try MIOSA with $1 of usage every month.",
+   "concurrency": {
+    "sandboxes": 10,
+    "computers": 3
+   },
+   "allowed_sizes": [
+    "xs",
+    "small",
+    "medium"
+   ],
+   "allowed_sandbox_sizes": [
+    "tiny",
+    "xs",
+    "small",
+    "medium"
+   ],
+   "approval_required": false,
+   "monthly_commitment_cents": 0,
+   "overage_enabled": false,
+   "price_cents": 0,
+   "welcome_credit_credits": 0,
+   "spending_limit_cents": null,
+   "monthly_grant_credits": 100,
+   "budget_cents": 100,
+   "max_computer": {
+    "memory_mb": 8192,
+    "vcpu": 4,
+    "disk_mb": 30720
+   },
+   "max_sandbox": {
+    "memory_mb": 8192,
+    "vcpu": 4,
+    "disk_mb": 30720
+   },
+   "retained": {
+    "sandboxes": 15,
+    "computers": 5
+   },
+   "build_minutes_month": 1500,
+   "concurrent_builds": 2
+  },
+  {
+   "id": "developer",
+   "name": "Developer",
+   "description": "$20 a month with $20 of usage included, then pay as you go.",
+   "concurrency": {
+    "sandboxes": 10,
+    "computers": 3
+   },
+   "allowed_sizes": [
+    "xs",
+    "small",
+    "medium"
+   ],
+   "allowed_sandbox_sizes": [
+    "tiny",
+    "xs",
+    "small",
+    "medium"
+   ],
+   "approval_required": false,
+   "monthly_commitment_cents": 2000,
+   "overage_enabled": true,
+   "price_cents": 2000,
+   "welcome_credit_credits": 0,
+   "spending_limit_cents": null,
+   "monthly_grant_credits": 0,
+   "budget_cents": 2000,
+   "max_computer": {
+    "memory_mb": 8192,
+    "vcpu": 4,
+    "disk_mb": 30720
+   },
+   "max_sandbox": {
+    "memory_mb": 8192,
+    "vcpu": 4,
+    "disk_mb": 30720
+   },
+   "retained": {
+    "sandboxes": 15,
+    "computers": 5
+   },
+   "build_minutes_month": 1500,
+   "concurrent_builds": 2
+  },
+  {
+   "id": "business",
+   "name": "Business",
+   "description": "Production infrastructure with metered usage and predictable limits.",
+   "concurrency": {
+    "sandboxes": 250,
+    "computers": 50
+   },
+   "allowed_sizes": [
+    "xs",
+    "small",
+    "medium",
+    "large"
+   ],
+   "allowed_sandbox_sizes": [
+    "tiny",
+    "xs",
+    "small",
+    "medium",
+    "large"
+   ],
+   "approval_required": false,
+   "monthly_commitment_cents": 50000,
+   "overage_enabled": true,
+   "price_cents": 50000,
+   "welcome_credit_credits": 0,
+   "spending_limit_cents": null,
+   "monthly_grant_credits": 0,
+   "budget_cents": 50000,
+   "max_computer": {
+    "memory_mb": 65536,
+    "vcpu": 16,
+    "disk_mb": 51200
+   },
+   "max_sandbox": {
+    "memory_mb": 16384,
+    "vcpu": 8,
+    "disk_mb": 40960
+   },
+   "retained": {
+    "sandboxes": 250,
+    "computers": 100
+   },
+   "build_minutes_month": 3000,
+   "concurrent_builds": 3
+  },
+  {
+   "id": "enterprise",
+   "name": "Enterprise",
+   "description": "Maximum capacity, enterprise controls, and priority operations.",
+   "concurrency": {
+    "sandboxes": 500,
+    "computers": 200
+   },
+   "allowed_sizes": [
+    "xs",
+    "small",
+    "medium",
+    "large",
+    "xl"
+   ],
+   "allowed_sandbox_sizes": [
+    "tiny",
+    "xs",
+    "small",
+    "medium",
+    "large",
+    "xl"
+   ],
+   "approval_required": false,
+   "monthly_commitment_cents": 200000,
+   "overage_enabled": true,
+   "price_cents": 200000,
+   "welcome_credit_credits": 0,
+   "spending_limit_cents": null,
+   "monthly_grant_credits": 0,
+   "budget_cents": 200000,
+   "max_computer": {
+    "memory_mb": 131072,
+    "vcpu": 32,
+    "disk_mb": 51200
+   },
+   "max_sandbox": {
+    "memory_mb": 32768,
+    "vcpu": 16,
+    "disk_mb": 81920
+   },
+   "retained": {
+    "sandboxes": 500,
+    "computers": 200
+   },
+   "build_minutes_month": 3000,
+   "concurrent_builds": 3
+  }
+ ],
+ "credit_packs": [
+  {
+   "id": "pack_500",
+   "cents": 500
+  },
+  {
+   "id": "pack_2500",
+   "cents": 2500
+  },
+  {
+   "id": "pack_5000",
+   "cents": 5000
+  },
+  {
+   "id": "pack_10000",
+   "cents": 10000
+  }
+ ]
+}
