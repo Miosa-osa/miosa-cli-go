@@ -137,9 +137,10 @@ func TestForgeCommandContractMatchesBothDistributions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The Node CLI in the miosa-cli submodule stopped at 1.1.16 (2026-08-17); @miosa/cli ships from this Go CLI
+	// since 2.x, so its frozen copy of the contract is no longer compared.
 	for _, contractPath := range []string{
 		filepath.Join("..", "..", "..", "tests", "fixtures", "forge-cli-command-contract.json"),
-		filepath.Join("..", "..", "..", "miosa-cli", "test", "fixtures", "forge-cli-command-contract.json"),
 	} {
 		distributionContract, readErr := os.ReadFile(contractPath)
 		if os.IsNotExist(readErr) {

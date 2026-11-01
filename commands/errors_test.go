@@ -3,6 +3,7 @@ package commands_test
 import (
 	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -48,7 +49,7 @@ func TestExitCodesFollowTheAPIStatus(t *testing.T) {
 func TestErrorKeepsCodeAndRequestID(t *testing.T) {
 	err := &api.Error{Status: 400, Code: "INVALID_PATH", Message: "invalid path", RequestID: "GNzv123"}
 	text := commands.ErrorText(err, false)
-	if text != "miosa: invalid path [INVALID_PATH] (request_id=GNzv123)\n" {
+	if text != "Error INVALID_PATH: invalid path (request_id=GNzv123)\n" {
 		t.Fatalf("text = %q", text)
 	}
 	var j struct {
@@ -167,7 +168,7 @@ func TestSignedOutCommandsFailBeforeAnyRequest(t *testing.T) {
 
 func TestRetriesOnTransientFailure(t *testing.T) {
 	n := 0
-	f := newFakeAPI(t, func(c call) (int, string) {
+	f := newFakeAPI(t, func(_ call) (int, string) {
 		n++
 		if n == 1 {
 			return 503, `{"error":{"code":"UNAVAILABLE","message":"try again"}}`
@@ -200,5 +201,89 @@ func TestJSONFlagIsOutputJSON(t *testing.T) {
 	out, err = run(t, "list", "-o", "text")
 	if err != nil || strings.HasPrefix(strings.TrimSpace(out), "{") {
 		t.Errorf("explicit -o text must win over MIOSA_OUTPUT: %v %s", err, out)
+	}
+}
+
+// A typed API error carries a code and a hint; both reach the person (text) or
+// the script (JSON) without the command knowing the code.
+func TestWriteErrorPrintsTheAPIsCodeAndHint(t *testing.T) {
+	err := &api.Error{
+		Status: 409, Code: "COMPUTER_ALREADY_RUNNING", Message: "the computer is already running",
+		Hint: "Check it with 'miosa computer get my-desktop'.", RequestID: "rid1",
+	}
+	var text strings.Builder
+	commands.WriteErrorForTest(&text, err, false)
+	for _, want := range []string{
+		"Error COMPUTER_ALREADY_RUNNING: the computer is already running",
+		"Next: Check it with 'miosa computer get my-desktop'.",
+	} {
+		if !strings.Contains(text.String(), want) {
+			t.Errorf("text output lacks %q:\n%s", want, text.String())
+		}
+	}
+	if strings.Contains(text.String(), "[COMPUTER_ALREADY_RUNNING]") {
+		t.Errorf("the code is named once, in the lead:\n%s", text.String())
+	}
+
+	var js strings.Builder
+	commands.WriteErrorForTest(&js, err, true)
+	var body struct {
+		Error struct {
+			Code  string   `json:"code"`
+			Hint  string   `json:"hint"`
+			Hints []string `json:"hints"`
+		} `json:"error"`
+	}
+	if e := json.Unmarshal([]byte(js.String()), &body); e != nil || body.Error.Code != "COMPUTER_ALREADY_RUNNING" || body.Error.Hint == "" {
+		t.Errorf("json = %s (%v)", js.String(), e)
+	}
+}
+
+func TestParseErrorReadsTheHint(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rec.WriteHeader(409)
+	_, _ = rec.WriteString(`{"error":{"code":"COMPUTER_ALREADY_RUNNING","message":"running","hint":"stop it first"}}`)
+	if e := api.ParseError(rec.Result()); e.Hint != "stop it first" {
+		t.Fatalf("hint = %q", e.Hint)
+	}
+}
+
+// Fixture bodies, parsed the way the client parses a response, render as
+// "Error <code>: <message>" then "Next: <hint>"; an error without a code keeps
+// the old one-line form.
+func TestTypedErrorBodiesRenderCodeMessageAndNext(t *testing.T) {
+	cases := []struct {
+		name, body string
+		status     int
+		want       []string
+		notWant    []string
+	}{
+		{"nested", `{"error":{"code":"COMPUTER_ALREADY_RUNNING","message":"the computer is already running","hint":"Use 'miosa computer restart'."}}`, 409,
+			[]string{"Error COMPUTER_ALREADY_RUNNING: the computer is already running", "Next: Use 'miosa computer restart'."}, nil},
+		{"flat with next_step", `{"error":"COMPUTER_NOT_RUNNING","message":"start it first","next_step":"miosa computer start desk"}`, 409,
+			[]string{"Error COMPUTER_NOT_RUNNING: start it first", "Next: miosa computer start desk"}, nil},
+		{"code without a hint", `{"error":{"code":"NO_SNAPSHOT_AVAILABLE","message":"no ready snapshot"}}`, 409,
+			[]string{"Error NO_SNAPSHOT_AVAILABLE: no ready snapshot"}, []string{"Next:"}},
+		{"no code", `{"error":"could not wake computer. Try again."}`, 500,
+			[]string{"miosa: could not wake computer. Try again."}, []string{"Error ", "Next:"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			rec.WriteHeader(c.status)
+			_, _ = rec.WriteString(c.body)
+			var out strings.Builder
+			commands.WriteErrorForTest(&out, api.ParseError(rec.Result()), false)
+			for _, w := range c.want {
+				if !strings.Contains(out.String(), w) {
+					t.Errorf("lacks %q:\n%s", w, out.String())
+				}
+			}
+			for _, w := range c.notWant {
+				if strings.Contains(out.String(), w) {
+					t.Errorf("should not contain %q:\n%s", w, out.String())
+				}
+			}
+		})
 	}
 }

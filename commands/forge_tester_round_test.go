@@ -178,7 +178,7 @@ func TestForgeMergeRefusalNamesThePolicyAndTheFix(t *testing.T) {
 	var buf bytes.Buffer
 	commands.WriteErrorForTest(&buf, err, false)
 	out := buf.String()
-	for _, want := range []string{"policy main v2 needs 1 approval from someone other than the author", "[REQUIRED_APPROVALS_MISSING]",
+	for _, want := range []string{"policy main v2 needs 1 approval from someone other than the author", "Error REQUIRED_APPROVALS_MISSING: ",
 		"miosa forge policy set platform --branch main --approvals 0 --independent=false", "miosa forge pr review platform 2 --decision approved"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)

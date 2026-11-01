@@ -45,6 +45,7 @@ func newForgeCmd() *cobra.Command {
 	cmd.AddCommand(repo)
 	cmd.AddCommand(newForgeAuthCmd())
 	cmd.AddCommand(forgeCollabCmds()...)
+	cmd.AddCommand(forgeSecretCmd())
 	addForgeDeliveryCmds(cmd)
 	applyForgeExamples(cmd)
 	return cmd

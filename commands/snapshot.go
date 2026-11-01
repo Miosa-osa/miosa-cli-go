@@ -11,7 +11,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -23,8 +22,6 @@ import (
 
 // Registered from here, not from root.go, so this file stands alone.
 func init() { rootCmd.AddCommand(newSnapshotCmd()) }
-
-var snapUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 type snapshotResource struct {
 	Type        string `json:"type"`
@@ -362,7 +359,7 @@ credit; the save is refused while there is none.`,
 			if _, err := sc.call(c.Context(), http.MethodGet, "/named-snapshots", nil, &current); err == nil {
 				charge = current.Allowance
 				if charge.Included > 0 && charge.RemainingFree <= 0 && !isJSON() {
-					fmt.Fprintf(c.ErrOrStderr(), "note: %s\n", snapChargeLine(charge))
+					_, _ = fmt.Fprintf(c.ErrOrStderr(), "note: %s\n", snapChargeLine(charge))
 				}
 			}
 			var out struct {
@@ -791,45 +788,14 @@ type snapMachineRef struct {
 	ID   string
 }
 
-// snapResolveMachine turns a name or id into a typed id. A sandbox is tried first
-// unless --computer was given; the sandbox and computer endpoints accept both
-// names and ids.
+// snapResolveMachine turns a name, slug or id into a typed id through the
+// shared resolver. A sandbox is tried first unless --computer was given.
 func snapResolveMachine(ctx context.Context, sc *snapshotAPI, ref string, computer bool) (snapMachineRef, error) {
-	kinds := []string{"sandbox", "computer"}
-	if computer {
-		kinds = []string{"computer"}
+	kind, id, err := sc.c.ResolveMachine(ctx, ref, computer)
+	if err != nil {
+		return snapMachineRef{}, err
 	}
-	plural := map[string]string{"sandbox": "sandboxes", "computer": "computers"}
-	var lastErr error
-	for _, kind := range kinds {
-		var out struct {
-			Data struct {
-				ID string `json:"id"`
-			} `json:"data"`
-			ID string `json:"id"`
-		}
-		_, err := sc.call(ctx, http.MethodGet, "/"+plural[kind]+"/"+ref, nil, &out)
-		if err == nil {
-			id := firstNonEmpty(out.Data.ID, out.ID)
-			if id != "" {
-				return snapMachineRef{Type: kind, ID: id}, nil
-			}
-		}
-		if err != nil && !api.IsStatus(err, http.StatusNotFound) {
-			return snapMachineRef{}, err
-		}
-		lastErr = err
-	}
-	if snapUUIDPattern.MatchString(ref) && !computer {
-		// The machine row may be gone while its snapshots remain; ids still work for history.
-		return snapMachineRef{Type: "sandbox", ID: ref}, nil
-	}
-	// A 404 from the shared client keeps the CLI's not-found exit code.
-	return snapMachineRef{}, &api.Error{
-		Status:  http.StatusNotFound,
-		Code:    "NOT_FOUND",
-		Message: fmt.Sprintf("no sandbox or computer named %q (%v)", ref, lastErr),
-	}
+	return snapMachineRef{Type: kind, ID: id}, nil
 }
 
 func snapDecode(r io.Reader, out interface{}) error {
@@ -843,7 +809,7 @@ func snapConfirm(c *cobra.Command, yes bool, prompt string) error {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return usagef("refusing to delete without confirmation: pass --yes")
 	}
-	fmt.Fprintf(c.ErrOrStderr(), "%s [y/N] ", prompt)
+	_, _ = fmt.Fprintf(c.ErrOrStderr(), "%s [y/N] ", prompt)
 	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 	if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
 		return fmt.Errorf("canceled")

@@ -38,6 +38,7 @@ than the author.
   miosa forge pr new platform --head fix-redirect --title "Fix redirect loop"
   miosa forge pr list platform
   miosa forge pr show platform 12
+  miosa forge pr status platform 12 --failures
   miosa forge pr review platform 12 --decision approved
   miosa forge pr diff platform 12
   miosa forge pr checkout platform 12
@@ -63,8 +64,16 @@ than the author.
 		},
 		Op{
 			Use: "show <repo> <number>", Aliases: []string{"get", "status"}, Short: "Show a pull request with its reviews, checks and merge readiness",
-			Method: "GET", Path: "/forge/repositories/{0}/pull-requests/{1}/collaboration", Args: []Arg{repo, number},
-			Human: renderPRSnapshot,
+			Long: `Shows the pull request with its reviews, checks and merge readiness.
+
+--failures lists each failing CI check on the head commit instead: its failing
+step, the last 20 lines of that step's output, and whether the failure is new
+(the same workflow passed on the base branch's latest run) or already on the
+base branch (it failed there too).`,
+			Example: "  miosa forge pr status platform 12\n  miosa forge pr status platform 12 --failures --json",
+			Method:  "GET", Path: "/forge/repositories/{0}/pull-requests/{1}/collaboration", Args: []Arg{repo, number},
+			Flags:  []Flag{{Name: "failures", Usage: "List the failing checks of the head commit, each marked new or already on the base branch", Type: "bool", In: "local"}},
+			Before: prStatusFailures, Human: renderPRSnapshot,
 		},
 		Op{
 			Use: "review <repo> <number>", Short: "Approve, request changes on, or comment on a pull request",
@@ -100,7 +109,17 @@ and --head-sha must equal the pull request's head, so a stale result is refused.
 		Op{Use: "reopen <repo> <number>", Short: "Reopen a closed pull request", Method: "POST", Path: "/forge/repositories/{0}/pull-requests/{1}/reopen", Args: []Arg{repo, number}, Detail: prDetail},
 		Op{
 			Use: "comments <repo> <number>", Short: "List the comments on a pull request", Method: "GET", Path: "/forge/repositories/{0}/pull-requests/{1}/comments", Args: []Arg{repo, number},
-			Cols: []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "FROM", Path: "author.name"}, {Head: "COMMENT", Path: "body"}, {Head: "AGE", Path: "inserted_at", Fmt: "age"}},
+			Long: `Lists the comments on a pull request, oldest first.
+
+--unresolved lists only what still needs the author: comments people and
+service accounts wrote (Forge's own system comments, such as the preview
+comment, are hidden) and the reviews on the current head that request changes
+or comment. Approvals, dismissed reviews and reviews of an older head count as
+resolved.`,
+			Example: "  miosa forge pr comments platform 12\n  miosa forge pr comments platform 12 --unresolved --json",
+			Cols:    []Col{{Head: "ID", Path: "id", Fmt: "short"}, {Head: "FROM", Path: "author.name"}, {Head: "COMMENT", Path: "body"}, {Head: "AGE", Path: "inserted_at", Fmt: "age"}},
+			Flags:   []Flag{{Name: "unresolved", Usage: "Only what still needs the author: no system comments, only open reviews on the head", Type: "bool", In: "local"}},
+			Before:  prCommentsUnresolved,
 		},
 		Op{
 			Use: "comment <repo> <number>", Short: "Add a comment to a pull request", Method: "POST", Path: "/forge/repositories/{0}/pull-requests/{1}/comments",
@@ -186,6 +205,7 @@ new version; the newest applies.
 				{Name: "independent", Usage: "Require an approver other than the author", Type: "bool", Field: "require_independent_approval", Default: "true"},
 				{Name: "dismiss-stale", Usage: "New commits dismiss earlier approvals", Type: "bool", Field: "dismiss_stale_reviews", Default: "true"},
 				{Name: "code-owners", Usage: "Require a code owner's approval", Type: "bool", Field: "require_code_owner_approval"},
+				{Name: "up-to-date", Usage: "Merge only a head that contains the branch's tip, so its checks ran on what lands", Type: "bool", Field: "require_up_to_date"},
 			},
 		},
 	)

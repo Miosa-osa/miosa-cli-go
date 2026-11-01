@@ -198,3 +198,24 @@ func SetStdinTerminalForTest(on bool) func() {
 	stdinIsTerminal = func(*cobra.Command) bool { return on }
 	return func() { stdinIsTerminal = old }
 }
+
+// SetCIWaitForTest shortens the 'ci connect' poll interval and limit.
+func SetCIWaitForTest(every, within time.Duration) func() {
+	old := ciWait
+	ciWait.every, ciWait.within = every, within
+	return func() { ciWait = old }
+}
+
+// MaybeWarnOutdatedForTest runs the far-behind warning against w.
+func MaybeWarnOutdatedForTest(w io.Writer) bool { return maybeWarnOutdated(w) }
+
+// EnableUpdateCheckForTest turns the version check on (tests switch it off)
+// and returns a restore func.
+func EnableUpdateCheckForTest() func() {
+	old := globalFlags.NoUpdateCheck
+	globalFlags.NoUpdateCheck = false
+	return func() { globalFlags.NoUpdateCheck = old }
+}
+
+// SetOutputForTest sets the output format.
+func SetOutputForTest(f string) { globalFlags.Output = f }

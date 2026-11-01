@@ -39,6 +39,9 @@ var forgeExamples = map[string]string{
 	"policy owners":  "  miosa forge policy owners platform",
 	"grant set":      "  miosa forge grant set platform <user-id> --role write",
 	"fork":           "  miosa forge fork acme/platform --name platform-fork",
+	"secret set":     "  miosa forge secret set platform NPM_TOKEN\n  printf '%s' \"$TOKEN\" | miosa forge secret set platform NPM_TOKEN",
+	"secret list":    "  miosa forge secret list platform",
+	"secret delete":  "  miosa forge secret delete platform NPM_TOKEN",
 }
 
 // applyForgeExamples fills in Example on every Forge command that has none.

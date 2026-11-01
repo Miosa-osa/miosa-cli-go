@@ -188,6 +188,7 @@ resolves services by id, so the CLI looks the name up first.
   miosa service create cliniciq API --type web --repo https://github.com/acme/api
   miosa service deploy cliniciq API --wait
   miosa service logs cliniciq API
+  miosa service exec cliniciq API -- pnpm db:migrate
   miosa service scale cliniciq API --replicas 4
   miosa service vars set cliniciq API DATABASE_URL='${{Postgres.DATABASE_URL}}'
   miosa service domains cliniciq API
@@ -201,6 +202,7 @@ process inside a sandbox is 'miosa daemon', a different product.`, []string{"ser
 		serviceUpdateCmd(),
 		serviceDeployCmd(),
 		serviceLogsCmd(),
+		serviceExecCmd(),
 		serviceScaleCmd(),
 		serviceActionCmd("start", "Start a stopped service", false,
 			"Start a stopped service and queue a release. A service that is already running is a conflict."),
@@ -827,11 +829,11 @@ func serviceDeployCmd() *cobra.Command {
 
 func serviceLogsCmd() *cobra.Command {
 	var env, releaseRef, buildID, replica string
-	var follow, build, events bool
+	var follow, build, events, preDeploy bool
 	var tail int
 	cmd := &cobra.Command{
 		Use:   "logs <project> <service>",
-		Short: "Show a service's output, a release's events, or a build's log",
+		Short: "Show a service's output, a release's events, a build's log or a pre-deploy log",
 		Long: `Show what the service's process writes (stdout and stderr), the tail of each
 replica's log. With several replicas each line names its replica; --replica reads
 one. --follow keeps printing new lines until Ctrl-C.
@@ -844,16 +846,25 @@ With --build this shows the build log: the build the release used, or the build
 named by --build-id. --follow keeps reading until the build finishes. A service
 built from an image has no build log.
 
+With --pre-deploy this shows what the release's pre-deploy command printed
+(stdout, then stderr), for a success as for a failure: the newest release with a
+pre-deploy command, or the one --release names. --follow keeps reading until the
+command has run.
+
 --tail is the number of lines from the end of the log (runtime 1-1000, build
 1-2000).`,
 		Example: `  miosa service logs shop api
   miosa service logs shop api --follow
   miosa service logs shop api --events
-  miosa service logs shop api --build --follow`,
+  miosa service logs shop api --build --follow
+  miosa service logs shop api --pre-deploy --release 12`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p := printerFor(cmd)
-			events = events || releaseRef != ""
+			if preDeploy && (events || build || buildID != "") {
+				return usagef("--pre-deploy, --events and --build show different logs; pick one")
+			}
+			events = events || (releaseRef != "" && !preDeploy)
 			if events && (build || buildID != "") {
 				return usagef("--events and --build show different logs; pick one")
 			}
@@ -870,6 +881,9 @@ built from an image has no build log.
 				return err
 			}
 
+			if preDeploy {
+				return servicePreDeployLogs(ctx, cmd, c.API, projectID, svc, releaseRef, tail, follow)
+			}
 			if build || buildID != "" {
 				target := buildID
 				if target == "" {
@@ -919,9 +933,10 @@ built from an image has no build log.
 	fs := cmd.Flags()
 	fs.StringVar(&env, "deploy-target", "", "Deploy target name or id (default: the project's default)")
 	fs.BoolVar(&events, "events", false, "Show a release's events instead of the service's output")
-	fs.StringVar(&releaseRef, "release", "", "With --events: release number or id (default: the newest)")
+	fs.StringVar(&releaseRef, "release", "", "With --events or --pre-deploy: release number or id (default: the newest)")
 	fs.BoolVar(&build, "build", false, "Show the build log instead of the service's output")
 	fs.StringVar(&buildID, "build-id", "", "Build id to read with --build (default: latest)")
+	fs.BoolVar(&preDeploy, "pre-deploy", false, "Show what the release's pre-deploy command printed")
 	fs.StringVar(&replica, "replica", "", "Read one replica's log (its id)")
 	fs.IntVarP(&tail, "tail", "n", 200, "Lines from the end of the log (runtime 1-1000, build 1-2000)")
 	fs.BoolVarP(&follow, "follow", "f", false, "Keep printing new lines (with --build: until the build finishes)")
