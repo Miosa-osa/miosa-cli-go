@@ -27,7 +27,10 @@ func newForgeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "forge",
 		Short: "Work with MIOSA Forge repositories (beta)",
-		Long:  "Work with repositories owned by the organization associated with the current MIOSA credential.",
+		Long: "Work with repositories owned by the organization associated with the current MIOSA credential.\n\n" +
+			"The Delivery commands (Missions, Issues, crew) use Forge Delivery in the MIOSA API with the same\n" +
+			"credential and organization. For local development, FORGE_LOCAL_URL points them at a forge-local\n" +
+			"service instead (for example http://127.0.0.1:4020); it gets no MIOSA credential.",
 	}
 	// Bound to the global --json: this flag shadows the root one for every
 	// forge command, and the pull request, policy and release commands read

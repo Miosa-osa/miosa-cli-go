@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.15.0](https://github.com/Miosa-osa/miosa/compare/cli-v2.14.0...cli-v2.15.0) (2026-11-02)
+
+
+### Features
+
+* **forge:** Delivery commands talk to the Forge Delivery API [MIO-64] ([#38](https://github.com/Miosa-osa/miosa/issues/38)) ([1afdc7e](https://github.com/Miosa-osa/miosa/commit/1afdc7e4872eed82a741fdd4448d562736c37dbf))
+
+
+### Bug Fixes
+
+* **cli:** a Domain's crew parses as the API's object or the older string [MIO-64] ([#66](https://github.com/Miosa-osa/miosa/issues/66)) ([d44e02f](https://github.com/Miosa-osa/miosa/commit/d44e02fe87fb73883f3d1ed4ebd0c15898e1b1d4))
+
 ## [2.14.0](https://github.com/Miosa-osa/miosa/compare/cli-v2.13.4...cli-v2.14.0) (2026-11-01)
 
 

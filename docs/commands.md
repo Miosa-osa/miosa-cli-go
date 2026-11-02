@@ -6287,12 +6287,17 @@ miosa forge
 
 Work with repositories owned by the organization associated with the current MIOSA credential.
 
+The Delivery commands (Missions, Issues, crew) use Forge Delivery in the MIOSA API with the same
+credential and organization.
+For local development, FORGE_LOCAL_URL points them at a forge-local
+service instead (for example http://127.0.0.1:4020); it gets no MIOSA credential.
+
 Flags:
 
 
 #### `miosa forge accept`
 
-Steer a Work Order: accept.
+Steer an Issue: accept.
 
 ```
 miosa forge accept MIO-12 [text]
@@ -6306,7 +6311,7 @@ miosa forge accept MIO-12
 
 #### `miosa forge add`
 
-Add work: split into Work Orders, deduplicated, queued.
+Add work: split into Issues, deduplicated, queued.
 
 ```
 miosa forge add "text" [flags]
@@ -6315,21 +6320,28 @@ miosa forge add "text" [flags]
 Flags:
 
 - `--as string` - Who is recording this.
+- `--customer string` - The customer who reported it.
+- `--domain string` - The Domain it belongs to (default: the first whose words match).
+- `--important` - The customer said it is important.
 - `--milestone string` - The phase it goes in.
 - `--mission string` - The Mission it goes in.
 - `--new` - You checked: it is not a duplicate.
 - `--owner string` - The Crew role that owns it.
 - `--priority string` - P0 to P3.
+- `--source string` - Where the report came from: email, slack, call….
+- `--type string` - Bug, feature or task (default task).
 
 Examples:
 
 ```
 miosa forge add "Retry failed webhooks" --milestone phase-1 --owner backend --priority P1
+  miosa forge add "Invoices show the wrong currency" --mission client-issues --customer acme --important
+  miosa forge add "The invoice total is wrong" --domain billing
 ```
 
 #### `miosa forge answer`
 
-Steer a Work Order: answer.
+Steer an Issue: answer.
 
 ```
 miosa forge answer MIO-12 [text]
@@ -6343,7 +6355,7 @@ miosa forge answer MIO-12 "Keep it one more release"
 
 #### `miosa forge approve`
 
-Steer a Work Order: approve.
+Steer an Issue: approve.
 
 ```
 miosa forge approve MIO-12 [text]
@@ -6402,7 +6414,7 @@ miosa forge ask MIO-12 "Drop the old endpoint?" --default "Keep it one release" 
 Move an agent to another Mission's crew.
 
 ```
-miosa forge assign <runner> [flags]
+miosa forge assign <agent> [flags]
 ```
 
 Flags:
@@ -6419,7 +6431,7 @@ miosa forge assign backend-2 --mission client-issues --why "P0 from a customer"
 
 #### `miosa forge assist`
 
-Work one step of a Work Order another agent holds.
+Work one step of an Issue another agent holds.
 
 ```
 miosa forge assist MIO-12 [flags]
@@ -6496,7 +6508,7 @@ miosa forge autonomy 60
 
 #### `miosa forge backlog`
 
-Steer a Work Order: backlog.
+Steer an Issue: backlog.
 
 ```
 miosa forge backlog MIO-12 [text]
@@ -6506,6 +6518,25 @@ Examples:
 
 ```
 miosa forge backlog MIO-12
+```
+
+#### `miosa forge block`
+
+WO-12 waits on WO-9; it clears when WO-9 merges.
+
+```
+miosa forge block WO-12 --by WO-9 [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+- `--by string` - The Issue it waits on.
+
+Examples:
+
+```
+miosa forge block MIO-12 --by MIO-9
 ```
 
 #### `miosa forge brief`
@@ -6533,7 +6564,7 @@ miosa forge brief
 
 #### `miosa forge cancel`
 
-Steer a Work Order: cancel.
+Steer an Issue: cancel.
 
 ```
 miosa forge cancel MIO-12 [text]
@@ -6653,7 +6684,7 @@ miosa forge check report platform --commit <sha> --name unit-tests --conclusion 
 
 ##### `miosa forge check run`
 
-Run a real Check on a Work Order and record the result.
+Run a real Check on an Issue and record the result.
 
 ```
 miosa forge check run MIO-12 -- <command…>
@@ -6698,7 +6729,7 @@ miosa forge check suite platform <commit>
 
 #### `miosa forge context`
 
-What to read before working: Mission, phase, Work Order [--full].
+What to read before working: Mission, phase, Issue [--full].
 
 ```
 miosa forge context MIO-12 [flags]
@@ -6713,6 +6744,29 @@ Examples:
 ```
 miosa forge context MIO-12
   miosa forge context MIO-12 --full
+```
+
+#### `miosa forge customer`
+
+Customers: list them, or create or edit one (--name, --domain, --tier, --owner).
+
+```
+miosa forge customer [id] [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+- `--domain string` - Their email domain.
+- `--name string` - The customer's name.
+- `--owner string` - The person who answers for the account.
+- `--tier string` - Their tier: free, pro, team or enterprise.
+
+Examples:
+
+```
+miosa forge customer
+  miosa forge customer acme --name "Acme Corp" --domain acme.com --tier enterprise --owner dana
 ```
 
 #### `miosa forge decide`
@@ -6731,7 +6785,7 @@ miosa forge decide versioning 0
 
 #### `miosa forge discover`
 
-File something you found outside your Work Order.
+File something you found outside your Issue.
 
 ```
 miosa forge discover "what" [flags]
@@ -6740,7 +6794,7 @@ miosa forge discover "what" [flags]
 Flags:
 
 - `--as string` - Who found it.
-- `--from string` - The Work Order you found it on.
+- `--from string` - The Issue you found it on.
 
 Examples:
 
@@ -6769,7 +6823,7 @@ miosa forge discoveries
 
 #### `miosa forge dismiss`
 
-Steer a Work Order: dismiss.
+Steer an Issue: dismiss.
 
 ```
 miosa forge dismiss MIO-12 [text]
@@ -6779,6 +6833,33 @@ Examples:
 
 ```
 miosa forge dismiss MIO-12
+```
+
+#### `miosa forge domain`
+
+Domains: new, set owner and triage person, show Components and Backlog.
+
+```
+miosa forge domain new|set|show [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+- `--component string` - A Component, <repo>:<trunk>[:<calver|semver>] (repeat it).
+- `--crew string` - The Crew role that does its work by default.
+- `--owner string` - The person who answers for it.
+- `--standing` - Its standing Mission.
+- `--triage string` - The person on triage duty.
+- `--words string` - A regular expression: requests that match belong here.
+
+Examples:
+
+```
+miosa forge domain new "Optimal Engine" --crew platform --component optimal:main:semver --triage Roberto
+  miosa forge domain set billing --triage Roberto --owner Roberto
+  miosa forge domain show
+  miosa forge domain show console
 ```
 
 #### `miosa forge done`
@@ -6800,9 +6881,28 @@ miosa forge done MIO-12 --report report.json
   cat report.json | miosa forge done MIO-12 --report -
 ```
 
+#### `miosa forge duplicate`
+
+WO-12 is a second report of WO-9: its attachments, requests and note move there.
+
+```
+miosa forge duplicate WO-12 --of WO-9 [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+- `--of string` - The canonical Issue it is a second report of.
+
+Examples:
+
+```
+miosa forge duplicate MIO-14 --of MIO-12
+```
+
 #### `miosa forge edit`
 
-Edit a Work Order.
+Edit an Issue.
 
 ```
 miosa forge edit MIO-12 [flags]
@@ -6816,6 +6916,7 @@ Flags:
 - `--milestone string` - Move it to this phase.
 - `--owner string` - Give it to this role.
 - `--title string` - New title.
+- `--type string` - Bug, feature or task.
 
 Examples:
 
@@ -6825,7 +6926,7 @@ miosa forge edit MIO-12 --title "Retry webhooks twice" --owner backend
 
 #### `miosa forge end`
 
-Steer a Work Order: end.
+Steer an Issue: end.
 
 ```
 miosa forge end MIO-12 [text]
@@ -6928,11 +7029,12 @@ Flags:
 - `--as string` - Who is recording this.
 - `--goal string` - Why the Initiative exists.
 - `--missions string` - Mission ids it starts with, comma-separated.
+- `--owner string` - The person who answers for it.
 
 Examples:
 
 ```
-miosa forge initiative new "One delivery system" --goal "One trunk, one board, one pipeline" --missions move-the-code-onto-forge,forge-delivery-v1
+miosa forge initiative new "One delivery system" --goal "One trunk, one board, one pipeline" --missions move-the-code-onto-forge,forge-delivery-v1 --owner Roberto
   miosa forge initiative add one-delivery-system release-pipeline-v1
   miosa forge initiative show one-delivery-system
 ```
@@ -7019,7 +7121,7 @@ miosa forge log MIO-12 "Found the cause: the retry ignored 429"
 
 #### `miosa forge ls`
 
-Work Orders by status.
+Issues by status.
 
 ```
 miosa forge ls [flags]
@@ -7028,9 +7130,10 @@ miosa forge ls [flags]
 Flags:
 
 - `--agent string` - Only this role's.
-- `--all` - Include shipped Work Orders.
+- `--all` - Include deployed Issues.
 - `--backlog` - The backlog instead of the Mission.
 - `--mine` - Only your role's (FORGE_AGENT).
+- `--type string` - Only this type: bug, feature or task.
 
 Examples:
 
@@ -7084,10 +7187,10 @@ miosa forge milestone add "Staging" --done-when "Every release runs on staging f
 
 #### `miosa forge mission`
 
-Create, start, close or edit a Mission.
+Create, start, close, edit or import a Mission.
 
 ```
-miosa forge mission new|start|close|edit [flags]
+miosa forge mission new|start|close|edit|import [flags]
 ```
 
 Flags:
@@ -7096,24 +7199,30 @@ Flags:
 - `--done-when string` - Its Done when, lines separated by |.
 - `--goal string` - Why the Mission exists.
 - `--organization` - Spans every workspace.
+- `--owner string` - The person who answers for it.
+- `--owner-map string` - For import, a JSON file of owner roles by section and row ({"sections": {"C": "ops"}, "rows": {"D4": "backend"}}).
 - `--owners string` - Roles of a standing Mission, comma-separated.
 - `--standing` - Always open, for ongoing work.
-- `--title string` - New title.
+- `--text string` - The update's text: a file, or - for stdin.
+- `--title string` - New title; for import, the Mission title (default: the plan's first heading).
 - `--workspace string` - Workspace it lives in.
 - `--workspace-name string` - That workspace's name.
 
 Examples:
 
 ```
-miosa forge mission new "Release pipeline v2" --goal "Ship without restarts" --done-when "No restarts|One deploy path"
+miosa forge mission new "Release pipeline v2" --goal "Ship without restarts" --done-when "No restarts|One deploy path" --owner Roberto
   miosa forge mission new "Client issues" --standing --owners backend,frontend
   miosa forge mission start release-pipeline-v2
+  miosa forge mission owner release-pipeline-v2 Roberto
+  miosa forge mission update release-pipeline-v2 "Phase 2 merged; the staging gate waits on MIO-40"
   miosa forge mission close release-pipeline-v2
+  miosa forge mission import "Move the code onto Forge.md" --owner-map owners.json
 ```
 
 #### `miosa forge next`
 
-Steer a Work Order: next.
+Steer an Issue: next.
 
 ```
 miosa forge next MIO-12 [text]
@@ -7127,7 +7236,7 @@ miosa forge next MIO-12
 
 #### `miosa forge note`
 
-Steer a Work Order: note.
+Steer an Issue: note.
 
 ```
 miosa forge note MIO-12 [text]
@@ -7220,6 +7329,7 @@ miosa forge place MIO-51 [flags]
 Flags:
 
 - `--as string` - Who is placing it.
+- `--domain string` - The Domain it belongs to.
 - `--milestone string` - The phase.
 - `--mission string` - The Mission.
 - `--owner string` - The Crew role.
@@ -7229,12 +7339,12 @@ Flags:
 Examples:
 
 ```
-miosa forge place WO-51 --milestone phase-1 --owner backend --priority P1 --why "Blocks the deploy path"
+miosa forge place MIO-51 --milestone phase-1 --owner backend --priority P1 --domain control-plane --why "Blocks the deploy path"
 ```
 
 #### `miosa forge planned`
 
-Link a note to the Work Orders it became (or --reason "why none").
+Link a note to the Issues it became (or --reason "why none").
 
 ```
 miosa forge planned <note> MIO-12… [flags]
@@ -7867,7 +7977,7 @@ miosa forge release upload platform v1.2.0 dist/app.tar.gz dist/checksums.txt
 Switch to the latest version of its Mission's prompt.
 
 ```
-miosa forge repin [runner] [flags]
+miosa forge repin [agent] [flags]
 ```
 
 Flags:
@@ -8006,6 +8116,28 @@ miosa forge repo update platform --name "Marketing site"
   miosa forge repo update platform --visibility private
 ```
 
+#### `miosa forge request`
+
+A customer asked for this Issue (--important when they said so).
+
+```
+miosa forge request WO-12 --customer acme [flags]
+```
+
+Flags:
+
+- `--as string` - Who is recording this.
+- `--customer string` - The customer who asked.
+- `--important` - They said it is important.
+- `--note string` - What they said, in a line.
+- `--source string` - Where the request came from: email, slack, call….
+
+Examples:
+
+```
+miosa forge request MIO-12 --customer acme --important --source email --note "blocks month end"
+```
+
 #### `miosa forge resume`
 
 Resume a Crew role's agents.
@@ -8022,7 +8154,7 @@ miosa forge resume backend
 
 #### `miosa forge retry`
 
-Steer a Work Order: retry.
+Steer an Issue: retry.
 
 ```
 miosa forge retry MIO-12 [text]
@@ -8036,7 +8168,7 @@ miosa forge retry MIO-12
 
 #### `miosa forge seats`
 
-How many agents of a role a Mission's crew has.
+Agent capacity: how many agents of a role a Mission's crew has.
 
 ```
 miosa forge seats <mission> <role> <n> [flags]
@@ -8128,7 +8260,7 @@ miosa forge secret set platform NPM_TOKEN
 
 #### `miosa forge show`
 
-One Work Order: spec, steps, activity.
+One Issue: spec, steps, activity.
 
 ```
 miosa forge show MIO-12
@@ -8142,7 +8274,7 @@ miosa forge show MIO-12
 
 #### `miosa forge spec`
 
-Write a Work Order's spec, a draft for the person to approve.
+Write an Issue's spec, a draft for the person to approve.
 
 ```
 miosa forge spec MIO-12 [flags]
@@ -8158,6 +8290,24 @@ Examples:
 ```
 miosa forge spec MIO-12 --json spec.json
   cat spec.json | miosa forge spec MIO-12 --json -
+```
+
+#### `miosa forge split`
+
+Split an Issue into children; they inherit Mission, phase, Domain and priority.
+
+```
+miosa forge split WO-12 "child" "child"… [flags]
+```
+
+Flags:
+
+- `--as string` - Who is splitting it (default: the running agent).
+
+Examples:
+
+```
+miosa forge split MIO-12 "Retry on 429" "Retry on 5xx" "Dashboard for retries"
 ```
 
 #### `miosa forge status`
@@ -8223,7 +8373,7 @@ miosa forge stop backend
 
 #### `miosa forge take`
 
-Hold a Work Order (the next in your queue if omitted).
+Hold an Issue (the next in your queue if omitted).
 
 ```
 miosa forge take [MIO-12] [flags]
@@ -8245,7 +8395,7 @@ miosa forge take
 
 #### `miosa forge verify`
 
-Sign off a phase: its Done when, checked against real evidence.
+Sign off a phase: its acceptance criteria, checked against real evidence.
 
 ```
 miosa forge verify <milestone> "evidence" [flags]

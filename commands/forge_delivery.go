@@ -1,10 +1,9 @@
 package commands
 
 // Forge Delivery from the terminal: Missions, phases, Work Orders, the crew of agents that work
-// them, and the person steering. Every command is one call to the Delivery service
-// (FORGE_LOCAL_URL, default http://127.0.0.1:4020) for the current organization. The default is the
-// local service of a Delivery operator; for an account with no Delivery service every command fails
-// with one clear message (errDeliveryUnavailable), never a connection error to localhost.
+// them, and the person steering. Every command is one call to Forge Delivery in the MIOSA API, with
+// the signed-in key and organization. FORGE_LOCAL_URL points the commands at a local forge-local
+// service instead (development); it gets no MIOSA credential.
 //
 // The commands keep their own argument parsing (DisableFlagParsing): flags may come before or after
 // the words, `--option` repeats, and `miosa forge check run MIO-12 -- <command…>` passes everything
@@ -12,6 +11,7 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -29,12 +29,14 @@ import (
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+
+	"github.com/Miosa-osa/miosa-cli-go/internal/api"
 )
 
 const forgeDeliveryGroup = "delivery"
 
 // Flags that take no value; every other --flag takes the word after it.
-var deliveryBoolFlags = map[string]bool{"mine": true, "ready": true, "standing": true, "full": true, "new": true, "organization": true, "backlog": true, "all": true, "wait": true}
+var deliveryBoolFlags = map[string]bool{"mine": true, "ready": true, "standing": true, "full": true, "new": true, "organization": true, "backlog": true, "all": true, "wait": true, "important": true}
 
 // deliveryArgs is one command's words and flags, parsed the way the crew prompts write them.
 type deliveryArgs struct {
@@ -159,36 +161,69 @@ func (a deliveryArgs) runner() string {
 
 // ---- the Delivery service ----
 
-// deliveryDefaultURL is where Delivery is looked for when FORGE_LOCAL_URL is not set.
-var deliveryDefaultURL = "http://127.0.0.1:4020"
+// deliveryAPIPath is Forge Delivery in the MIOSA API (relative to its base URL, like every other
+// command's path). The actions keep forge-local's names and payloads.
+const deliveryAPIPath = "/forge/delivery"
 
-// errDeliveryUnavailable is what an account without a Delivery service sees, from every command.
-var errDeliveryUnavailable = errors.New("Forge Delivery isn't available for this account yet")
+// errDeliveryUnavailable is what an account without Forge Delivery sees, from every command.
+var errDeliveryUnavailable = errors.New("the Forge Delivery API isn't available for this account yet")
 
 type deliveryClient struct {
-	// explicit is true when FORGE_LOCAL_URL names the service: only then are connection details
-	// worth showing. The default URL is local, so a failure there means "no Delivery here".
-	explicit bool
-	base     string
-	org      string
-	out      io.Writer
-	http     *http.Client
+	// local is set when FORGE_LOCAL_URL names a forge-local service: requests go there, with no
+	// MIOSA credential and no platform org header. Otherwise they go to the MIOSA API with the
+	// signed-in key and organization.
+	local string
+	org   string
+	out   io.Writer
+	http  *http.Client
+	api   *api.Client
 }
 
 func newDeliveryClient(a deliveryArgs, out io.Writer) *deliveryClient {
-	// FORGE_ORG names the Delivery directly; otherwise the organization this CLI works in.
-	org := firstNonEmpty(a.flag("org"), os.Getenv("FORGE_ORG"), effectiveOrgFlag())
+	// Delivery commands parse their own words (DisableFlagParsing), so the global flags they
+	// accept are applied here.
+	if value := a.flag("api-key"); value != "" {
+		globalFlags.APIKey = value
+	}
+	if value := a.flag("api-url"); value != "" {
+		globalFlags.APIURL = value
+	}
+	if value := a.flag("org"); value != "" {
+		orgFlag = value
+	}
+	local := strings.TrimRight(os.Getenv("FORGE_LOCAL_URL"), "/")
+	org := ""
+	if local != "" {
+		// FORGE_ORG names forge-local's Delivery directly; otherwise the organization this CLI works in.
+		org = firstNonEmpty(a.flag("org"), os.Getenv("FORGE_ORG"), effectiveOrgFlag())
+	}
 	return &deliveryClient{
-		explicit: os.Getenv("FORGE_LOCAL_URL") != "",
-		base:     strings.TrimRight(firstNonEmpty(os.Getenv("FORGE_LOCAL_URL"), deliveryDefaultURL), "/"),
-		org:      org,
-		out:      out,
-		// Not the platform API: no MIOSA org headers, and no "org: …, workspace: …" line.
+		local: local,
+		org:   org,
+		out:   out,
+		// forge-local is not the platform API: no MIOSA org headers, and no "org: …, workspace: …" line.
 		http: &http.Client{Timeout: 30 * time.Second, Transport: baseTransport},
 	}
 }
 
-func (c *deliveryClient) url(path string, query url.Values) string {
+// platform is the MIOSA API client, built on first use with the user's key; the organization
+// travels as X-Miosa-Org and the Delivery API refuses one the key does not act in. No extra
+// round trip to check it first: the Claude Code hook calls this on every tool use.
+func (c *deliveryClient) platform() (*api.Client, error) {
+	if c.api == nil {
+		built, _, err := buildPublicClient()
+		if err != nil {
+			return nil, err
+		}
+		if err := built.MustAuthenticated(); err != nil {
+			return nil, err
+		}
+		c.api = built.API
+	}
+	return c.api, nil
+}
+
+func (c *deliveryClient) localURL(path string, query url.Values) string {
 	if query == nil {
 		query = url.Values{}
 	}
@@ -196,73 +231,135 @@ func (c *deliveryClient) url(path string, query url.Values) string {
 		query.Set("org", c.org)
 	}
 	if encoded := query.Encode(); encoded != "" {
-		return c.base + path + "?" + encoded
+		return c.local + "/api" + path + "?" + encoded
 	}
-	return c.base + path
+	return c.local + "/api" + path
 }
 
 func (c *deliveryClient) unreachable() error {
-	if !c.explicit {
-		return errDeliveryUnavailable
-	}
-	return fmt.Errorf("Forge Delivery isn't running at %s. Start it: node tools/forge-local/server.mjs (in MiosaOS)", c.base)
+	return fmt.Errorf("forge-local isn't running at %s. Start it: node tools/forge-local/server.mjs (in MiosaOS), or unset FORGE_LOCAL_URL to use MIOSA", c.local)
 }
 
-// call runs one Delivery action and decodes its result into out (nil to ignore it).
-func (c *deliveryClient) call(action string, payload map[string]any, out any) error {
+// send makes one request to Delivery and returns the raw JSON body. path is relative to
+// Delivery ("/state", "/actions/add"; forge-local: "/add"); payload nil means GET.
+func (c *deliveryClient) send(path string, query url.Values, payload map[string]any, timeout time.Duration) ([]byte, error) {
 	for key, value := range payload {
 		if value == omitted {
 			delete(payload, key)
 		}
 	}
-	body, _ := json.Marshal(payload)
-	response, err := c.http.Post(c.url("/api/"+action, nil), "application/json", bytes.NewReader(body))
-	if err != nil {
-		return c.unreachable()
+	if c.local == "" {
+		client, err := c.platform()
+		if err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		request := api.Request{Method: http.MethodGet, Path: deliveryAPIPath + path, Query: query, Verbatim: true}
+		if payload != nil {
+			request.Method, request.Body = http.MethodPost, payload
+		}
+		body, _, err := client.Bytes(ctx, request)
+		// Forge off for the organization, or an API without Delivery: no route at all.
+		if api.IsCode(err, "FORGE_DISABLED") || (api.IsCode(err, "NOT_FOUND") && !strings.HasPrefix(path, "/profiles/")) {
+			return nil, errDeliveryUnavailable
+		}
+		return body, err
 	}
-	defer response.Body.Close()
+	var response *http.Response
+	var err error
+	client := &http.Client{Timeout: timeout, Transport: c.http.Transport}
+	if payload == nil {
+		response, err = client.Get(c.localURL(path, query))
+	} else {
+		body, _ := json.Marshal(payload)
+		response, err = client.Post(c.localURL(path, nil), "application/json", bytes.NewReader(body))
+	}
+	if err != nil {
+		return nil, c.unreachable()
+	}
+	defer func() { _ = response.Body.Close() }()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, c.unreachable()
+	}
+	if response.StatusCode >= 400 && payload == nil {
+		var failure struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(body, &failure)
+		return nil, errors.New(firstNonEmpty(failure.Error, response.Status))
+	}
+	if !json.Valid(body) {
+		return nil, fmt.Errorf("the Forge Delivery API answered %s with something that isn't JSON", response.Status)
+	}
+	return body, nil
+}
+
+// call runs one Delivery action and decodes its result into out (nil to ignore it).
+func (c *deliveryClient) call(action string, payload map[string]any, out any) error {
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	path := "/" + action
+	if c.local == "" {
+		path = "/actions/" + action
+	}
+	body, err := c.send(path, nil, payload, 30*time.Second)
+	if err != nil {
+		return err
+	}
 	var envelope struct {
 		OK     bool            `json:"ok"`
 		Error  string          `json:"error"`
 		Result json.RawMessage `json:"result"`
 	}
-	if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
-		if !c.explicit {
-			return errDeliveryUnavailable
-		}
-		return fmt.Errorf("the Forge Delivery API answered %s with something that isn't JSON", response.Status)
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return fmt.Errorf("the Forge Delivery API answered with something that isn't JSON")
 	}
 	if !envelope.OK {
-		return errors.New(firstNonEmpty(envelope.Error, response.Status))
+		return errors.New(firstNonEmpty(envelope.Error, "Forge Delivery refused that"))
 	}
-	if out != nil && len(envelope.Result) > 0 {
-		return json.Unmarshal(envelope.Result, out)
+	if out == nil || len(envelope.Result) == 0 {
+		return nil
 	}
-	return nil
+	if c.local == "" {
+		envelope.Result = deliveryLegacyJSON(envelope.Result, false)
+	}
+	return json.Unmarshal(envelope.Result, out)
 }
 
+// get reads a Delivery path, named as forge-local names it ("/state", "/docs/agents",
+// "/profile/<id>?v=<n>"); the API's answers come in {"data": …} and are renamed.
 func (c *deliveryClient) get(path string, query url.Values, out any) error {
-	response, err := c.http.Get(c.url(path, query))
+	board := path == "/state"
+	if c.local == "" {
+		if id, ok := strings.CutPrefix(path, "/profile/"); ok {
+			path = "/profiles/" + id
+			if v := query.Get("v"); v != "" {
+				query = url.Values{"version": {v}}
+			}
+		}
+	}
+	body, err := c.send(path, query, nil, 30*time.Second)
 	if err != nil {
-		return c.unreachable()
+		return err
 	}
-	defer response.Body.Close()
-	if response.StatusCode >= 400 {
-		var failure struct {
-			Error string `json:"error"`
+	if c.local == "" {
+		var envelope struct {
+			Data json.RawMessage `json:"data"`
 		}
-		_ = json.NewDecoder(response.Body).Decode(&failure)
-		if failure.Error == "" && !c.explicit {
-			return errDeliveryUnavailable
+		if err := json.Unmarshal(body, &envelope); err != nil || len(envelope.Data) == 0 {
+			return fmt.Errorf("the Forge Delivery API answered with something that isn't JSON")
 		}
-		return errors.New(firstNonEmpty(failure.Error, response.Status))
+		body = deliveryLegacyJSON(envelope.Data, board)
 	}
-	return json.NewDecoder(response.Body).Decode(out)
+	return json.Unmarshal(body, out)
 }
 
 func (c *deliveryClient) state() (*deliveryState, error) {
 	var s deliveryState
-	if err := c.get("/api/state", nil, &s); err != nil {
+	if err := c.get("/state", nil, &s); err != nil {
 		return nil, err
 	}
 	return &s, nil
@@ -277,6 +374,7 @@ type deliveryText struct {
 type deliveryState struct {
 	Missions    []deliveryMission    `json:"missions"`
 	Initiatives []deliveryInitiative `json:"initiatives"`
+	Domains     []deliveryDomain     `json:"domains"`
 	Milestones  []deliveryMilestone  `json:"milestones"`
 	Orders      []deliveryOrder      `json:"orders"`
 	Crew        []deliveryRole       `json:"crew"`
@@ -284,6 +382,7 @@ type deliveryState struct {
 	Decisions   []deliveryDecision   `json:"decisions"`
 	Releases    []deliveryRelease    `json:"releases"`
 	Intake      []deliveryNote       `json:"intake"`
+	Customers   []deliveryCustomer   `json:"customers"`
 	Charter     *deliveryText        `json:"charter"`
 	Activity    []deliveryActivity   `json:"activity"`
 }
@@ -292,6 +391,9 @@ type deliveryInitiative struct {
 	ID       string   `json:"id"`
 	Title    string   `json:"title"`
 	Goal     string   `json:"goal"`
+	Owner    string   `json:"owner"`
+	Status   string   `json:"status"`
+	Health   string   `json:"health"`
 	Missions []string `json:"missions"`
 	Counts   struct {
 		Planned        int `json:"planned"`
@@ -308,6 +410,10 @@ type deliveryMission struct {
 	Goal     string        `json:"goal"`
 	DoneWhen []string      `json:"doneWhen"`
 	Brief    *deliveryText `json:"brief"`
+	// Owner is the person who answers for it; Health is computed by the service from the line.
+	Owner   string           `json:"owner"`
+	Health  *deliveryHealth  `json:"health"`
+	Updates []deliveryUpdate `json:"updates"`
 }
 
 type deliveryMilestone struct {
@@ -340,6 +446,7 @@ type deliveryOrder struct {
 	Title     string `json:"title"`
 	Detail    string `json:"detail"`
 	Owner     string `json:"owner"`
+	Type      string `json:"type"`
 	Priority  string `json:"priority"`
 	Source    string `json:"source"`
 	InMission bool   `json:"inMission"`
@@ -367,6 +474,15 @@ type deliveryOrder struct {
 	SpecState *string       `json:"specState"`
 	// HumanOwner is the person who owns it; Owner is the Crew role that does it (the delegate).
 	HumanOwner string `json:"humanOwner"`
+	// Relations (section 4, RELATIONS) and customers' requests (CUSTOMERS).
+	DuplicateOf *int              `json:"duplicateOf"`
+	Related     []int             `json:"related"`
+	Parent      *int              `json:"parent"`
+	Requests    []deliveryRequest `json:"requests"`
+	// Domain it belongs to, the Component (repository) its branch goes to, and its triage clock.
+	Domain    string          `json:"domain"`
+	Component string          `json:"component"`
+	Triage    *deliveryTriage `json:"triage"`
 }
 
 // owners is "Primary owner: <person> · delegate <role>", the person first (E1).
@@ -532,31 +648,36 @@ type deliveryCommand struct {
 }
 
 func say(c *deliveryClient, format string, values ...any) {
-	fmt.Fprintf(c.out, format+"\n", values...)
+	_, _ = fmt.Fprintf(c.out, format+"\n", values...)
 }
 
 func deliveryCommands() []deliveryCommand {
 	commands := []deliveryCommand{
 		{"prime", "What any agent harness reads first: the rules and where things stand", deliveryPrime},
 		{"status", "The active Mission, its phases, and who is on what", deliveryStatus},
-		{"ls", "Work Orders by status", deliveryList},
+		{"ls", "Issues by status", deliveryList},
 		{"inbox", "What needs you: decisions, questions, approvals, promotions", deliveryInbox},
-		{"show MIO-12", "One Work Order: spec, steps, activity", deliveryShow},
-		{"context MIO-12", "What to read before working: Mission, phase, Work Order [--full]", deliveryContext},
+		{"show MIO-12", "One Issue: spec, steps, activity", deliveryShow},
+		{"context MIO-12", "What to read before working: Mission, phase, Issue [--full]", deliveryContext},
 		{"charter", "The Charter above every Mission: how MIOSA ships, what comes first", deliveryCharter},
 		{"brief", "The Mission's brief, or a phase's", deliveryBrief},
 		{"intake", "Notes left in Forge waiting to be planned", deliveryIntake},
-		{"planned <note> MIO-12…", "Link a note to the Work Orders it became (or --reason \"why none\")", func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
+		{"planned <note> MIO-12…", "Link a note to the Issues it became (or --reason \"why none\")", func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 			return c.call("planned", map[string]any{"id": a.arg(0), "workOrders": a.rest(1), "reason": a.flag("reason"), "by": a.actor()}, nil)
 		}},
-		{"add \"text\"", "Add work: split into Work Orders, deduplicated, queued", deliveryAdd},
-		{"spec MIO-12", "Write a Work Order's spec, a draft for the person to approve", deliverySpecCmd},
-		{"mission new|start|close|edit", "Create, start, close or edit a Mission", deliveryMissionCmd},
-		{"edit MIO-12", "Edit a Work Order", func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
-			return c.call("editOrder", map[string]any{"id": woNumber(a.arg(0)), "title": optional(a.flag("title")), "detail": optional(a.flag("detail")), "doneWhen": optional(a.flag("done-when")), "milestone": optional(a.flag("milestone")), "owner": optional(a.flag("owner")), "by": a.actor()}, nil)
+		{"add \"text\"", "Add work: split into Issues, deduplicated, queued", deliveryAdd},
+		{"spec MIO-12", "Write an Issue's spec, a draft for the person to approve", deliverySpecCmd},
+		{"mission new|start|close|edit|import", "Create, start, close, edit or import a Mission", deliveryMissionCmd},
+		{"edit MIO-12", "Edit an Issue", func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
+			issueType, err := deliveryIssueType(a.flag("type"))
+			if err != nil {
+				return err
+			}
+			return c.call("editOrder", map[string]any{"id": woNumber(a.arg(0)), "title": optional(a.flag("title")), "detail": optional(a.flag("detail")), "doneWhen": optional(a.flag("done-when")), "milestone": optional(a.flag("milestone")), "owner": optional(a.flag("owner")), "type": issueType, "by": a.actor()}, nil)
 		}},
 		{"milestone add|edit|branch|merged", "Phases: add one, edit it, give it a branch, record that branch's merge", deliveryMilestoneCmd},
 		{"initiative new|add|show", "Initiatives: Missions under one strategy; new, add a Mission, show the roll-up", deliveryInitiativeCmd},
+		{"domain new|set|show", "Domains: new, set owner and triage person, show Components and Backlog", deliveryDomainCmd},
 		{"propose \"question\"", "Propose a decision, with your recommendation", deliveryPropose},
 		{"autonomy <minutes>", "How long agents wait for you before going with their own call", func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 			var result struct {
@@ -568,7 +689,7 @@ func deliveryCommands() []deliveryCommand {
 			say(c, "Agents go ahead on their own call after %v min without a reply.", result.Minutes)
 			return nil
 		}},
-		{"verify <milestone> \"evidence\"", "Sign off a phase: its Done when, checked against real evidence", func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
+		{"verify <milestone> \"evidence\"", "Sign off a phase: its acceptance criteria, checked against real evidence", func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 			if err := c.call("verify", map[string]any{"milestone": a.arg(0), "evidence": strings.Join(a.rest(1), " "), "by": a.actor()}, nil); err != nil {
 				return err
 			}
@@ -576,8 +697,8 @@ func deliveryCommands() []deliveryCommand {
 			return nil
 		}},
 		{"join", "Join a Mission's crew as a running agent", deliveryJoin},
-		{"take [MIO-12]", "Hold a Work Order (the next in your queue if omitted)", deliveryTake},
-		{"assist MIO-12", "Work one step of a Work Order another agent holds", deliveryAssist},
+		{"take [MIO-12]", "Hold an Issue (the next in your queue if omitted)", deliveryTake},
+		{"assist MIO-12", "Work one step of an Issue another agent holds", deliveryAssist},
 		{"leave", "Stop this running agent; what it held goes back to the queue", func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 			runner := a.runner()
 			if runner == "" {
@@ -616,7 +737,7 @@ func deliveryCommands() []deliveryCommand {
 			say(c, "Recorded the merge of %s.", woLabel(woNumber(a.arg(0)).(int)))
 			return nil
 		}},
-		{"discover \"what\"", "File something you found outside your Work Order", func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
+		{"discover \"what\"", "File something you found outside your Issue", func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 			var result struct {
 				ID int `json:"id"`
 			}
@@ -631,21 +752,21 @@ func deliveryCommands() []deliveryCommand {
 			var result struct {
 				Where string `json:"where"`
 			}
-			if err := c.call("placeOrder", map[string]any{"id": woNumber(a.arg(0)), "mission": optional(a.flag("mission")), "milestone": optional(a.flag("milestone")), "owner": optional(a.flag("owner")), "priority": optional(a.flag("priority")), "why": optional(a.flag("why")), "by": firstNonEmpty(a.flag("as"), a.runner(), a.actor())}, &result); err != nil {
+			if err := c.call("placeOrder", map[string]any{"id": woNumber(a.arg(0)), "mission": optional(a.flag("mission")), "milestone": optional(a.flag("milestone")), "owner": optional(a.flag("owner")), "priority": optional(a.flag("priority")), "domain": optional(a.flag("domain")), "why": optional(a.flag("why")), "by": firstNonEmpty(a.flag("as"), a.runner(), a.actor())}, &result); err != nil {
 				return err
 			}
 			label := woLabel(woNumber(a.arg(0)).(int))
 			say(c, "Placed %s: %s. Draft its spec next: miosa forge spec %s --json <file>", label, result.Where, label)
 			return nil
 		}},
-		{"assign <runner>", "Move an agent to another Mission's crew", func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
+		{"assign <agent>", "Move an agent to another Mission's crew", func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 			if err := c.call("assign", map[string]any{"runner": a.arg(0), "mission": optional(a.flag("mission")), "why": a.flag("why"), "by": a.actor()}, nil); err != nil {
 				return err
 			}
 			say(c, "%s is in the %s crew now.", a.arg(0), a.flag("mission"))
 			return nil
 		}},
-		{"seats <mission> <role> <n>", "How many agents of a role a Mission's crew has", func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
+		{"seats <mission> <role> <n>", "Agent capacity: how many agents of a role a Mission's crew has", func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 			count, err := strconv.Atoi(a.arg(2))
 			if a.arg(0) == "" || a.arg(1) == "" || err != nil {
 				return errors.New("usage: miosa forge seats <mission> <role> <count>")
@@ -653,14 +774,14 @@ func deliveryCommands() []deliveryCommand {
 			if err := c.call("setSeats", map[string]any{"mission": a.arg(0), "role": a.arg(1), "count": count, "by": a.actor()}, nil); err != nil {
 				return err
 			}
-			say(c, "%s: %d %s seat(s).", a.arg(0), count, a.arg(1))
+			say(c, "%s: agent capacity for %s is %d.", a.arg(0), count, a.arg(1))
 			return nil
 		}},
 		{"prompt [profile]", "The prompt this agent is pinned to (its Mission's, at its version)", deliveryPrompt},
-		{"repin [runner]", "Switch to the latest version of its Mission's prompt", func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
+		{"repin [agent]", "Switch to the latest version of its Mission's prompt", func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 			id := firstNonEmpty(a.arg(0), a.runner())
 			if id == "" {
-				return errors.New("usage: miosa forge repin <runner>")
+				return errors.New("usage: miosa forge repin <agent>")
 			}
 			if err := c.call("repin", map[string]any{"runner": id, "by": a.actor()}, nil); err != nil {
 				return err
@@ -701,10 +822,11 @@ func deliveryCommands() []deliveryCommand {
 			return nil
 		}},
 	}
+	commands = append(commands, deliveryRelationCommands()...)
 	// You, steering: one line each.
 	for _, action := range []string{"answer", "approve", "next", "end", "backlog", "cancel", "accept", "dismiss", "retry", "note"} {
 		action := action
-		commands = append(commands, deliveryCommand{action + " MIO-12 [text]", "Steer a Work Order: " + action, func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
+		commands = append(commands, deliveryCommand{action + " MIO-12 [text]", "Steer an Issue: " + action, func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 			return c.call(action, map[string]any{"id": woNumber(a.arg(0)), "text": strings.Join(a.rest(1), " ")}, nil)
 		}})
 	}
@@ -749,7 +871,7 @@ func deliveryCobra(command deliveryCommand) *cobra.Command {
 				return err
 			}
 			if before.n == 0 && !deliveryReadOnly[name] {
-				fmt.Fprintln(cmd.OutOrStdout(), "✓")
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "✓")
 			}
 			return nil
 		},
@@ -782,13 +904,13 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 // addForgeDeliveryCmds puts Delivery under `miosa forge`. `check` already names commit checks, so
 // a Work Order's Check is `miosa forge check run MIO-12 -- <command…>`.
 func addForgeDeliveryCmds(forge *cobra.Command) {
-	forge.AddGroup(&cobra.Group{ID: forgeDeliveryGroup, Title: "Delivery (Missions, Work Orders, crew):"})
+	forge.AddGroup(&cobra.Group{ID: forgeDeliveryGroup, Title: "Delivery (Missions, Issues, crew):"})
 	for _, command := range deliveryCommands() {
 		forge.AddCommand(deliveryCobra(command))
 	}
 	for _, sub := range forge.Commands() {
 		if sub.Name() == "check" {
-			run := deliveryCobra(deliveryCommand{"run MIO-12 -- <command…>", "Run a real Check on a Work Order and record the result", deliveryCheckRun})
+			run := deliveryCobra(deliveryCommand{"run MIO-12 -- <command…>", "Run a real Check on an Issue and record the result", deliveryCheckRun})
 			run.GroupID = ""
 			sub.AddCommand(run)
 		}
@@ -801,7 +923,7 @@ func deliveryPrime(c *deliveryClient, _ deliveryArgs, _ *cobra.Command) error {
 		return err
 	}
 	var guide deliveryText
-	if err := c.get("/api/docs/agents", nil, &guide); err != nil {
+	if err := c.get("/docs/agents", nil, &guide); err != nil {
 		return err
 	}
 	say(c, "%s", guide.Text)
@@ -826,7 +948,7 @@ func deliveryPrime(c *deliveryClient, _ deliveryArgs, _ *cobra.Command) error {
 		if milestone.Verified != nil {
 			verified = " · verified"
 		}
-		say(c, "- %s  %s  %d/%d done%s\n    Done when: %s", milestone.ID, milestone.Title, done, len(items), verified, milestone.DoneWhen)
+		say(c, "- %s  %s  %d/%d done%s\n    Acceptance criteria: %s", milestone.ID, milestone.Title, done, len(items), verified, milestone.DoneWhen)
 	}
 	notes := 0
 	for _, note := range s.Intake {
@@ -879,10 +1001,21 @@ func deliveryStatus(c *deliveryClient, _ deliveryArgs, _ *cobra.Command) error {
 		}
 	}
 	title := "No active Mission"
+	health := ""
 	if mission := s.activeMission(); mission != nil {
 		title = mission.Title
+		health = "  " + healthWord(p, mission.Health)
+		if mission.Owner != "" {
+			health += p.dim + " · owner " + mission.Owner + p.reset
+		}
 	}
-	say(c, "%s%s%s  %d/%d shipped", p.bold, title, p.reset, shipped, planned)
+	say(c, "%s%s%s  %d/%d shipped%s", p.bold, title, p.reset, shipped, planned, health)
+	if mission := s.activeMission(); mission != nil && mission.Health != nil {
+		for _, reason := range mission.Health.Reasons {
+			say(c, "  %s! %s%s", p.yellow, reason, p.reset)
+		}
+	}
+	say(c, "%s%s%s  %d/%d deployed", p.bold, title, p.reset, shipped, planned)
 	for _, milestone := range s.Milestones {
 		items := s.ordersIn(milestone.ID)
 		done := 0
@@ -955,13 +1088,14 @@ func deliveryList(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 	if a.has("mine") {
 		owner = os.Getenv("FORGE_AGENT")
 	}
+	issueType := strings.ToLower(a.flag("type"))
 	for _, status := range deliveryStateOrder {
 		if status == "shipped" && !a.has("all") {
 			continue
 		}
 		var items []deliveryOrder
 		for _, order := range s.Orders {
-			if !order.Dismissed && order.InMission != a.has("backlog") && (owner == "" || order.Owner == owner) && order.State == status {
+			if !order.Dismissed && order.InMission != a.has("backlog") && (owner == "" || order.Owner == owner) && (issueType == "" || order.Type == issueType) && order.State == status {
 				items = append(items, order)
 			}
 		}
@@ -1015,6 +1149,21 @@ func deliveryInbox(c *deliveryClient, _ deliveryArgs, _ *cobra.Command) error {
 			say(c, "%spromote%s %s: %s   → miosa forge promote %s", p.green, p.reset, release.Version, woLabels(release.WorkOrders), release.Version)
 		}
 	}
+	// T-RESP: new Issues on the triage clock, with their deadline; a breach says how late.
+	now := time.Now()
+	for _, order := range s.Orders {
+		if line := triageLine(order, now); line != "" && !order.Dismissed {
+			count++
+			say(c, "%striage%s %s %s (%s) %s   → miosa forge place %s …", p.yellow, p.reset, woLabel(order.ID), order.Title, firstNonEmpty(order.Domain, "no Domain"), line, woLabel(order.ID))
+		}
+	}
+	// M-HEALTH: a Mission that flipped to off track needs a person.
+	for _, mission := range s.Missions {
+		if mission.Health != nil && mission.Health.State == "off_track" {
+			count++
+			say(c, "%soff track%s %s: %s", p.red, p.reset, mission.Title, strings.Join(mission.Health.Reasons, "; "))
+		}
+	}
 	for _, order := range s.Orders {
 		if order.Source == "discovered" && !order.InMission && !order.Dismissed {
 			say(c, "discovery %s %s   (the Orchestrator is placing it; miosa forge dismiss %s to drop it)", woLabel(order.ID), order.Title, woLabel(order.ID))
@@ -1033,7 +1182,7 @@ func deliveryShow(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 	}
 	order := s.order(a.arg(0))
 	if order == nil {
-		return fmt.Errorf("no Work Order %s", a.arg(0))
+		return fmt.Errorf("no Issue %s", a.arg(0))
 	}
 	p := deliveryColors(c.out)
 	branch := "no branch"
@@ -1041,11 +1190,11 @@ func deliveryShow(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 		branch = *order.Branch
 	}
 	say(c, "%s%s %s%s", p.bold, woLabel(order.ID), order.Title, p.reset)
-	say(c, "%s · %s · %s · %s · Checks %s", deliveryStateLabel[order.State], order.Priority, order.owners(), branch, order.Checks)
+	say(c, "%s · %s · %s · %s · %s · Checks %s", deliveryStateLabel[order.State], firstNonEmpty(order.Type, "task"), order.Priority, order.owners(), branch, order.Checks)
 	if order.Detail != "" {
 		say(c, "\n%s", order.Detail)
 	}
-	say(c, "\nDone when: %s", order.DoneWhen)
+	say(c, "\nAcceptance criteria: %s", order.DoneWhen)
 	if spec := order.Spec; spec != nil {
 		specState := ""
 		if order.SpecState != nil {
@@ -1079,6 +1228,12 @@ func deliveryShow(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 		}
 		say(c, "\nSteps:\n%s", strings.Join(lines, "\n"))
 	}
+	if lines := relationLines(s, order); len(lines) > 0 {
+		say(c, "\n%sRelations%s\n%s", p.bold, p.reset, strings.Join(lines, "\n"))
+	}
+	if lines := requestLines(s, order); len(lines) > 0 {
+		say(c, "\n%sCustomers who asked%s\n%s", p.bold, p.reset, strings.Join(lines, "\n"))
+	}
 	if order.Question != nil {
 		say(c, "\n%sWaiting on you:%s %s", p.violet, p.reset, *order.Question)
 	}
@@ -1101,7 +1256,7 @@ func deliveryContext(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error 
 	}
 	order := s.order(a.arg(0))
 	if order == nil {
-		return fmt.Errorf("no Work Order %s", a.arg(0))
+		return fmt.Errorf("no Issue %s", a.arg(0))
 	}
 	mission := s.mission(order.Mission)
 	if mission == nil {
@@ -1115,7 +1270,7 @@ func deliveryContext(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error 
 		if len(mission.DoneWhen) > 0 {
 			doneWhen = joinLines("- ", mission.DoneWhen)
 		}
-		say(c, "# 1. Mission: %s\n\nGoal: %s\nDone when:\n%s", mission.Title, firstNonEmpty(mission.Goal, "(none)"), doneWhen)
+		say(c, "# 1. Mission: %s\n\nGoal: %s\nAcceptance criteria:\n%s", mission.Title, firstNonEmpty(mission.Goal, "(none)"), doneWhen)
 		if mission.Brief != nil && mission.Brief.Text != "" {
 			if a.has("full") {
 				say(c, "\n%s", mission.Brief.Text)
@@ -1124,20 +1279,20 @@ func deliveryContext(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error 
 			}
 		}
 	} else {
-		say(c, "# 1. Mission: none\n\nGoal: (none)\nDone when:\n- (not set)")
+		say(c, "# 1. Mission: none\n\nGoal: (none)\nAcceptance criteria:\n- (not set)")
 	}
 	if milestone := s.milestone(order.Milestone); milestone != nil {
 		brief := ""
 		if milestone.Brief != nil && milestone.Brief.Text != "" {
 			brief = "\n\n" + milestone.Brief.Text
 		}
-		say(c, "\n# 2. Phase: %s\n\nDone when: %s%s", milestone.Title, milestone.DoneWhen, brief)
+		say(c, "\n# 2. Phase: %s\n\nAcceptance criteria: %s%s", milestone.Title, milestone.DoneWhen, brief)
 	}
 	specState := "none"
 	if order.SpecState != nil {
 		specState = *order.SpecState
 	}
-	say(c, "\n# 3. %s: %s\n\n%s · %s · spec %s\nDone when: %s", woLabel(order.ID), order.Title, order.owners(), order.Priority, specState, order.DoneWhen)
+	say(c, "\n# 3. %s: %s\n\n%s · %s · spec %s\nAcceptance criteria: %s", woLabel(order.ID), order.Title, order.owners(), order.Priority, specState, order.DoneWhen)
 	if order.Detail != "" {
 		say(c, "\n%s", order.Detail)
 	}
@@ -1337,13 +1492,38 @@ func deliveryIntake(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 	return nil
 }
 
+// deliveryIssueTypes are an Issue's types: bug, feature or task (Delivery's default).
+var deliveryIssueTypes = map[string]bool{"bug": true, "feature": true, "task": true}
+
+// deliveryIssueType checks --type; empty leaves it out of the payload.
+func deliveryIssueType(value string) (any, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return omitted, nil
+	}
+	if !deliveryIssueTypes[value] {
+		return nil, fmt.Errorf("--type is bug, feature or task, not %q", value)
+	}
+	return value, nil
+}
+
 func deliveryAdd(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 	var results []struct {
 		ID      int    `json:"id"`
 		Kind    string `json:"kind"`
 		Summary string `json:"summary"`
 	}
-	payload := map[string]any{"text": strings.Join(a.positional, " "), "owner": optional(a.flag("owner")), "priority": optional(a.flag("priority")), "milestone": optional(a.flag("milestone")), "mission": optional(a.flag("mission")), "isNew": a.has("new"), "by": a.actor()}
+	issueType, err := deliveryIssueType(a.flag("type"))
+	if err != nil {
+		return err
+	}
+	payload := map[string]any{"text": strings.Join(a.positional, " "), "owner": optional(a.flag("owner")), "priority": optional(a.flag("priority")), "milestone": optional(a.flag("milestone")), "domain": optional(a.flag("domain")), "mission": optional(a.flag("mission")), "type": issueType, "isNew": a.has("new"), "by": a.actor()}
+	// A customer's report: the request rides on the Issue it creates, or on the one it duplicates.
+	if customer := a.flag("customer"); customer != "" {
+		payload["customer"] = customer
+		payload["important"] = a.has("important")
+		payload["source"] = a.flag("source")
+	}
 	if err := c.call("add", payload, &results); err != nil {
 		return err
 	}
@@ -1394,7 +1574,7 @@ func splitList(value, separator string) []string {
 	return strings.Split(value, separator)
 }
 
-func deliveryMissionCmd(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
+func deliveryMissionCmd(c *deliveryClient, a deliveryArgs, cmd *cobra.Command) error {
 	verb, rest := a.arg(0), a.rest(1)
 	first := ""
 	if len(rest) > 0 {
@@ -1413,26 +1593,16 @@ func deliveryMissionCmd(c *deliveryClient, a deliveryArgs, _ *cobra.Command) err
 				owners = append(owners, owner)
 			}
 		}
-		var scope any
-		if a.has("organization") {
-			scope = map[string]any{"kind": "organization"}
-		} else if workspace := a.flag("workspace"); workspace != "" {
-			workspaceScope := map[string]any{"kind": "workspace", "id": workspace}
-			if name := a.flag("workspace-name"); name != "" {
-				workspaceScope["name"] = name
-			}
-			scope = workspaceScope
-		}
 		var result struct {
 			ID string `json:"id"`
 		}
-		if err := c.call("createMission", map[string]any{"title": strings.Join(rest, " "), "goal": a.flag("goal"), "doneWhen": splitList(a.flag("done-when"), "|"), "kind": kind, "owners": owners, "scope": scope, "by": a.actor()}, &result); err != nil {
+		if err := c.call("createMission", map[string]any{"title": strings.Join(rest, " "), "goal": a.flag("goal"), "doneWhen": splitList(a.flag("done-when"), "|"), "kind": kind, "owner": optional(a.flag("owner")), "owners": owners, "scope": missionScope(a), "by": a.actor()}, &result); err != nil {
 			return err
 		}
 		if standing {
-			say(c, "Standing Mission %s: always open. Add work with miosa forge add \"…\" --mission %s", result.ID, result.ID)
+			say(c, "Domain %s: always open. Add work with miosa forge add \"…\" --mission %s", result.ID, result.ID)
 		} else {
-			say(c, "Mission %s (planned). Add milestones and Work Orders, then: miosa forge mission start %s", result.ID, result.ID)
+			say(c, "Mission %s (planned). Add phases and Issues, then: miosa forge mission start %s", result.ID, result.ID)
 		}
 		return nil
 	case "start":
@@ -1456,8 +1626,123 @@ func deliveryMissionCmd(c *deliveryClient, a deliveryArgs, _ *cobra.Command) err
 			doneWhen = strings.Split(value, "|")
 		}
 		return c.call("editMission", map[string]any{"id": first, "title": optional(a.flag("title")), "goal": optional(a.flag("goal")), "doneWhen": doneWhen, "by": a.actor()}, nil)
+	case "import":
+		return deliveryMissionImport(c, a, first)
+	case "owner":
+		// The person who answers for the Mission (Linear's project lead); the service refuses an agent.
+		if first == "" || len(rest) < 2 {
+			return errors.New("miosa forge mission owner <mission> <person>")
+		}
+		if err := c.call("missionOwner", map[string]any{"id": first, "owner": strings.Join(rest[1:], " "), "by": a.actor()}, nil); err != nil {
+			return err
+		}
+		say(c, "%s owns %s.", strings.Join(rest[1:], " "), first)
+		return nil
+	case "update":
+		// The weekly update the Orchestrator writes from the Records; the health of the moment is recorded with it.
+		if first == "" {
+			return errors.New(`miosa forge mission update <mission> "what moved, what did not, why" | --text <file|->`)
+		}
+		text := strings.Join(rest[1:], " ")
+		if source := a.flag("text"); source != "" {
+			raw, err := readSource(source, cmd.InOrStdin())
+			if err != nil {
+				return err
+			}
+			text = strings.TrimSpace(string(raw))
+		}
+		var update deliveryUpdate
+		if err := c.call("missionUpdate", map[string]any{"id": first, "text": text, "by": a.actor()}, &update); err != nil {
+			return err
+		}
+		say(c, "Update written for %s (%s).", first, firstNonEmpty(deliveryHealthLabel[update.Health], "health not measured"))
+		return nil
 	}
-	return errors.New("miosa forge mission new|start|close|edit …")
+	return errors.New("miosa forge mission new|start|close|edit|owner|update|import …")
+}
+
+// missionScope is where a new Mission lives: --organization, --workspace <id>, or nil (Delivery's default).
+func missionScope(a deliveryArgs) any {
+	if a.has("organization") {
+		return map[string]any{"kind": "organization"}
+	}
+	workspace := a.flag("workspace")
+	if workspace == "" {
+		return nil
+	}
+	scope := map[string]any{"kind": "workspace", "id": workspace}
+	if name := a.flag("workspace-name"); name != "" {
+		scope["name"] = name
+	}
+	return scope
+}
+
+var planTitle = regexp.MustCompile(`(?m)^#\s+(.+?)\s*$`)
+
+// deliveryMissionImport loads a plan file's checklist ("### A. Title" sections, "| A1 | … | **State** | … |"
+// rows) as a Mission: one phase per section, one Work Order per row. Re-running it updates the same
+// Work Orders from the file, keyed on the row id.
+func deliveryMissionImport(c *deliveryClient, a deliveryArgs, file string) error {
+	if file == "" {
+		return errors.New("miosa forge mission import <plan.md> [--title …] [--goal …] [--done-when \"a|b\"] [--owner-map owners.json]")
+	}
+	text, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	title := a.flag("title")
+	if title == "" {
+		if match := planTitle.FindStringSubmatch(string(text)); match != nil {
+			title = match[1]
+		}
+	}
+	var owners any = omitted
+	if path := a.flag("owner-map"); path != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(raw, &owners); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	var doneWhen any = omitted
+	if value := a.flag("done-when"); value != "" {
+		doneWhen = strings.Split(value, "|")
+	}
+	var result struct {
+		Mission        string `json:"mission"`
+		MissionCreated bool   `json:"missionCreated"`
+		Milestones     []struct {
+			Title string `json:"title"`
+			Done  int    `json:"done"`
+			Total int    `json:"total"`
+		} `json:"milestones"`
+		Created int      `json:"created"`
+		Updated int      `json:"updated"`
+		Moved   int      `json:"moved"`
+		Held    []string `json:"held"`
+	}
+	payload := map[string]any{"text": string(text), "source": filepath.Base(file), "title": title, "goal": optional(a.flag("goal")), "doneWhen": doneWhen, "owners": owners, "by": a.actor()}
+	if scope := missionScope(a); scope != nil {
+		payload["scope"] = scope
+	}
+	if err := c.call("importPlan", payload, &result); err != nil {
+		return err
+	}
+	for _, milestone := range result.Milestones {
+		say(c, "%s: %d/%d Done", milestone.Title, milestone.Done, milestone.Total)
+	}
+	verb := "Updated"
+	if result.MissionCreated {
+		verb = "Created"
+	}
+	held := ""
+	if len(result.Held) > 0 {
+		held = fmt.Sprintf(", %s held by agents (left as they report)", strings.Join(result.Held, ", "))
+	}
+	say(c, "%s %s: %d new Issues, %d updated, %d changed state%s.", verb, result.Mission, result.Created, result.Updated, result.Moved, held)
+	return nil
 }
 
 func deliveryMilestoneCmd(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
@@ -1475,7 +1760,7 @@ func deliveryMilestoneCmd(c *deliveryClient, a deliveryArgs, _ *cobra.Command) e
 		if err := c.call("addMilestone", map[string]any{"title": strings.Join(a.rest(1), " "), "doneWhen": optional(a.flag("done-when")), "after": optional(a.flag("after")), "by": a.actor()}, &result); err != nil {
 			return err
 		}
-		say(c, "Milestone %s.", result.ID)
+		say(c, "Phase %s.", result.ID)
 		return nil
 	}
 	return errors.New(`miosa forge milestone add "title" --done-when "…" [--after id] | miosa forge milestone edit <id> [--title] [--done-when]`)
@@ -1495,7 +1780,7 @@ func deliveryInitiativeCmd(c *deliveryClient, a deliveryArgs, _ *cobra.Command) 
 		var result struct {
 			ID string `json:"id"`
 		}
-		if err := c.call("createInitiative", map[string]any{"title": strings.Join(a.rest(1), " "), "goal": a.flag("goal"), "missions": missions, "by": a.actor()}, &result); err != nil {
+		if err := c.call("createInitiative", map[string]any{"title": strings.Join(a.rest(1), " "), "goal": a.flag("goal"), "missions": missions, "owner": optional(a.flag("owner")), "by": a.actor()}, &result); err != nil {
 			return err
 		}
 		say(c, "Initiative %s.", result.ID)
@@ -1524,11 +1809,17 @@ func deliveryInitiativeCmd(c *deliveryClient, a deliveryArgs, _ *cobra.Command) 
 			if initiative.Goal != "" {
 				say(c, "  %s", initiative.Goal)
 			}
+			// Status is read from its Missions; health is their health rolled up (grey, green, yellow, red).
+			say(c, "  %s · health %s · owner %s", firstNonEmpty(initiative.Status, "proposed"), firstNonEmpty(initiative.Health, "grey"), firstNonEmpty(initiative.Owner, "not set"))
 			say(c, "  %d%% · %d of %d planned shipped · added %d · discovered %d", percent, initiative.Counts.PlannedShipped, initiative.Counts.Planned, initiative.Counts.Added, initiative.Counts.Discovered)
 			for _, id := range initiative.Missions {
 				for _, mission := range s.Missions {
 					if mission.ID == id {
-						say(c, "  - %s (%s) %s", mission.ID, mission.Status, mission.Title)
+						health := ""
+						if mission.Health != nil {
+							health = " · " + deliveryHealthLabel[mission.Health.State]
+						}
+						say(c, "  - %s (%s%s) %s", mission.ID, mission.Status, health, mission.Title)
 					}
 				}
 			}
@@ -1581,7 +1872,7 @@ func deliveryJoin(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 	if err := c.call("join", payload, &result); err != nil {
 		return err
 	}
-	say(c, "You are %s, in the %s crew. %d Work Orders for your role in this Mission.\nSet it for this terminal:  export FORGE_RUNNER=%s\nRead your prompt: miosa forge prompt   Then: miosa forge take", result.Runner, result.Mission, len(result.Queue), result.Runner)
+	say(c, "You are %s, in the %s crew. %d Issues for your role in this Mission.\nSet it for this terminal:  export FORGE_RUNNER=%s\nRead your prompt: miosa forge prompt   Then: miosa forge take", result.Runner, result.Mission, len(result.Queue), result.Runner)
 	return nil
 }
 
@@ -1610,7 +1901,7 @@ func deliveryTake(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 
 func deliveryAssist(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 	if a.arg(0) == "" || a.flag("step") == "" {
-		return errors.New("miosa forge assist MIO-12 --step 3   (work one step of a Work Order someone else holds)")
+		return errors.New("miosa forge assist MIO-12 --step 3   (work one step of an Issue someone else holds)")
 	}
 	if err := c.call("help", map[string]any{"runner": optional(a.runner()), "agent": optional(firstNonEmpty(a.flag("as"), os.Getenv("FORGE_AGENT"))), "id": woNumber(a.arg(0)), "step": a.flag("step")}, nil); err != nil {
 		return err
@@ -1882,7 +2173,7 @@ func deliveryPrompt(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 			V int `json:"v"`
 		} `json:"versions"`
 	}
-	if err := c.get("/api/profile/"+url.PathEscape(profile), query, &result); err != nil {
+	if err := c.get("/profile/"+url.PathEscape(profile), query, &result); err != nil {
 		return err
 	}
 	newer := ""
@@ -1993,11 +2284,11 @@ func deliveryHook(c *deliveryClient, _ deliveryArgs, cmd *cobra.Command) error {
 		return nil
 	}
 	report["runner"] = runner
-	body, _ := json.Marshal(report)
-	client := &http.Client{Timeout: 1500 * time.Millisecond, Transport: baseTransport}
-	if response, err := client.Post(c.url("/api/harness", nil), "application/json", bytes.NewReader(body)); err == nil {
-		response.Body.Close()
+	path := "/harness"
+	if c.local == "" {
+		path = "/actions/harness"
 	}
+	_, _ = c.send(path, nil, report, 1500*time.Millisecond)
 	return nil
 }
 
