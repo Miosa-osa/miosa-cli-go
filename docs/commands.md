@@ -6727,6 +6727,26 @@ Examples:
 miosa forge check suite platform <commit>
 ```
 
+#### `miosa forge connect`
+
+Connect this repository's Claude Code to Forge Delivery: hooks, sign-in, name.
+
+```
+miosa forge connect [flags]
+```
+
+Flags:
+
+- `--as string` - The name your work is signed with (default claude-code).
+- `--guard string` - Edits without a held Issue: block (default), warn or off.
+
+Examples:
+
+```
+miosa forge connect
+  miosa forge connect --as codex --guard warn
+```
+
 #### `miosa forge context`
 
 What to read before working: Mission, phase, Issue [--full].
@@ -6990,7 +7010,7 @@ miosa forge grant set platform <user-id> --role write
 
 #### `miosa forge hooks`
 
-In an agent's folder: Claude Code reports its tools and sub-agents to Forge live.
+In an agent's folder: Claude Code keeps to its Forge Issue and reports live.
 
 ```
 miosa forge hooks install

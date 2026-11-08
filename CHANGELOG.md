@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.16.0](https://github.com/Miosa-osa/miosa/compare/cli-v2.15.0...cli-v2.16.0) (2026-11-08)
+
+
+### Features
+
+* **cli:** miosa forge connect and agent hooks keep every agent on its Forge Issue [MIO-525] ([#72](https://github.com/Miosa-osa/miosa/issues/72)) ([b56a33d](https://github.com/Miosa-osa/miosa/commit/b56a33d9230e4dc316532c3048eb51b860732d57))
+
 ## [2.15.0](https://github.com/Miosa-osa/miosa/compare/cli-v2.14.0...cli-v2.15.0) (2026-11-02)
 
 
