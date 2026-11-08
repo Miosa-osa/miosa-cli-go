@@ -154,9 +154,10 @@ func (a deliveryArgs) actor() string {
 	return firstNonEmpty(a.flag("as"), os.Getenv("FORGE_ACTOR"), "you")
 }
 
-// runner is the running agent this terminal is (set by `miosa forge join`).
+// runner is the running agent this terminal is: --runner, then FORGE_RUNNER, then the id
+// `miosa forge join` saved for this worktree (harness shells do not keep an export).
 func (a deliveryArgs) runner() string {
-	return firstNonEmpty(a.flag("runner"), os.Getenv("FORGE_RUNNER"))
+	return firstNonEmpty(a.flag("runner"), os.Getenv("FORGE_RUNNER"), savedRunner())
 }
 
 // ---- the Delivery service ----
@@ -177,6 +178,15 @@ type deliveryClient struct {
 	out   io.Writer
 	http  *http.Client
 	api   *api.Client
+	// wait bounds each request; zero means 30 s. The Claude Code hooks set a few seconds.
+	wait time.Duration
+}
+
+func (c *deliveryClient) timeout() time.Duration {
+	if c.wait > 0 {
+		return c.wait
+	}
+	return 30 * time.Second
 }
 
 func newDeliveryClient(a deliveryArgs, out io.Writer) *deliveryClient {
@@ -305,7 +315,7 @@ func (c *deliveryClient) call(action string, payload map[string]any, out any) er
 	if c.local == "" {
 		path = "/actions/" + action
 	}
-	body, err := c.send(path, nil, payload, 30*time.Second)
+	body, err := c.send(path, nil, payload, c.timeout())
 	if err != nil {
 		return err
 	}
@@ -341,7 +351,7 @@ func (c *deliveryClient) get(path string, query url.Values, out any) error {
 			}
 		}
 	}
-	body, err := c.send(path, query, nil, 30*time.Second)
+	body, err := c.send(path, query, nil, c.timeout())
 	if err != nil {
 		return err
 	}
@@ -707,6 +717,9 @@ func deliveryCommands() []deliveryCommand {
 			if err := c.call("leave", map[string]any{"runner": runner}, nil); err != nil {
 				return err
 			}
+			if savedRunner() == runner {
+				clearRunner()
+			}
 			say(c, "%s left. Anything it held is back in the queue.", runner)
 			return nil
 		}},
@@ -789,7 +802,8 @@ func deliveryCommands() []deliveryCommand {
 			say(c, "%s now uses the latest prompt. Re-read it: miosa forge prompt", id)
 			return nil
 		}},
-		{"hooks install", "In an agent's folder: Claude Code reports its tools and sub-agents to Forge live", deliveryHooksInstall},
+		{"connect", "Connect this repository's Claude Code to Forge Delivery: hooks, sign-in, name", deliveryConnect},
+		{"hooks install", "In an agent's folder: Claude Code keeps to its Forge Issue and reports live", deliveryHooksInstall},
 		{"hook", "Claude Code hook (called by Claude Code, not by people)", deliveryHook},
 		{"watch", "The live feed of everything that happens", deliveryWatch},
 		{"approve-spec MIO-12 | --milestone id", "Approve draft specs (agents can't start without one)", func(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
@@ -1872,7 +1886,11 @@ func deliveryJoin(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
 	if err := c.call("join", payload, &result); err != nil {
 		return err
 	}
-	say(c, "You are %s, in the %s crew. %d Issues for your role in this Mission.\nSet it for this terminal:  export FORGE_RUNNER=%s\nRead your prompt: miosa forge prompt   Then: miosa forge take", result.Runner, result.Mission, len(result.Queue), result.Runner)
+	saved := ""
+	if saveRunner(result.Runner) {
+		saved = " (saved for this worktree)"
+	}
+	say(c, "You are %s%s, in the %s crew. %d Issues for your role in this Mission.\nRead your prompt: miosa forge prompt   Then: miosa forge take", result.Runner, saved, result.Mission, len(result.Queue))
 	return nil
 }
 
@@ -2204,92 +2222,6 @@ func deliveryWatch(c *deliveryClient, _ deliveryArgs, _ *cobra.Command) error {
 		}
 		time.Sleep(1500 * time.Millisecond)
 	}
-}
-
-// deliveryHooksInstall writes Claude Code hooks into this folder's .claude/settings.local.json, so a
-// running agent's tools and sub-agents show live in Forge. The hook is this binary.
-func deliveryHooksInstall(c *deliveryClient, a deliveryArgs, _ *cobra.Command) error {
-	if a.arg(0) != "install" {
-		return errors.New("usage: miosa forge hooks install   (in the folder the agent's Claude Code runs in)")
-	}
-	binary, err := os.Executable()
-	if err != nil {
-		binary = "miosa"
-	}
-	command := fmt.Sprintf("%q forge hook", binary)
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	file := filepath.Join(cwd, ".claude", "settings.local.json")
-	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-		return err
-	}
-	settings := map[string]any{}
-	if raw, err := os.ReadFile(file); err == nil {
-		if err := json.Unmarshal(raw, &settings); err != nil {
-			return fmt.Errorf("%s isn't valid JSON: %w", file, err)
-		}
-	}
-	hooks, _ := settings["hooks"].(map[string]any)
-	if hooks == nil {
-		hooks = map[string]any{}
-	}
-	entry := func(matcher string) map[string]any {
-		value := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command, "timeout": 3}}}
-		if matcher != "" {
-			value["matcher"] = matcher
-		}
-		return value
-	}
-	for _, wanted := range []struct{ event, matcher string }{{"PreToolUse", ".*"}, {"PostToolUse", "Agent|Task"}, {"SubagentStart", ""}, {"SubagentStop", ""}} {
-		list, _ := hooks[wanted.event].([]any)
-		present := false
-		for _, item := range list {
-			group, _ := item.(map[string]any)
-			inner, _ := group["hooks"].([]any)
-			for _, hook := range inner {
-				if h, _ := hook.(map[string]any); h != nil && h["command"] == command {
-					present = true
-				}
-			}
-		}
-		if !present {
-			list = append(list, entry(wanted.matcher))
-		}
-		hooks[wanted.event] = list
-	}
-	settings["hooks"] = hooks
-	raw, _ := json.MarshalIndent(settings, "", "  ")
-	if err := os.WriteFile(file, append(raw, '\n'), 0o644); err != nil {
-		return err
-	}
-	say(c, "Hooks written to %s. Claude Code started here now reports its tools and sub-agents to Forge (FORGE_RUNNER must be set).", file)
-	return nil
-}
-
-// deliveryHook is the Claude Code hook: it tells Forge which tool the agent is running and what its
-// sub-agents do. It never blocks or fails the harness: any error is swallowed.
-func deliveryHook(c *deliveryClient, _ deliveryArgs, cmd *cobra.Command) error {
-	runner := os.Getenv("FORGE_RUNNER")
-	if runner == "" {
-		return nil
-	}
-	var input map[string]any
-	if err := json.NewDecoder(cmd.InOrStdin()).Decode(&input); err != nil {
-		return nil
-	}
-	report := hookReport(input)
-	if report == nil {
-		return nil
-	}
-	report["runner"] = runner
-	path := "/harness"
-	if c.local == "" {
-		path = "/actions/harness"
-	}
-	_, _ = c.send(path, nil, report, 1500*time.Millisecond)
-	return nil
 }
 
 func hookSummary(toolInput any) any {
